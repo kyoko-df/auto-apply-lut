@@ -1,0 +1,119 @@
+.app {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 20px;
+}
+
+.app-header {
+  text-align: center;
+  margin-bottom: 32px;
+  color: white;
+}
+
+.app-header h1 {
+  margin: 0 0 8px 0;
+  font-size: 2.5rem;
+  font-weight: 700;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.app-header p {
+  margin: 0;
+  font-size: 1.1rem;
+  opacity: 0.9;
+  font-weight: 400;
+}
+
+.app-main {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.app-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 24px;
+  grid-template-areas:
+    "upload preview"
+    "settings status";
+}
+
+.upload-section {
+  grid-area: upload;
+}
+
+.preview-section {
+  grid-area: preview;
+}
+
+.settings-section {
+  grid-area: settings;
+}
+
+.status-section {
+  grid-area: status;
+}
+
+/* 响应式设计 */
+@media (max-width: 1200px) {
+  .app-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "upload"
+      "preview"
+      "settings"
+      "status";
+  }
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px;
+  }
+  
+  .app-header {
+    margin-bottom: 24px;
+  }
+  
+  .app-header h1 {
+    font-size: 2rem;
+  }
+  
+  .app-header p {
+    font-size: 1rem;
+  }
+  
+  .app-grid {
+    gap: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app {
+    padding: 12px;
+  }
+  
+  .app-header {
+    margin-bottom: 20px;
+  }
+  
+  .app-header h1 {
+    font-size: 1.75rem;
+  }
+  
+  .app-header p {
+    font-size: 0.9rem;
+  }
+  
+  .app-grid {
+    gap: 12px;
+  }
+}
+
+/* 深色模式支持 */
+@media (prefers-color-scheme: dark) {
+  .app {
+    background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
+  }
+}
