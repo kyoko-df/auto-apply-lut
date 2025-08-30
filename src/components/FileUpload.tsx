@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import './FileUpload.css';
@@ -26,6 +26,39 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const [dragOver, setDragOver] = useState<'video' | 'lut' | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Fallback: hidden inputs for browser env
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const lutInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleVideoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fileInfo: FileInfo = {
+      name: file.name,
+      path: (file as any).path || file.name,
+      size: file.size,
+      type: file.type
+    };
+    setVideoFile(fileInfo);
+    onVideoSelect(fileInfo.path);
+    // reset input so selecting the same file again still triggers change
+    e.target.value = '';
+  }, [onVideoSelect]);
+
+  const handleLutInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fileInfo: FileInfo = {
+      name: file.name,
+      path: (file as any).path || file.name,
+      size: file.size,
+      type: file.type
+    };
+    setLutFile(fileInfo);
+    onLutSelect(fileInfo.path);
+    e.target.value = '';
+  }, [onLutSelect]);
+
   // 选择视频文件
   const selectVideoFile = useCallback(async () => {
     if (disabled || loading) return;
@@ -43,8 +76,6 @@ const FileUpload: React.FC<FileUploadProps> = ({
       if (selected) {
         const filePath = Array.isArray(selected) ? selected[0] : selected;
         const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
-        
-        // 获取文件信息
         try {
           const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
           const file: FileInfo = {
@@ -53,22 +84,22 @@ const FileUpload: React.FC<FileUploadProps> = ({
             size: fileInfo.size,
             type: fileInfo.type
           };
-          
           setVideoFile(file);
           onVideoSelect(filePath);
         } catch (error) {
           console.error('Failed to get file info:', error);
-          // 即使获取文件信息失败，也设置基本信息
-          const file: FileInfo = {
-            name: fileName,
-            path: filePath
-          };
+          const file: FileInfo = { name: fileName, path: filePath };
           setVideoFile(file);
           onVideoSelect(filePath);
         }
+      } else {
+        // user cancelled or not available, try fallback input
+        videoInputRef.current?.click();
       }
     } catch (error) {
       console.error('Failed to select video file:', error);
+      // Fallback to HTML input in non-Tauri environments
+      videoInputRef.current?.click();
     } finally {
       setLoading(false);
     }
@@ -91,8 +122,6 @@ const FileUpload: React.FC<FileUploadProps> = ({
       if (selected) {
         const filePath = Array.isArray(selected) ? selected[0] : selected;
         const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
-        
-        // 获取文件信息
         try {
           const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
           const file: FileInfo = {
@@ -101,22 +130,20 @@ const FileUpload: React.FC<FileUploadProps> = ({
             size: fileInfo.size,
             type: fileInfo.type
           };
-          
           setLutFile(file);
           onLutSelect(filePath);
         } catch (error) {
           console.error('Failed to get file info:', error);
-          // 即使获取文件信息失败，也设置基本信息
-          const file: FileInfo = {
-            name: fileName,
-            path: filePath
-          };
+          const file: FileInfo = { name: fileName, path: filePath };
           setLutFile(file);
           onLutSelect(filePath);
         }
+      } else {
+        lutInputRef.current?.click();
       }
     } catch (error) {
       console.error('Failed to select LUT file:', error);
+      lutInputRef.current?.click();
     } finally {
       setLoading(false);
     }
@@ -205,6 +232,22 @@ const FileUpload: React.FC<FileUploadProps> = ({
 
   return (
     <div className="file-upload">
+      {/* Hidden inputs for browser fallback */}
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept=".mp4,.mov,.avi,.mkv,.wmv,.flv,.webm,.m4v"
+        style={{ display: 'none' }}
+        onChange={handleVideoInputChange}
+      />
+      <input
+        ref={lutInputRef}
+        type="file"
+        accept=".cube,.3dl,.lut,.csp,.vlt,.mga,.m3d,.look"
+        style={{ display: 'none' }}
+        onChange={handleLutInputChange}
+      />
+
       <div className="upload-section">
         <h3>选择文件</h3>
         
@@ -249,16 +292,13 @@ const FileUpload: React.FC<FileUploadProps> = ({
                   <div className="secondary-text">
                     支持 MP4, MOV, AVI, MKV 等格式
                   </div>
-                  <div className="hint-text">
-                    点击选择或拖拽文件到此处
-                  </div>
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* LUT文件上传区域 */}
+        {/* LUT 文件上传区域 */}
         <div 
           className={`upload-area ${
             dragOver === 'lut' ? 'drag-over' : ''
@@ -293,14 +333,11 @@ const FileUpload: React.FC<FileUploadProps> = ({
               </div>
             ) : (
               <div className="upload-placeholder">
-                <div className="upload-icon">🎨</div>
+                <div className="upload-icon">📁</div>
                 <div className="upload-text">
                   <div className="primary-text">选择LUT文件</div>
                   <div className="secondary-text">
-                    支持 CUBE, 3DL, LUT, CSP 等格式
-                  </div>
-                  <div className="hint-text">
-                    点击选择或拖拽文件到此处
+                    支持 .cube, .3dl, .lut 等格式
                   </div>
                 </div>
               </div>
@@ -308,13 +345,6 @@ const FileUpload: React.FC<FileUploadProps> = ({
           </div>
         </div>
       </div>
-
-      {loading && (
-        <div className="loading-overlay">
-          <div className="loading-spinner"></div>
-          <div className="loading-text">正在处理文件...</div>
-        </div>
-      )}
     </div>
   );
 };

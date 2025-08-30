@@ -115,14 +115,28 @@ git clone https://github.com/your-username/auto-apply-lut.git
 cd auto-apply-lut
 
 # 安装前端依赖
-npm install
+pnpm install
 
 # 安装Rust工具链（如果未安装）
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # 安装Tauri CLI
-npm install -g @tauri-apps/cli
+pnpm install -g @tauri-apps/cli
 ```
+
+### Windows 专用环境准备（必读）
+
+为避免 “link.exe not found” 等 MSVC 链接器错误，请先完成以下配置：
+- 安装 Visual Studio 2019/2022（或 Visual Studio 2022 Build Tools）
+  - 选择“使用 C++ 的桌面开发（Desktop development with C++）”
+  - 确保包含：MSVC v14.x、Windows 10/11 SDK、C++ CMake tools for Windows
+- 安装并启用 Rust MSVC 工具链：
+  - 安装：`rustup toolchain install stable-x86_64-pc-windows-msvc`
+  - 设为默认：`rustup default stable-x86_64-pc-windows-msvc`
+- 重新打开终端后验证链接器是否可用：
+  - `where link` 应能定位到 `link.exe`
+
+完成以上步骤后，再进行开发或构建。
 
 ### 开发模式
 
