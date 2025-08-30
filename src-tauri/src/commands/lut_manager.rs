@@ -16,8 +16,6 @@ pub struct LutValidationResult {
     pub error: Option<String>,
 }
 
-
-
 /// 验证LUT文件
 #[tauri::command]
 pub async fn validate_lut_file(
@@ -74,22 +72,23 @@ pub async fn get_lut_info(
         .map_err(|e| e.to_string())
 }
 
-
-
-
-
-
-
-
-
-/// 获取支持的LUT格式
+/// 获取支持的LUT格式（来自核心模块）
 #[tauri::command]
-pub async fn get_supported_lut_formats() -> Result<Vec<String>, String> {
-    Ok(vec![
-        "cube".to_string(),
-        "3dl".to_string(),
-        "lut".to_string(),
-        "mga".to_string(),
-        "m3d".to_string(),
-    ])
+pub async fn get_supported_lut_formats(
+    lut_manager: State<'_, LutManager>,
+) -> Result<Vec<String>, String> {
+    // 将核心模块的枚举映射为前端友好的小写扩展名字符串
+    let formats = lut_manager.get_supported_formats();
+    let list = formats.iter().map(|f| match f {
+        crate::types::LutFormat::Cube => "cube".to_string(),
+        crate::types::LutFormat::ThreeDL => "3dl".to_string(),
+        crate::types::LutFormat::Lut => "lut".to_string(),
+        crate::types::LutFormat::Csp => "csp".to_string(),
+        crate::types::LutFormat::M3d => "m3d".to_string(),
+        crate::types::LutFormat::Look => "look".to_string(),
+        crate::types::LutFormat::Vlt => "vlt".to_string(),
+        crate::types::LutFormat::Mga => "mga".to_string(),
+        crate::types::LutFormat::Unknown => "unknown".to_string(),
+    }).collect();
+    Ok(list)
 }

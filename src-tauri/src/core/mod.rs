@@ -7,3 +7,4 @@ pub mod ffmpeg;
 pub mod gpu;
 pub mod system;
 pub mod task;
+pub mod file;

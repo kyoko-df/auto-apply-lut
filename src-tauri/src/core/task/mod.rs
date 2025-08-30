@@ -140,6 +140,15 @@ pub struct TaskManager {
     tx: mpsc::UnboundedSender<TaskEvent>,
 }
 
+impl Clone for TaskManager {
+    fn clone(&self) -> Self {
+        Self {
+            tasks: self.tasks.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 /// 任务事件
 #[derive(Debug, Clone)]
 pub enum TaskEvent {

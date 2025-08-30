@@ -140,3 +140,16 @@ pub async fn get_all_tasks(
         Err(e) => Err(e.to_string()),
     }
 }
+
+#[tauri::command]
+pub async fn get_video_info(path: String) -> Result<crate::types::VideoInfo, String> {
+    logger::log_info(&format!("Getting video info: {}", path));
+    let manager = match crate::core::video::VideoManager::new() {
+        Ok(m) => m,
+        Err(e) => return Err(e.to_string()),
+    };
+    manager
+        .get_video_info(&std::path::Path::new(&path))
+        .await
+        .map_err(|e| e.to_string())
+}

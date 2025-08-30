@@ -47,14 +47,34 @@ pub fn run() {
     
     info!("启动 Auto Apply LUT 应用");
 
+    // 初始化核心服务
+    let lut_manager = core::lut::LutManager::new();
+    let task_manager = core::task::TaskManager::default();
+    // VideoProcessor 需要 ffmpeg 路径，这里暂用 "ffmpeg" 让其走 PATH
+    let video_processor = core::ffmpeg::processor::VideoProcessor::new(std::path::PathBuf::from("ffmpeg"));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(lut_manager)
+        .manage(task_manager)
+        .manage(video_processor)
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
-            commands::system_manager::get_available_codecs
+            commands::system_manager::get_available_codecs,
+            commands::file_manager::get_file_info,
+            commands::processor::get_video_info,
+            // LUT
+            commands::lut_manager::validate_lut_file,
+            commands::lut_manager::get_lut_info,
+            commands::lut_manager::get_supported_lut_formats,
+            // Task
+            commands::processor::start_video_processing,
+            commands::processor::get_task_progress,
+            commands::processor::cancel_task,
+            commands::processor::get_all_tasks,
         ])
         .setup(|app| {
             info!("应用初始化完成");

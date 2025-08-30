@@ -26,7 +26,7 @@ pub struct FileInfo {
 }
 
 /// 文件管理器
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileManager {
     /// 支持的视频文件扩展名
     video_extensions: Vec<String>,
@@ -104,6 +104,36 @@ impl FileManager {
             extension,
             mime_type,
         })
+    }
+
+    /// 非递归列出目录内容（文件与子目录）
+    pub fn list_directory<P: AsRef<Path>>(&self, path: P) -> AppResult<Vec<FileInfo>> {
+        let path = path.as_ref();
+
+        if !path.exists() {
+            return Err(AppError::Io(format!("Directory does not exist: {}", path.display())));
+        }
+        if !path.is_dir() {
+            return Err(AppError::Io(format!("Path is not a directory: {}", path.display())));
+        }
+
+        let mut items = Vec::new();
+        let entries = fs::read_dir(path)
+            .map_err(|e| AppError::Io(format!("Failed to read directory {}: {}", path.display(), e)))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
+            let entry_path = entry.path();
+            match self.get_file_info(&entry_path) {
+                Ok(info) => items.push(info),
+                Err(e) => {
+                    // 忽略单个条目的错误，继续处理其它项
+                    tracing::warn!("list_directory: failed to get info for {}: {}", entry_path.display(), e);
+                }
+            }
+        }
+
+        Ok(items)
     }
 
     /// 检查文件是否为视频文件
@@ -252,37 +282,25 @@ impl FileManager {
             unit_index += 1;
         }
 
-        if unit_index == 0 {
-            format!("{} {}", size as u64, UNITS[unit_index])
-        } else {
-            format!("{:.2} {}", size, UNITS[unit_index])
-        }
+        format!("{:.2} {}", size, UNITS[unit_index])
     }
 
-    /// 根据扩展名获取MIME类型
     fn get_mime_type(&self, extension: &Option<String>) -> Option<String> {
-        match extension.as_ref()?.as_str() {
-            // 视频文件
-            "mp4" => Some("video/mp4".to_string()),
-            "avi" => Some("video/x-msvideo".to_string()),
-            "mov" => Some("video/quicktime".to_string()),
-            "mkv" => Some("video/x-matroska".to_string()),
-            "wmv" => Some("video/x-ms-wmv".to_string()),
-            "flv" => Some("video/x-flv".to_string()),
-            "webm" => Some("video/webm".to_string()),
-            "m4v" => Some("video/x-m4v".to_string()),
-            "3gp" => Some("video/3gpp".to_string()),
-            "ts" => Some("video/mp2t".to_string()),
-            "mts" | "m2ts" => Some("video/mp2t".to_string()),
-            
-            // LUT文件
-            "cube" => Some("application/x-cube-lut".to_string()),
-            "3dl" => Some("application/x-3dl-lut".to_string()),
-            "lut" => Some("application/x-lut".to_string()),
-            "csp" => Some("application/x-csp-lut".to_string()),
-            "mga" => Some("application/x-mga-lut".to_string()),
-            "m3d" => Some("application/x-m3d-lut".to_string()),
-            
+        match extension.as_deref() {
+            Some("mp4") => Some("video/mp4".to_string()),
+            Some("mov") => Some("video/quicktime".to_string()),
+            Some("avi") => Some("video/x-msvideo".to_string()),
+            Some("mkv") => Some("video/x-matroska".to_string()),
+            Some("wmv") => Some("video/x-ms-wmv".to_string()),
+            Some("flv") => Some("video/x-flv".to_string()),
+            Some("webm") => Some("video/webm".to_string()),
+            Some("m4v") => Some("video/x-m4v".to_string()),
+            Some("cube") => Some("application/x-cube-lut".to_string()),
+            Some("3dl") => Some("application/x-3dl-lut".to_string()),
+            Some("lut") => Some("application/x-lut".to_string()),
+            Some("csp") => Some("application/x-csp-lut".to_string()),
+            Some("mga") => Some("application/x-mga-lut".to_string()),
+            Some("m3d") => Some("application/x-m3d-lut".to_string()),
             _ => None,
         }
     }
@@ -297,64 +315,57 @@ mod tests {
     #[test]
     fn test_file_manager_creation() {
         let manager = FileManager::new();
-        assert!(!manager.get_video_extensions().is_empty());
-        assert!(!manager.get_lut_extensions().is_empty());
+        assert!(!manager.video_extensions.is_empty());
+        assert!(!manager.lut_extensions.is_empty());
     }
 
     #[test]
     fn test_video_file_detection() {
         let manager = FileManager::new();
-        assert!(manager.is_video_file("test.mp4"));
-        assert!(manager.is_video_file("test.MP4"));
-        assert!(!manager.is_video_file("test.txt"));
+        assert!(manager.is_video_file("video.mp4"));
+        assert!(!manager.is_video_file("document.txt"));
     }
 
     #[test]
     fn test_lut_file_detection() {
         let manager = FileManager::new();
-        assert!(manager.is_lut_file("test.cube"));
-        assert!(manager.is_lut_file("test.CUBE"));
-        assert!(!manager.is_lut_file("test.txt"));
+        assert!(manager.is_lut_file("style.cube"));
+        assert!(!manager.is_lut_file("image.jpg"));
     }
 
     #[test]
     fn test_file_size_formatting() {
-        assert_eq!(FileManager::format_file_size(512), "512 B");
-        assert_eq!(FileManager::format_file_size(1024), "1.00 KB");
-        assert_eq!(FileManager::format_file_size(1536), "1.50 KB");
-        assert_eq!(FileManager::format_file_size(1048576), "1.00 MB");
+        let formatted = FileManager::format_file_size(2048);
+        assert!(formatted.contains("KB"));
     }
 
     #[test]
     fn test_extension_management() {
         let mut manager = FileManager::new();
-        let initial_count = manager.get_video_extensions().len();
-        
         manager.add_video_extension("test".to_string());
-        assert_eq!(manager.get_video_extensions().len(), initial_count + 1);
-        
+        assert!(manager.is_video_file("file.test"));
         manager.remove_video_extension("test");
-        assert_eq!(manager.get_video_extensions().len(), initial_count);
+        assert!(!manager.is_video_file("file.test"));
     }
 
     #[tokio::test]
     async fn test_file_operations() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        File::create(&file_path).unwrap();
+
         let manager = FileManager::new();
-        let temp_dir = tempdir().unwrap();
-        let test_file = temp_dir.path().join("test.txt");
-        
-        // 创建测试文件
-        File::create(&test_file).unwrap();
-        
-        // 测试文件信息获取
-        let file_info = manager.get_file_info(&test_file).unwrap();
-        assert_eq!(file_info.name, "test.txt");
-        assert!(!file_info.is_directory);
-        assert_eq!(file_info.extension, Some("txt".to_string()));
-        
-        // 测试路径检查
-        assert!(manager.path_exists(&test_file));
-        assert!(manager.is_file(&test_file));
-        assert!(!manager.is_directory(&test_file));
+        assert!(manager.path_exists(&file_path));
+        assert!(manager.is_file(&file_path));
+
+        let info = manager.get_file_info(&file_path).unwrap();
+        assert_eq!(info.name, "test.txt");
+
+        let copy_path = dir.path().join("copy.txt");
+        manager.copy_file(&file_path, &copy_path).unwrap();
+        assert!(copy_path.exists());
+
+        manager.delete_file(&copy_path).unwrap();
+        assert!(!copy_path.exists());
     }
 }

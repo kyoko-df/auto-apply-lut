@@ -132,6 +132,7 @@ impl FileScanner {
     }
 
     /// 递归扫描目录
+    #[async_recursion::async_recursion]
     async fn scan_directory_recursive(
         &self,
         path: &Path,
@@ -306,6 +307,7 @@ impl FileScanner {
     }
 
     /// 递归快速扫描
+    #[async_recursion::async_recursion]
     async fn quick_scan_recursive(
         &self,
         path: &Path,
@@ -357,6 +359,7 @@ impl FileScanner {
     }
 
     /// 收集目录统计信息
+    #[async_recursion::async_recursion]
     async fn collect_directory_stats(
         &self,
         path: &Path,
