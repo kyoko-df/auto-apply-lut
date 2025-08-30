@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import FileUpload from './components/FileUpload';
 import VideoPreview from './components/VideoPreview';

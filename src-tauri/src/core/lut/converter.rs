@@ -717,23 +717,21 @@ mod tests {
     }
 
     fn create_test_1d_lut() -> LutData {
-        LutData {
-            lut_type: LutType::OneDimensional,
-            format: LutFormat::Lut,
-            size: 4,
-            input_range: (0.0, 1.0),
-            output_range: (0.0, 1.0),
-            data: vec![
-                [0.0, 0.0, 0.0],
-                [0.33, 0.33, 0.33],
-                [0.66, 0.66, 0.66],
-                [1.0, 1.0, 1.0],
-            ],
-            metadata: HashMap::new(),
-            title: Some("Test 1D LUT".to_string()),
-            domain_min: [0.0, 0.0, 0.0],
-            domain_max: [1.0, 1.0, 1.0],
+        let mut lut = LutData::new_1d(LutFormat::Lut, 4, Some("Test 1D LUT".to_string()));
+        // 填充 1D 三通道数据
+        for i in 0..4 {
+            let v = match i {
+                0 => 0.0,
+                1 => 0.33,
+                2 => 0.66,
+                _ => 1.0,
+            };
+            // R,G,B 三个通道一致
+            let _ = lut.set_1d_point(0, i, v);
+            let _ = lut.set_1d_point(1, i, v);
+            let _ = lut.set_1d_point(2, i, v);
         }
+        lut
     }
 
     #[test]

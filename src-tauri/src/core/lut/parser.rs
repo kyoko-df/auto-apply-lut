@@ -47,7 +47,11 @@ impl LutParser for CubeParser {
             }
             
             if line.starts_with("TITLE") {
-                title = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ").into();
+                let mut t = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                if t.starts_with('"') && t.ends_with('"') && t.len() >= 2 {
+                    t = t[1..t.len()-1].to_string();
+                }
+                title = Some(t);
             } else if line.starts_with("LUT_3D_SIZE") {
                 size = line.split_whitespace().nth(1)
                     .and_then(|s| s.parse().ok())
@@ -161,7 +165,11 @@ impl LutParser for CubeParser {
             let line = line.trim();
             
             if line.starts_with("TITLE") {
-                title = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ").into();
+                let mut t = line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                if t.starts_with('"') && t.ends_with('"') && t.len() >= 2 {
+                    t = t[1..t.len()-1].to_string();
+                }
+                title = Some(t);
             } else if line.starts_with("LUT_3D_SIZE") {
                 size = line.split_whitespace().nth(1)
                     .and_then(|s| s.parse().ok())
@@ -717,7 +725,11 @@ DOMAIN_MAX 1.0 1.0 1.0
         assert_eq!(lut_data.lut_type, LutType::ThreeDimensional);
         assert_eq!(lut_data.format, LutFormat::Csp);
         assert_eq!(lut_data.size, 2);
-        assert_eq!(lut_data.data.len(), 8);
+        if let Some(ref data_3d) = lut_data.data_3d {
+            assert_eq!(data_3d.len() * data_3d[0].len() * data_3d[0][0].len(), 8);
+        } else {
+            panic!("Expected 3D data for CSP parser test");
+        }
     }
 
     #[tokio::test]

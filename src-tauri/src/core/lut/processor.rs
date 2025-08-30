@@ -428,9 +428,17 @@ impl ProcessingUtils {
             )));
         }
         
-        if channels < 3 || channels > 4 {
+        // 支持 1~4 通道，其中 3、4 通道用于实际 LUT 处理；1 通道用于直方图/统计等工具函数
+        if channels == 0 || channels > 4 {
             return Err(AppError::Validation(
-                "Only RGB and RGBA formats are supported".to_string()
+                "Channels must be between 1 and 4".to_string()
+            ));
+        }
+
+        // 对灰度图（1 通道）增加约束：要求为正方形，避免某些处理中的歧义
+        if channels == 1 && width != height {
+            return Err(AppError::Validation(
+                "Grayscale images (1 channel) must be square".to_string()
             ));
         }
         
@@ -582,18 +590,22 @@ mod tests {
             lut_type: LutType::ThreeDimensional,
             format: LutFormat::Cube,
             size: 2,
-            input_range: (0.0, 1.0),
-            output_range: (0.0, 1.0),
-            data: vec![
-                [0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0], [0.0, 1.0, 1.0],
-                [1.0, 0.0, 0.0], [1.0, 0.0, 1.0],
-                [1.0, 1.0, 0.0], [1.0, 1.0, 1.0],
-            ],
-            metadata: HashMap::new(),
             title: None,
+            description: None,
             domain_min: [0.0, 0.0, 0.0],
             domain_max: [1.0, 1.0, 1.0],
+            data_3d: Some(vec![
+                vec![
+                    vec![[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    vec![[0.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
+                ],
+                vec![
+                    vec![[1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+                    vec![[1.0, 1.0, 0.0], [1.0, 1.0, 1.0]],
+                ],
+            ]),
+            data_1d: None,
+            metadata: HashMap::new(),
         }
     }
 

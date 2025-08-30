@@ -77,7 +77,25 @@ impl LutCache {
             return Some(entry.data.clone());
         }
         
-        // 检查磁盘缓存
+        // 检查磁盘缓存（遵循内存TTL的新鲜度约束：如果磁盘项早于内存TTL则视为过期，不进行回源）
+        if self.config.enable_disk_cache {
+            let cache_file = self.get_cache_file_path(key);
+            if cache_file.exists() {
+                if let Ok(metadata) = fs::metadata(&cache_file).await {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(elapsed) = modified.elapsed() {
+                            if elapsed > self.config.memory_ttl {
+                                // 与内存策略相比已过期：删除并视为未命中
+                                let _ = fs::remove_file(&cache_file).await;
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 磁盘仍然有效则尝试加载
         if let Ok(Some(data)) = self.get_from_disk(key).await {
             // 将数据加载到内存缓存
             self.put_in_memory(key, data.clone()).await;
@@ -116,7 +134,7 @@ impl LutCache {
 
     /// 从内存缓存获取
     fn get_from_memory(&self, key: &str) -> Option<CacheEntry> {
-        let cache = self.memory_cache.read().unwrap();
+        let mut cache = self.memory_cache.write().unwrap();
         
         if let Some(entry) = cache.get(key) {
             // 检查是否过期
@@ -124,7 +142,12 @@ impl LutCache {
                 let mut updated_entry = entry.clone();
                 updated_entry.last_accessed = Instant::now();
                 updated_entry.access_count += 1;
+                // 同步更新写入的条目状态
+                cache.insert(key.to_string(), updated_entry.clone());
                 return Some(updated_entry);
+            } else {
+                // 已过期则移除，避免陈旧命中
+                cache.remove(key);
             }
         }
         
@@ -682,18 +705,22 @@ mod tests {
             lut_type: crate::core::lut::LutType::ThreeDimensional,
             format: crate::core::lut::LutFormat::Cube,
             size: 2,
-            input_range: (0.0, 1.0),
-            output_range: (0.0, 1.0),
-            data: vec![
-                [0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0], [0.0, 1.0, 1.0],
-                [1.0, 0.0, 0.0], [1.0, 0.0, 1.0],
-                [1.0, 1.0, 0.0], [1.0, 1.0, 1.0],
-            ],
-            metadata: HashMap::new(),
             title: Some("Test LUT".to_string()),
+            description: None,
             domain_min: [0.0, 0.0, 0.0],
             domain_max: [1.0, 1.0, 1.0],
+            data_3d: Some(vec![
+                vec![
+                    vec![[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    vec![[0.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
+                ],
+                vec![
+                    vec![[1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+                    vec![[1.0, 1.0, 0.0], [1.0, 1.0, 1.0]],
+                ],
+            ]),
+            data_1d: None,
+            metadata: HashMap::new(),
         }
     }
 

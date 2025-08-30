@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+// 移除直接导入 invoke，避免在纯浏览器预览时报错
+// import { invoke } from '@tauri-apps/api/core';
 import './SettingsPanel.css';
 
 interface SettingsPanelProps {
@@ -36,11 +37,27 @@ interface QualityPreset {
   preset: string;
 }
 
+// 运行时检测是否处于 Tauri 环境
+const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+
+// 安全调用 Tauri invoke（在浏览器预览中优雅降级）
+async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    const mod = await import('@tauri-apps/api/core');
+    if (typeof mod?.invoke === 'function' && isTauriEnv()) {
+      return await mod.invoke<T>(cmd, args);
+    }
+    throw new Error('tauri_unavailable');
+  } catch (e) {
+    throw new Error('tauri_unavailable');
+  }
+}
+
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onSettingsChange,
   disabled = false
 }) => {
-  const [settings, setSettings] = useState<ProcessingSettings>({
+  const DEFAULT_SETTINGS: ProcessingSettings = {
     output_format: 'mp4',
     video_codec: 'libx264',
     audio_codec: 'aac',
@@ -54,8 +71,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     two_pass_encoding: false,
     preserve_metadata: true,
     output_directory: ''
-  });
-
+  };
+  const [settings, setSettings] = useState<ProcessingSettings>(DEFAULT_SETTINGS);
   const [availableCodecs, setAvailableCodecs] = useState<{
     video: CodecInfo[];
     audio: CodecInfo[];
@@ -124,18 +141,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const loadAvailableCodecs = useCallback(async () => {
     try {
       setLoading(true);
-      const codecs = await invoke<{
-        video_codecs: CodecInfo[];
-        audio_codecs: CodecInfo[];
-      }>('get_available_codecs');
-      
-      setAvailableCodecs({
-        video: codecs.video_codecs,
-        audio: codecs.audio_codecs
-      });
-    } catch (error) {
-      console.error('Failed to load codecs:', error);
-      // 使用默认编解码器列表
+      const codecs = await safeInvoke<{ video_codecs: CodecInfo[]; audio_codecs: CodecInfo[] }>('get_available_codecs');
+      setAvailableCodecs({ video: codecs.video_codecs, audio: codecs.audio_codecs });
+    } catch {
+      // 浏览器预览或失败：使用默认编解码器列表（静默降级）
       setAvailableCodecs({
         video: [
           { name: 'libx264', description: 'H.264 (推荐)', supported: true },
@@ -174,32 +183,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   // 选择输出目录
   const selectOutputDirectory = useCallback(async () => {
     try {
-      const directory = await invoke<string>('select_output_directory');
+      const directory = await safeInvoke<string>('select_output_directory');
       if (directory) {
         updateSetting('output_directory', directory);
       }
     } catch (error) {
-      console.error('Failed to select directory:', error);
+      // 非 Tauri 环境下不弹错，保持输入框可手动填写
+      // console.debug('Directory selection not available in web preview');
     }
   }, [updateSetting]);
-
-  // 重置为默认设置
   const resetToDefaults = useCallback(() => {
-    setSettings({
-      output_format: 'mp4',
-      video_codec: 'libx264',
-      audio_codec: 'aac',
-      quality_preset: 'balanced',
-      resolution: 'original',
-      fps: null,
-      bitrate: 'auto',
-      lut_intensity: 100,
-      color_space: 'rec709',
-      hardware_acceleration: false,
-      two_pass_encoding: false,
-      preserve_metadata: true,
-      output_directory: ''
-    });
+    setSettings({ ...DEFAULT_SETTINGS });
   }, []);
 
   return (
@@ -320,42 +314,38 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <input
                 type="number"
                 className="setting-input"
-                value={settings.fps || ''}
-                onChange={(e) => updateSetting('fps', e.target.value ? parseFloat(e.target.value) : null)}
-                placeholder="保持原帧率"
-                min="1"
-                max="120"
-                step="0.1"
+                value={settings.fps ?? ''}
+                onChange={(e) => updateSetting('fps', e.target.value === '' ? null : Number(e.target.value))}
+                placeholder="保持原帧率留空"
                 disabled={disabled}
+                min={1}
+                max={240}
               />
             </div>
 
-            {/* 码率 */}
+            {/* 比特率 */}
             <div className="setting-group">
-              <label className="setting-label">码率</label>
+              <label className="setting-label">比特率</label>
               <input
                 type="text"
                 className="setting-input"
                 value={settings.bitrate}
                 onChange={(e) => updateSetting('bitrate', e.target.value)}
-                placeholder="auto, 2M, 5000k"
+                placeholder="auto 或 4000k / 5M 等"
                 disabled={disabled}
               />
             </div>
 
-            {/* LUT强度 */}
+            {/* LUT 强度 */}
             <div className="setting-group">
-              <label className="setting-label">
-                LUT强度: {settings.lut_intensity}%
-              </label>
+              <label className="setting-label">LUT 强度 ({settings.lut_intensity}%)</label>
               <input
                 type="range"
                 className="setting-slider"
                 value={settings.lut_intensity}
-                onChange={(e) => updateSetting('lut_intensity', parseInt(e.target.value))}
-                min="0"
-                max="100"
-                step="1"
+                onChange={(e) => updateSetting('lut_intensity', Number(e.target.value))}
+                min={0}
+                max={100}
                 disabled={disabled}
               />
             </div>
@@ -433,7 +423,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <button
                 className="browse-button"
                 onClick={selectOutputDirectory}
-                disabled={disabled}
+                disabled={disabled || !isTauriEnv()}
+                title={isTauriEnv() ? '选择输出目录' : '浏览器预览中不可用'}
               >
                 浏览
               </button>

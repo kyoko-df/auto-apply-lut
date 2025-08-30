@@ -630,8 +630,20 @@ impl LutValidator {
             },
             LutType::ThreeDimensional => {
                 if let Some(data_3d) = &lut_data.data_3d {
-                    if data_3d.is_empty() {
+                    let s = lut_data.size as usize;
+                    if s == 0 || data_3d.is_empty() {
                         return false;
+                    }
+                    // 要求严格的立方体尺寸匹配 size x size x size
+                    if data_3d.len() != s { return false; }
+                    for plane in data_3d {
+                        if plane.len() != s { return false; }
+                        for row in plane {
+                            if row.len() != s { return false; }
+                            for rgb in row {
+                                if rgb.len() != 3 { return false; }
+                            }
+                        }
                     }
                 } else {
                     return false;

@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
@@ -16,12 +16,47 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+
+  /* Design tokens */
+  --color-primary: #007AFF;
+  --color-success: #34C759;
+  --color-warning: #FF9F0A;
+  --color-danger:  #FF3B30;
+  --color-fg: #0f0f0f;
+  --color-fg-muted: #374151;
+  --color-fg-subtle: #6b7280;
+
+  --surface-base: #f6f6f6;
+  --surface-card: rgba(255,255,255,0.85);
+  --surface-elevated: rgba(255,255,255,0.9);
+  --border-soft: rgba(0,0,0,0.08);
+  --shadow-soft: 0 8px 24px rgba(0,0,0,0.08);
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --ease-standard: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --duration-fast: 120ms;
+  --duration-medium: 180ms;
+  --duration-slow: 240ms;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
-    background-color: #2f2f2f;
+    background-color: #1b1e23;
+
+    --color-fg: #f6f6f6;
+    --color-fg-muted: #e5e7eb;
+    --color-fg-subtle: #cbd5e1;
+
+    --surface-base: #1b1e23;
+    --surface-card: rgba(22,24,27,0.7);
+    --surface-elevated: rgba(28,31,36,0.76);
+    --border-soft: rgba(255,255,255,0.08);
+    --shadow-soft: 0 8px 28px rgba(0,0,0,0.35);
   }
 }
 
@@ -31,6 +66,8 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  color: var(--color-fg);
+  background: var(--surface-base);
 }
 
 #root {
@@ -39,4 +76,61 @@ body {
   padding: 2rem;
   text-align: center;
   width: 100%;
+}
+
+/* Components tokens (Apple aesthetic) */
+@layer components {
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    min-height: 44px;
+    border-radius: var(--radius-md);
+    background: var(--color-primary);
+    color: white;
+    border: 1px solid color-mix(in oklab, var(--color-primary), black 12%);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 6px 16px rgba(0,122,255,0.25);
+    transition: transform var(--duration-fast) var(--ease-standard), filter var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+  }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn-primary:active { transform: translateY(1px) scale(0.99); box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset, 0 3px 10px rgba(0,122,255,0.2); }
+  .btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary), white 75%); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+  .card {
+    background: var(--surface-card);
+    -webkit-backdrop-filter: blur(28px) saturate(120%);
+    backdrop-filter: blur(28px) saturate(120%);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .frosted {
+    background: var(--surface-elevated);
+    -webkit-backdrop-filter: blur(24px) saturate(120%);
+    backdrop-filter: blur(24px) saturate(120%);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-soft);
+  }
+}
+
+/* Backdrop-filter fallback (e.g., Win10) */
+@supports not ((-webkit-backdrop-filter: blur(0)) or (backdrop-filter: blur(0))) {
+  .card, .frosted {
+    background: rgba(255,255,255,0.96);
+  }
+  @media (prefers-color-scheme: dark) {
+    .card, .frosted {
+      background: #23262b;
+    }
+  }
+}
+
+/* Motion reduction */
+@media (prefers-reduced-motion: reduce) {
+  .btn-primary { transition: none; }
 }

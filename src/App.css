@@ -1,26 +1,28 @@
+/* 根容器：改用留白底色，背景交由 body 控制 */
 .app {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  /* min-height: 100vh; */
+  background: transparent;
+  padding: 24px;
 }
 
 .app-header {
   text-align: center;
   margin-bottom: 32px;
-  color: white;
+  color: var(--color-fg);
 }
 
 .app-header h1 {
   margin: 0 0 8px 0;
-  font-size: 2.5rem;
+  font-size: 2.25rem;
   font-weight: 700;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  letter-spacing: 0.2px;
+  text-shadow: none;
 }
 
 .app-header p {
   margin: 0;
-  font-size: 1.1rem;
-  opacity: 0.9;
+  font-size: 1rem;
+  color: var(--color-fg-subtle);
   font-weight: 400;
 }
 
@@ -39,21 +41,10 @@
     "settings status";
 }
 
-.upload-section {
-  grid-area: upload;
-}
-
-.preview-section {
-  grid-area: preview;
-}
-
-.settings-section {
-  grid-area: settings;
-}
-
-.status-section {
-  grid-area: status;
-}
+.upload-section { grid-area: upload; }
+.preview-section { grid-area: preview; }
+.settings-section { grid-area: settings; }
+.status-section { grid-area: status; }
 
 /* 响应式设计 */
 @media (max-width: 1200px) {
@@ -68,52 +59,22 @@
 }
 
 @media (max-width: 768px) {
-  .app {
-    padding: 16px;
-  }
-  
-  .app-header {
-    margin-bottom: 24px;
-  }
-  
-  .app-header h1 {
-    font-size: 2rem;
-  }
-  
-  .app-header p {
-    font-size: 1rem;
-  }
-  
-  .app-grid {
-    gap: 16px;
-  }
+  .app { padding: 16px; }
+  .app-header { margin-bottom: 24px; }
+  .app-header h1 { font-size: 2rem; }
+  .app-header p { font-size: 0.95rem; }
+  .app-grid { gap: 16px; }
 }
 
 @media (max-width: 480px) {
-  .app {
-    padding: 12px;
-  }
-  
-  .app-header {
-    margin-bottom: 20px;
-  }
-  
-  .app-header h1 {
-    font-size: 1.75rem;
-  }
-  
-  .app-header p {
-    font-size: 0.9rem;
-  }
-  
-  .app-grid {
-    gap: 12px;
-  }
+  .app { padding: 12px; }
+  .app-header { margin-bottom: 20px; }
+  .app-header h1 { font-size: 1.75rem; }
+  .app-header p { font-size: 0.9rem; }
+  .app-grid { gap: 12px; }
 }
 
-/* 深色模式支持 */
+/* 深色模式支持：背景仍由 body 控制，这里无需额外渐变 */
 @media (prefers-color-scheme: dark) {
-  .app {
-    background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-  }
+  .app { background: transparent; }
 }
