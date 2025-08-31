@@ -74,6 +74,21 @@ impl LutFormat {
         }
     }
 
+    /// 获取格式对应的扩展名字符串
+    pub fn extension(&self) -> &'static str {
+        match self {
+            LutFormat::Cube => "cube",
+            LutFormat::ThreeDL => "3dl",
+            LutFormat::Lut => "lut",
+            LutFormat::Csp => "csp",
+            LutFormat::M3d => "m3d",
+            LutFormat::Look => "look",
+            LutFormat::Vlt => "vlt",
+            LutFormat::Mga => "mga",
+            LutFormat::Unknown => "unknown",
+        }
+    }
+
     /// 获取支持的文件扩展名
     pub fn supported_extensions() -> Vec<&'static str> {
         vec!["cube", "3dl", "lut", "csp", "m3d", "look", "vlt", "mga"]

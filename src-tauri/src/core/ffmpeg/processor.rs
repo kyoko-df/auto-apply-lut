@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use serde::{Serialize, Deserialize};
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 /// 视频处理器
 pub struct VideoProcessor {
@@ -20,6 +21,8 @@ pub struct VideoProcessor {
     current_tasks: Arc<Mutex<Vec<ProcessingTask>>>,
     /// 进度发送器
     progress_sender: Option<mpsc::UnboundedSender<ProcessingProgress>>,
+    /// 取消信号发送器映射（task_id -> oneshot sender）
+    cancel_senders: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
 }
 
 impl VideoProcessor {
@@ -29,6 +32,7 @@ impl VideoProcessor {
             ffmpeg_path,
             current_tasks: Arc::new(Mutex::new(Vec::new())),
             progress_sender: None,
+            cancel_senders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -100,7 +104,7 @@ impl VideoProcessor {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
-        
+
         // 监控进度
         let task_id_clone = task_id.clone();
         let progress_sender = self.progress_sender.clone();
@@ -162,6 +166,188 @@ impl VideoProcessor {
                 error: None,
                 elapsed,
                 file_size: self.get_file_size(output_path).await.unwrap_or(0),
+            })
+        } else {
+            // 发送失败进度
+            self.send_progress(ProcessingProgress {
+                task_id: task_id.clone(),
+                progress: 0.0,
+                stage: ProcessingStage::Failed,
+                message: "LUT应用失败".to_string(),
+                elapsed,
+            }).await;
+            
+            Ok(ProcessingResult {
+                task_id,
+                success: false,
+                output_path: None,
+                error: Some("FFmpeg encoding failed".to_string()),
+                elapsed,
+                file_size: 0,
+            })
+        }
+    }
+
+    /// 应用LUT到视频（使用外部提供的 task_id）
+    pub async fn apply_lut_with_task_id(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        lut_path: &Path,
+        settings: &EncodingSettings,
+        task_id: String,
+    ) -> AppResult<ProcessingResult> {
+        let start_time = Instant::now();
+        let mut cancelled = false;
+
+        // 创建处理任务
+        let task = ProcessingTask {
+            id: task_id.clone(),
+            task_type: TaskType::ApplyLut,
+            input_path: input_path.to_path_buf(),
+            output_path: output_path.to_path_buf(),
+            lut_path: Some(lut_path.to_path_buf()),
+            settings: settings.clone(),
+            start_time,
+            status: TaskStatus::Running,
+        };
+        {
+            let mut tasks = self.current_tasks.lock().await;
+            tasks.push(task);
+        }
+
+        // 发送开始进度
+        self.send_progress(ProcessingProgress {
+            task_id: task_id.clone(),
+            progress: 0.0,
+            stage: ProcessingStage::Starting,
+            message: "开始应用LUT".to_string(),
+            elapsed: Duration::from_secs(0),
+        }).await;
+
+        // 构建FFmpeg命令
+        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
+        cmd.args([
+            "-i", input_path.to_str().unwrap(),
+            "-vf", &format!("lut3d={}", lut_path.to_str().unwrap()),
+            "-c:v", &settings.video_codec,
+            "-preset", &settings.preset,
+            "-crf", &settings.crf.to_string(),
+            "-c:a", &settings.audio_codec,
+            "-progress", "pipe:2",
+            "-y",
+            output_path.to_str().unwrap(),
+        ]);
+        for (key, value) in &settings.extra_params {
+            cmd.args([key, value]);
+        }
+
+        // 启动进程
+        let mut child = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
+
+        // 注册取消通道
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut map = self.cancel_senders.lock().await;
+            map.insert(task_id.clone(), cancel_tx);
+        }
+
+        // 监控进度
+        let task_id_clone = task_id.clone();
+        let progress_sender = self.progress_sender.clone();
+        let start_time_clone = start_time;
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(progress) = Self::parse_ffmpeg_progress(&line) {
+                        if let Some(sender) = &progress_sender {
+                            let _ = sender.send(ProcessingProgress {
+                                task_id: task_id_clone.clone(),
+                                progress,
+                                stage: ProcessingStage::Processing,
+                                message: format!("处理中... {:.1}%", progress * 100.0),
+                                elapsed: start_time_clone.elapsed(),
+                            });
+                        }
+                    }
+                }
+            });
+        }
+
+        // 等待进程完成或接收取消
+        let status = tokio::select! {
+            res = child.wait() => {
+                res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
+            }
+            _ = &mut cancel_rx => {
+                // 收到取消信号
+                cancelled = true;
+                let _ = child.kill().await; // 终止子进程
+                child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
+            }
+        };
+
+        // 完成后清理取消映射
+        {
+            let mut map = self.cancel_senders.lock().await;
+            map.remove(&task_id);
+        }
+
+        let elapsed = start_time.elapsed();
+
+        {
+            let mut tasks = self.current_tasks.lock().await;
+            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                task.status = if cancelled {
+                    TaskStatus::Cancelled
+                } else if status.success() {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Failed
+                };
+            }
+        }
+
+        if status.success() && !cancelled {
+            // 发送完成进度
+            self.send_progress(ProcessingProgress {
+                task_id: task_id.clone(),
+                progress: 1.0,
+                stage: ProcessingStage::Completed,
+                message: "LUT应用完成".to_string(),
+                elapsed,
+            }).await;
+            
+            Ok(ProcessingResult {
+                task_id,
+                success: true,
+                output_path: Some(output_path.to_path_buf()),
+                error: None,
+                elapsed,
+                file_size: self.get_file_size(output_path).await.unwrap_or(0),
+            })
+        } else if cancelled {
+            // 发送取消进度（使用 Failed 阶段但消息为已取消）
+            self.send_progress(ProcessingProgress {
+                task_id: task_id.clone(),
+                progress: 0.0,
+                stage: ProcessingStage::Failed,
+                message: "LUT处理已取消".to_string(),
+                elapsed,
+            }).await;
+            Ok(ProcessingResult {
+                task_id,
+                success: false,
+                output_path: None,
+                error: Some("Cancelled".to_string()),
+                elapsed,
+                file_size: 0,
             })
         } else {
             // 发送失败进度
@@ -437,15 +623,23 @@ impl VideoProcessor {
 
     /// 取消任务
     pub async fn cancel_task(&self, task_id: &str) -> AppResult<bool> {
-        let mut tasks = self.current_tasks.lock().await;
-        
-        if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-            task.status = TaskStatus::Cancelled;
-            // 这里应该实际终止FFmpeg进程，但需要更复杂的进程管理
-            return Ok(true);
+        // 向任务发送取消信号
+        let sender_opt = {
+            let mut map = self.cancel_senders.lock().await;
+            map.remove(task_id)
+        };
+
+        if let Some(sender) = sender_opt {
+            let _ = sender.send(());
+            // 同时更新当前任务状态
+            let mut tasks = self.current_tasks.lock().await;
+            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                task.status = TaskStatus::Cancelled;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        
-        Ok(false)
     }
 
     /// 清理完成的任务
@@ -492,11 +686,12 @@ impl VideoProcessor {
     }
 
     /// 克隆处理器用于任务
-    fn clone_for_task(&self) -> Self {
+    pub fn clone_for_task(&self) -> Self {
         Self {
             ffmpeg_path: self.ffmpeg_path.clone(),
             current_tasks: self.current_tasks.clone(),
             progress_sender: self.progress_sender.clone(),
+            cancel_senders: self.cancel_senders.clone(),
         }
     }
 }

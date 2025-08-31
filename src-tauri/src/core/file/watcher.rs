@@ -107,27 +107,32 @@ impl FileWatcher {
         let options = self.options.clone();
         let debounce_cache = Arc::clone(&self.debounce_cache);
 
-        let watcher = notify::recommended_watcher(move |res: NotifyResult<Event>| {
-            let tx = tx.clone();
-            let file_manager = file_manager.clone();
-            let options = options.clone();
-            let debounce_cache = Arc::clone(&debounce_cache);
-
-            tokio::spawn(async move {
+        // Create an internal channel to safely transfer notify events from the sync callback
+        // to an async processing task bound to the current Tokio runtime.
+        let (notify_tx, mut notify_rx) = mpsc::unbounded_channel::<NotifyResult<Event>>();
+        let tx_for_processor = tx.clone();
+        tokio::spawn(async move {
+            while let Some(res) = notify_rx.recv().await {
                 if let Ok(event) = res {
                     if let Err(e) = Self::handle_notify_event(
                         event,
                         &file_manager,
                         &options,
                         &debounce_cache,
-                        &tx,
+                        &tx_for_processor,
                     )
                     .await
                     {
                         eprintln!("Error handling file event: {}", e);
                     }
                 }
-            });
+            }
+        });
+
+        let notify_tx_cb = notify_tx.clone();
+        let watcher = notify::recommended_watcher(move |res: NotifyResult<Event>| {
+            // Push the event into the channel; processing happens on the Tokio task above.
+            let _ = notify_tx_cb.send(res);
         })
         .map_err(|e| AppError::Io(format!("Failed to create file watcher: {}", e)))?;
 

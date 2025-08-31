@@ -3,35 +3,13 @@
 
 use crate::utils::logger;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use crate::core::file::{FileManager as CoreFileManager, FileInfo as CoreFileInfo};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileInfo {
-    pub path: String,
-    pub name: String,
-    pub size: u64,
-    pub is_directory: bool,
-    pub extension: Option<String>,
-    pub modified: i64,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
     pub path: String,
-    pub files: Vec<FileInfo>,
+    pub files: Vec<CoreFileInfo>,
     pub total_size: u64,
-}
-
-fn convert_file_info(info: CoreFileInfo) -> FileInfo {
-    FileInfo {
-        path: info.path.to_string_lossy().to_string(),
-        name: info.name,
-        size: info.size,
-        is_directory: info.is_directory,
-        extension: info.extension,
-        modified: info.modified_at.timestamp(),
-    }
 }
 
 /// 列出目录内容
@@ -42,8 +20,7 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
     let fm = CoreFileManager::new();
 
     // 调用核心模块获取文件列表（非递归）
-    let items = fm.list_directory(&path).map_err(|e| e.to_string())?;
-    let files: Vec<FileInfo> = items.into_iter().map(convert_file_info).collect();
+    let files: Vec<CoreFileInfo> = fm.list_directory(&path).map_err(|e| e.to_string())?;
 
     // 计算目录总大小
     let total_size = fm.get_directory_size(&path).map_err(|e| e.to_string())?;
@@ -113,7 +90,7 @@ pub async fn move_file(src: String, dst: String) -> Result<String, String> {
 
 /// 获取文件信息
 #[tauri::command]
-pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
+pub async fn get_file_info(path: String) -> Result<CoreFileInfo, String> {
     logger::log_info(&format!("Getting file info: {}", path));
 
     let fm = CoreFileManager::new();
@@ -122,5 +99,5 @@ pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
     }
 
     let info = fm.get_file_info(&path).map_err(|e| e.to_string())?;
-    Ok(convert_file_info(info))
+    Ok(info)
 }
