@@ -74,6 +74,55 @@
   .app-grid { gap: 12px; }
 }
 
+/* 设置按钮样式 */
+.settings-section {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.btn-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  color: #007AFF;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.btn-settings:hover {
+  background: rgba(255, 255, 255, 0.9);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.btn-settings:active {
+  transform: translateY(0);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.btn-settings:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-settings svg {
+  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.btn-settings:hover svg {
+  transform: rotate(45deg);
+}
+
 /* 深色模式支持：背景仍由 body 控制，这里无需额外渐变 */
 @media (prefers-color-scheme: dark) {
   .app { background: transparent; }

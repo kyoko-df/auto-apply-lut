@@ -1,0 +1,418 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import './SettingsModal.css';
+
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSettingsChange: (settings: ProcessingSettings) => void;
+  disabled?: boolean;
+}
+
+interface ProcessingSettings {
+  output_format: string;
+  video_codec: string;
+  audio_codec: string;
+  quality_preset: string;
+  resolution: string;
+  fps: number | null;
+  bitrate: string;
+  lut_intensity: number;
+  color_space: string;
+  hardware_acceleration: boolean;
+  two_pass_encoding: boolean;
+  preserve_metadata: boolean;
+  output_directory: string;
+}
+
+interface CodecInfo {
+  name: string;
+  description: string;
+  supported: boolean;
+}
+
+interface QualityPreset {
+  name: string;
+  description: string;
+  crf: number;
+  preset: string;
+}
+
+// 运行时检测是否处于 Tauri 环境
+const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+
+// 安全调用 Tauri invoke（在浏览器预览中优雅降级）
+async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    const mod = await import('@tauri-apps/api/core');
+    if (typeof mod?.invoke === 'function' && isTauriEnv()) {
+      return await mod.invoke<T>(cmd, args);
+    }
+    throw new Error('tauri_unavailable');
+  } catch {
+    // 浏览器预览模式：返回模拟数据
+    throw new Error('tauri_unavailable');
+  }
+}
+
+const SettingsModal: React.FC<SettingsModalProps> = ({
+  isOpen,
+  onClose,
+  onSettingsChange,
+  disabled = false
+}) => {
+  const DEFAULT_SETTINGS: ProcessingSettings = {
+    output_format: 'mp4',
+    video_codec: 'libx264',
+    audio_codec: 'aac',
+    quality_preset: 'balanced',
+    resolution: 'original',
+    fps: null,
+    bitrate: 'auto',
+    lut_intensity: 100,
+    color_space: 'rec709',
+    hardware_acceleration: false,
+    two_pass_encoding: false,
+    preserve_metadata: true,
+    output_directory: ''
+  };
+
+  const [settings, setSettings] = useState<ProcessingSettings>(DEFAULT_SETTINGS);
+  const [availableCodecs, setAvailableCodecs] = useState<{
+    video: CodecInfo[];
+    audio: CodecInfo[];
+  }>({ video: [], audio: [] });
+  const [loading, setLoading] = useState(false);
+
+  // 质量预设选项
+  const qualityPresets: QualityPreset[] = [
+    {
+      name: 'high_quality',
+      description: '高质量 (较大文件)',
+      crf: 18,
+      preset: 'slow'
+    },
+    {
+      name: 'balanced',
+      description: '平衡 (推荐)',
+      crf: 23,
+      preset: 'medium'
+    },
+    {
+      name: 'fast',
+      description: '快速 (较低质量)',
+      crf: 28,
+      preset: 'fast'
+    },
+    {
+      name: 'web_optimized',
+      description: '网络优化',
+      crf: 25,
+      preset: 'medium'
+    }
+  ];
+
+  // 分辨率选项
+  const resolutionOptions = [
+    { value: 'original', label: '保持原分辨率' },
+    { value: '3840x2160', label: '4K (3840×2160)' },
+    { value: '2560x1440', label: '2K (2560×1440)' },
+    { value: '1920x1080', label: '1080p (1920×1080)' },
+    { value: '1280x720', label: '720p (1280×720)' },
+    { value: '854x480', label: '480p (854×480)' }
+  ];
+
+  // 色彩空间选项
+  const colorSpaceOptions = [
+    { value: 'rec709', label: 'Rec.709 (标准)' },
+    { value: 'rec2020', label: 'Rec.2020 (HDR)' },
+    { value: 'srgb', label: 'sRGB' },
+    { value: 'adobe_rgb', label: 'Adobe RGB' },
+    { value: 'dci_p3', label: 'DCI-P3' }
+  ];
+
+  // 输出格式选项
+  const formatOptions = [
+    { value: 'mp4', label: 'MP4 (推荐)' },
+    { value: 'mov', label: 'MOV (QuickTime)' },
+    { value: 'avi', label: 'AVI' },
+    { value: 'mkv', label: 'MKV (Matroska)' },
+    { value: 'webm', label: 'WebM' }
+  ];
+
+  // 加载可用编解码器
+  const loadAvailableCodecs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const codecs = await safeInvoke<{ video_codecs: CodecInfo[]; audio_codecs: CodecInfo[] }>('get_available_codecs');
+      setAvailableCodecs({ video: codecs.video_codecs, audio: codecs.audio_codecs });
+    } catch {
+      // 浏览器预览或失败：使用默认编解码器列表（静默降级）
+      setAvailableCodecs({
+        video: [
+          { name: 'libx264', description: 'H.264 (推荐)', supported: true },
+          { name: 'libx265', description: 'H.265/HEVC', supported: true },
+          { name: 'libvpx-vp9', description: 'VP9', supported: true },
+          { name: 'libaom-av1', description: 'AV1', supported: false }
+        ],
+        audio: [
+          { name: 'aac', description: 'AAC (推荐)', supported: true },
+          { name: 'mp3', description: 'MP3', supported: true },
+          { name: 'opus', description: 'Opus', supported: true },
+          { name: 'flac', description: 'FLAC (无损)', supported: true }
+        ]
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // 更新设置
+  const updateSetting = useCallback((key: keyof ProcessingSettings, value: any) => {
+    const newSettings = { ...settings, [key]: value };
+    setSettings(newSettings);
+    onSettingsChange(newSettings);
+  }, [settings, onSettingsChange]);
+
+  // 重置为默认设置
+  const resetToDefaults = useCallback(() => {
+    setSettings(DEFAULT_SETTINGS);
+    onSettingsChange(DEFAULT_SETTINGS);
+  }, [onSettingsChange]);
+
+  // 组件挂载时加载编解码器
+  useEffect(() => {
+    if (isOpen) {
+      loadAvailableCodecs();
+    }
+  }, [isOpen, loadAvailableCodecs]);
+
+  // ESC键关闭弹窗
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const modalContent = (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content settings-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>处理设置</h2>
+          <button className="btn-close" onClick={onClose} aria-label="关闭">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <div className="modal-body">
+          {loading && (
+            <div className="loading-state">
+              <div className="loading-spinner"></div>
+              <span>正在加载设置...</span>
+            </div>
+          )}
+
+          <div className="settings-grid">
+            {/* 基础设置 */}
+            <div className="settings-section">
+              <h3>基础设置</h3>
+              
+              <div className="setting-group">
+                <label className="setting-label">输出格式</label>
+                <select
+                  className="setting-select"
+                  value={settings.output_format}
+                  onChange={(e) => updateSetting('output_format', e.target.value)}
+                  disabled={disabled}
+                >
+                  {formatOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="setting-group">
+                <label className="setting-label">质量预设</label>
+                <select
+                  className="setting-select"
+                  value={settings.quality_preset}
+                  onChange={(e) => updateSetting('quality_preset', e.target.value)}
+                  disabled={disabled}
+                >
+                  {qualityPresets.map(preset => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="setting-group">
+                <label className="setting-label">输出分辨率</label>
+                <select
+                  className="setting-select"
+                  value={settings.resolution}
+                  onChange={(e) => updateSetting('resolution', e.target.value)}
+                  disabled={disabled}
+                >
+                  {resolutionOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* 编码设置 */}
+            <div className="settings-section">
+              <h3>编码设置</h3>
+              
+              <div className="setting-group">
+                <label className="setting-label">视频编码器</label>
+                <select
+                  className="setting-select"
+                  value={settings.video_codec}
+                  onChange={(e) => updateSetting('video_codec', e.target.value)}
+                  disabled={disabled}
+                >
+                  {availableCodecs.video.map(codec => (
+                    <option 
+                      key={codec.name} 
+                      value={codec.name}
+                      disabled={!codec.supported}
+                    >
+                      {codec.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="setting-group">
+                <label className="setting-label">音频编码器</label>
+                <select
+                  className="setting-select"
+                  value={settings.audio_codec}
+                  onChange={(e) => updateSetting('audio_codec', e.target.value)}
+                  disabled={disabled}
+                >
+                  {availableCodecs.audio.map(codec => (
+                    <option 
+                      key={codec.name} 
+                      value={codec.name}
+                      disabled={!codec.supported}
+                    >
+                      {codec.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="setting-group">
+                <label className="setting-label">色彩空间</label>
+                <select
+                  className="setting-select"
+                  value={settings.color_space}
+                  onChange={(e) => updateSetting('color_space', e.target.value)}
+                  disabled={disabled}
+                >
+                  {colorSpaceOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* LUT设置 */}
+            <div className="settings-section">
+              <h3>LUT设置</h3>
+              
+              <div className="setting-group">
+                <label className="setting-label">LUT强度</label>
+                <div className="slider-container">
+                  <input
+                    type="range"
+                    className="setting-slider"
+                    min="0"
+                    max="100"
+                    value={settings.lut_intensity}
+                    onChange={(e) => updateSetting('lut_intensity', parseInt(e.target.value))}
+                    disabled={disabled}
+                  />
+                  <span className="slider-value">{settings.lut_intensity}%</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 高级设置 */}
+            <div className="settings-section">
+              <h3>高级设置</h3>
+              
+              <div className="setting-group checkbox-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={settings.hardware_acceleration}
+                    onChange={(e) => updateSetting('hardware_acceleration', e.target.checked)}
+                    disabled={disabled}
+                  />
+                  <span className="checkbox-text">硬件加速</span>
+                </label>
+              </div>
+
+              <div className="setting-group checkbox-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={settings.two_pass_encoding}
+                    onChange={(e) => updateSetting('two_pass_encoding', e.target.checked)}
+                    disabled={disabled}
+                  />
+                  <span className="checkbox-text">双通道编码</span>
+                </label>
+              </div>
+
+              <div className="setting-group checkbox-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={settings.preserve_metadata}
+                    onChange={(e) => updateSetting('preserve_metadata', e.target.checked)}
+                    disabled={disabled}
+                  />
+                  <span className="checkbox-text">保留元数据</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={resetToDefaults} disabled={disabled}>
+            重置默认
+          </button>
+          <button className="btn-primary" onClick={onClose}>
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(modalContent, document.body);
+};
+
+export default SettingsModal;

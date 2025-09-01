@@ -1,0 +1,706 @@
+/* 苹果风格设置弹窗样式 */
+
+/* 弹窗遮罩层 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* 弹窗内容容器 */
+.modal-content {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(30px);
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  width: 90vw;
+  max-width: 900px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  margin: 20px;
+  position: relative;
+}
+
+/* 暗色模式支持 */
+@media (prefers-color-scheme: dark) {
+  .modal-content {
+    background: rgba(28, 28, 30, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* 弹窗头部 */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .modal-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .modal-header h2 {
+    color: #f5f5f7;
+  }
+}
+
+/* 关闭按钮 */
+.btn-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #6e6e73;
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.btn-close:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: #1d1d1f;
+  transform: scale(1.05);
+}
+
+.btn-close:active {
+  transform: scale(0.95);
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-close {
+    background: rgba(255, 255, 255, 0.1);
+    color: #a1a1a6;
+  }
+  
+  .btn-close:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #f5f5f7;
+  }
+}
+
+/* 弹窗主体 */
+.modal-body {
+  flex: 1;
+  padding: 20px 28px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  min-height: 0; /* 确保flex子项可以收缩 */
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .modal-body {
+    scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  }
+  
+  .modal-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+  }
+}
+
+/* 加载状态 */
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: #6e6e73;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .loading-state {
+    color: #a1a1a6;
+  }
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-left: 2px solid #007aff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-color-scheme: dark) {
+  .loading-spinner {
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-left: 2px solid #007aff;
+  }
+}
+
+/* 设置网格布局 */
+.settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+@media (min-width: 768px) {
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 32px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .settings-grid {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+}
+
+/* 设置分组 */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-section h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-section h3 {
+    color: #f5f5f7;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* 设置项 */
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.setting-group:last-child {
+  margin-bottom: 0;
+}
+
+.setting-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .setting-label {
+    color: #f5f5f7;
+  }
+}
+
+/* 选择框样式 */
+.setting-select {
+  padding: 12px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  padding-right: 40px;
+}
+
+.setting-select:focus {
+  outline: none;
+  border-color: #007aff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+}
+
+.setting-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .setting-select {
+    background: rgba(58, 58, 60, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #f5f5f7;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;            /* 关键：防止箭头重复平铺 */
+    background-position: right 12px center;  /* 恢复定位 */
+    background-size: 16px;                   /* 恢复尺寸 */
+    padding-right: 40px;                      /* 为箭头留白 */
+  }
+}
+
+/* 统一表单控件的盒模型，防止 100% 宽度 + padding 导致溢出叠加 */
+.settings-modal .setting-select,
+.settings-modal .setting-input,
+.settings-modal .setting-slider {
+  box-sizing: border-box;
+}
+
+/* 滑块容器 */
+.slider-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 滑块样式 */
+.setting-slider {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.setting-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #007aff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.setting-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.4);
+}
+
+.setting-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #007aff;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .setting-slider {
+    background: rgba(255, 255, 255, 0.2);
+  }
+}
+
+.slider-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #007aff;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* 复选框组 */
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkbox-group .checkbox-label {
+  margin: 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .checkbox-label {
+    color: #f5f5f7;
+  }
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.checkbox-label input[type="checkbox"]:checked {
+  background: #007aff;
+  border-color: #007aff;
+}
+
+.checkbox-label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 6px;
+  height: 10px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.checkbox-label input[type="checkbox"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .checkbox-label input[type="checkbox"] {
+    border: 2px solid rgba(255, 255, 255, 0.3);
+  }
+}
+
+.checkbox-text {
+  font-weight: 400;
+}
+
+/* 弹窗底部 */
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 28px 24px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .modal-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* 按钮样式 */
+.btn-primary,
+.btn-secondary {
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border: none;
+  min-height: 44px;
+  min-width: 80px;
+}
+
+.btn-primary {
+  background: #007aff;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #0056cc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.2);
+}
+
+.btn-secondary {
+  background: rgba(0, 0, 0, 0.05);
+  color: #1d1d1f;
+}
+
+.btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.btn-secondary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: #f5f5f7;
+  }
+  
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* 动画 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .modal-content {
+    width: 95vw;
+    max-height: 90vh;
+    border-radius: 12px;
+    margin: 10px;
+  }
+  
+  .modal-header {
+    padding: 20px 20px 12px;
+  }
+  
+  .modal-body {
+    padding: 16px 20px;
+  }
+  
+  .modal-footer {
+    padding: 12px 20px 20px;
+  }
+  
+  .settings-grid {
+    gap: 24px;
+  }
+  
+  .settings-section {
+    gap: 12px;
+  }
+  
+  .setting-group {
+    margin-bottom: 12px;
+  }
+}
+
+/* 减少动画偏好设置支持 */
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-content,
+  .btn-close,
+  .setting-select,
+  .setting-slider::-webkit-slider-thumb,
+  .checkbox-label input[type="checkbox"],
+  .btn-primary,
+  .btn-secondary {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Scoped overrides specifically for SettingsModal content */
+.settings-modal {
+  text-align: left; /* 避免被 #root 的 text-align 影响 */
+}
+
+.settings-modal .modal-header,
+.settings-modal .modal-body,
+.settings-modal .modal-footer {
+  text-align: left;
+}
+
+/* 让分组标题与内容左对齐，避免居中导致视觉错乱 */
+.settings-modal .settings-section h3 { 
+  text-align: left;
+}
+
+/* 修正选择器与文本重叠：
+   - 设定最小高度与行高
+   - 强制单行显示标签，必要时换行也不会覆盖控件 */
+.settings-modal .setting-label {
+  line-height: 20px;
+  min-height: 20px;
+  word-break: break-word;
+}
+
+.settings-modal .setting-select {
+  width: 100%;
+  min-width: 0; /* 允许在容器内收缩，防止溢出 */
+}
+
+/* 统一滑块与右侧数值的排列，避免拥挤 */
+.settings-modal .slider-container {
+  align-items: center;
+}
+
+/* 复选框一列布局，避免和标题/下拉框互相覆盖 */
+.settings-modal .checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 避免 grid/flex 列间距过小引起的堆叠 */
+.settings-modal .settings-grid {
+  gap: 28px;
+}
+
+/* 中等屏幕下两列时，保证列间距够用并允许区域换行 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .settings-modal .settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 28px;
+  }
+}
+
+/* 确保 section 内的控件不会紧贴边缘 */
+.settings-modal .settings-section {
+  padding-right: 2px; /* 抵消可能的滚动条/阴影视觉拥挤 */
+}
+
+/* 避免根容器 text-align: center 影响弹窗内部所有文本 */
+.settings-modal, .settings-modal * { text-align: left; }
+
+/* 有自定义箭头背景的选择框需要更大右内边距，避免文字与箭头重叠 */
+.settings-modal .setting-select { padding-right: 44px; line-height: 20px; }
+
+/* 强制覆盖全局 App.css 的 .settings-section，避免在弹窗内居中和挤压 */
+.settings-modal .settings-section {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  gap: 16px !important;
+  margin: 0 !important;
+  grid-area: unset !important;
+}
+
+/* 每个设置分组独立占位，避免重叠 */
+.settings-modal .setting-group { position: relative; }
+
+/* 加强网格容器，确保为网格或列布局时不重叠 */
+.settings-modal .settings-grid { align-items: start; }
+
+/* FINAL scoped fixes to stop stacking and repeated chevrons inside modal */
+.settings-modal .settings-grid {
+  display: grid !important;
+  grid-template-columns: 1fr;
+  gap: 24px 20px !important;
+}
+@media (min-width: 768px) {
+  .settings-modal .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Ensure each group flows vertically without overlap */
+.settings-modal .setting-group { display: flex; flex-direction: column; gap: 8px; }
+
+/* Force select visual to a single chevron and stable box sizing */
+.settings-modal select.setting-select {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 44px;
+  line-height: 22px;
+  padding: 10px 44px 10px 12px; /* leave room for chevron */
+  border-radius: 10px;
+  box-sizing: border-box;
+  border: 1px solid rgba(0,0,0,0.15);
+  background-color: rgba(255,255,255,0.85); /* avoid shorthand to not reset sub-props */
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 16px !important;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal select.setting-select {
+    border-color: rgba(255,255,255,0.15);
+    color: #f5f5f7;
+    background-color: rgba(58,58,60,0.8);
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  }
+}
