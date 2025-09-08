@@ -4,11 +4,13 @@ use crate::core::ffmpeg::EncodingSettings;
 use crate::core::task::{TaskManager, TaskStatus, TaskType};
 use crate::types::{TaskProgress, VideoInfo};
 use crate::utils::{path_utils, logger};
+use crate::utils::config::ConfigManager;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
 use tokio::sync::mpsc;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessRequest {
@@ -181,11 +183,35 @@ pub async fn get_all_tasks(
 }
 
 #[tauri::command]
-pub async fn get_video_info(path: String) -> Result<VideoInfo, String> {
+pub async fn get_video_info(path: String, config_manager: State<'_, Mutex<ConfigManager>>) -> Result<VideoInfo, String> {
     logger::log_info(&format!("Getting video info: {}", path));
-    let manager = match crate::core::video::VideoManager::new() {
-        Ok(m) => m,
-        Err(e) => return Err(e.to_string()),
+    // 优先使用配置中的 ffmpeg 路径
+    let cfg_path = config_manager
+        .lock().map_err(|e| format!("Config lock poisoned: {}", e))?
+        .get_config()
+        .ffmpeg_path
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+
+    let manager = if let Some(ffmpeg_path) = cfg_path {
+        // 推断 ffprobe 路径：同目录下可执行名替换
+        let mut ffprobe_path = std::path::PathBuf::from(&ffmpeg_path);
+        let probe_name = if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" };
+        if ffprobe_path.is_file() {
+            ffprobe_path.pop();
+            ffprobe_path.push(probe_name);
+        } else if ffprobe_path.ends_with("ffmpeg") || ffmpeg_path.ends_with("ffmpeg.exe") {
+            ffprobe_path.pop();
+            ffprobe_path.push(probe_name);
+        } else {
+            ffprobe_path = std::path::PathBuf::from(probe_name);
+        }
+        crate::core::video::VideoManager::with_paths(ffmpeg_path, ffprobe_path.to_string_lossy().to_string())
+    } else {
+        match crate::core::video::VideoManager::new() {
+            Ok(m) => m,
+            Err(e) => return Err(e.to_string()),
+        }
     };
     manager
         .get_video_info(&std::path::Path::new(&path))

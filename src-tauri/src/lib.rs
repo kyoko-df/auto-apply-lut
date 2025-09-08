@@ -5,6 +5,7 @@
 use tauri::Manager;
 use tracing::{info, error};
 use tracing_subscriber;
+use std::sync::Mutex;
 
 // 模块导入
 pub mod commands;
@@ -52,6 +53,8 @@ pub fn run() {
     let task_manager = core::task::TaskManager::default();
     // VideoProcessor 需要 ffmpeg 路径，这里暂用 "ffmpeg" 让其走 PATH
     let video_processor = core::ffmpeg::processor::VideoProcessor::new(std::path::PathBuf::from("ffmpeg"));
+    // 全局配置管理器
+    let config_manager = utils::config::ConfigManager::new().expect("初始化配置管理器失败");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -60,10 +63,14 @@ pub fn run() {
         .manage(lut_manager)
         .manage(task_manager)
         .manage(video_processor)
+        .manage(Mutex::new(config_manager))
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
             commands::system_manager::get_available_codecs,
+            commands::system_manager::get_ffmpeg_info,
+            commands::system_manager::get_ffmpeg_path_config,
+            commands::system_manager::set_ffmpeg_path_config,
             commands::file_manager::get_file_info,
             commands::processor::get_video_info,
             // LUT

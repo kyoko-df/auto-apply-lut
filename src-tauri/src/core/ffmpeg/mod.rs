@@ -17,6 +17,15 @@ pub mod decoder;
 pub mod filters;
 pub mod utils;
 
+/// 对外导出：发现打包或系统中的 ffmpeg/ffprobe 路径
+pub fn discover_ffmpeg_path() -> AppResult<PathBuf> {
+    FFmpegManager::find_ffmpeg_executable()
+}
+
+pub fn discover_ffprobe_path() -> AppResult<PathBuf> {
+    FFmpegManager::find_ffprobe_executable()
+}
+
 /// FFmpeg管理器
 pub struct FFmpegManager {
     /// FFmpeg可执行文件路径
@@ -63,18 +72,36 @@ impl FFmpegManager {
 
     /// 查找FFmpeg可执行文件
     fn find_ffmpeg_executable() -> AppResult<PathBuf> {
-        // 常见的FFmpeg安装路径
-        let common_paths = vec![
+        // 0) 环境变量优先
+        if let Ok(p) = std::env::var("FFMPEG_PATH") {
+            let pb = PathBuf::from(&p);
+            if pb.exists() || Self::check_command_works(&p) { return Ok(pb); }
+        }
+
+        // 1) 打包的资源目录
+        if let Some(pb) = Self::find_packaged_tool("ffmpeg") { return Ok(pb); }
+
+        // 2) 常见安装路径
+        #[cfg(target_os = "windows")]
+        let common_paths: &[&str] = &[
+            "C\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
+            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
+            "ffmpeg",
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let common_paths: &[&str] = &[
             "/usr/local/bin/ffmpeg",
             "/usr/bin/ffmpeg",
             "/opt/homebrew/bin/ffmpeg",
-            "ffmpeg", // 系统PATH中
+            "ffmpeg",
         ];
-        
-        for path in common_paths {
-            let path_buf = PathBuf::from(path);
-            if path_buf.exists() || Self::check_command_exists("ffmpeg") {
-                return Ok(path_buf);
+
+        for p in common_paths {
+            let pb = PathBuf::from(p);
+            if pb.is_absolute() {
+                if pb.exists() { return Ok(pb); }
+            } else if Self::check_command_works(p) {
+                return Ok(pb);
             }
         }
         
@@ -83,30 +110,91 @@ impl FFmpegManager {
 
     /// 查找FFprobe可执行文件
     fn find_ffprobe_executable() -> AppResult<PathBuf> {
-        let common_paths = vec![
+        // 0) 环境变量优先
+        if let Ok(p) = std::env::var("FFPROBE_PATH") {
+            let pb = PathBuf::from(&p);
+            if pb.exists() || Self::check_command_works(&p) { return Ok(pb); }
+        }
+
+        // 1) 打包的资源目录
+        if let Some(pb) = Self::find_packaged_tool("ffprobe") { return Ok(pb); }
+
+        // 2) 常见安装路径
+        #[cfg(target_os = "windows")]
+        let common_paths: &[&str] = &[
+            "C\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
+            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
+            "ffprobe",
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let common_paths: &[&str] = &[
             "/usr/local/bin/ffprobe",
             "/usr/bin/ffprobe",
             "/opt/homebrew/bin/ffprobe",
             "ffprobe",
         ];
-        
-        for path in common_paths {
-            let path_buf = PathBuf::from(path);
-            if path_buf.exists() || Self::check_command_exists("ffprobe") {
-                return Ok(path_buf);
+
+        for p in common_paths {
+            let pb = PathBuf::from(p);
+            if pb.is_absolute() {
+                if pb.exists() { return Ok(pb); }
+            } else if Self::check_command_works(p) {
+                return Ok(pb);
             }
         }
-        
+
         Err(AppError::FFmpeg("FFprobe executable not found".to_string()))
     }
 
-    /// 检查命令是否存在于系统PATH中
-    fn check_command_exists(command: &str) -> bool {
-        Command::new("which")
-            .arg(command)
-            .output()
-            .map(|output| output.status.success())
+    /// 检查命令在系统上是否可调用（-version 成功退出）
+    fn check_command_works(command: &str) -> bool {
+        Command::new(command)
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// 在打包资源目录查找工具（Windows/Mac/Linux）
+    fn find_packaged_tool(tool: &str) -> Option<PathBuf> {
+        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+
+        #[cfg(target_os = "windows")]
+        let candidates = vec![
+            exe_dir.join("resources").join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir.join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir.join(format!("{}.exe", tool)),
+        ];
+
+        #[cfg(target_os = "macos")]
+        let candidates = {
+            // app.app/Contents/MacOS/<exe>
+            let resources = exe_dir.join("../../Resources");
+            let resources = resources.canonicalize().unwrap_or(resources);
+            vec![
+                resources.join("bin").join("macos").join(tool),
+                resources.join(tool),
+                exe_dir.join(tool),
+            ]
+        };
+
+        #[cfg(target_os = "linux")]
+        let candidates = vec![
+            exe_dir.join("resources").join("bin").join("linux").join(tool),
+            exe_dir.join("bin").join("linux").join(tool),
+            exe_dir.join(tool),
+        ];
+
+        for c in candidates {
+            if c.exists() {
+                // 再次确认可执行
+                let s = if cfg!(target_os = "windows") { c.to_string_lossy().to_string() } else { c.to_string_lossy().to_string() };
+                if Self::check_command_works(&s) { return Some(c); }
+            }
+        }
+        None
     }
 
     /// 获取视频信息
@@ -121,491 +209,57 @@ impl FFmpegManager {
             ])
             .output()
             .await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to run ffprobe: {}", e)))?;
-        
+            .map_err(|e| AppError::FFmpeg(e.to_string()))?;
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(AppError::FFmpeg(format!("FFprobe failed: {}", error)));
         }
-        
+
         let json_str = String::from_utf8_lossy(&output.stdout);
-        let probe_result: ProbeResult = serde_json::from_str(&json_str)
-            .map_err(|e| AppError::Serialization(format!("Failed to parse ffprobe output: {}", e)))?;
-        
-        VideoInfo::from_probe_result(probe_result)
-    }
+        let mut probe: ProbeResult = serde_json::from_str(&json_str)
+            .map_err(|e| AppError::FFmpeg(format!("Failed to parse FFprobe output: {}", e)))?;
 
-    /// 应用LUT到视频
-    pub async fn apply_lut_to_video(
-        &self,
-        input_path: &Path,
-        output_path: &Path,
-        lut_path: &Path,
-        settings: Option<EncodingSettings>,
-    ) -> AppResult<()> {
-        let settings = settings.unwrap_or_else(|| self.default_settings.clone());
-        
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        cmd.args([
-            "-i", input_path.to_str().unwrap(),
-            "-vf", &format!("lut3d={}", lut_path.to_str().unwrap()),
-            "-c:v", &settings.video_codec,
-            "-preset", &settings.preset,
-            "-crf", &settings.crf.to_string(),
-            "-c:a", &settings.audio_codec,
-            "-y", // 覆盖输出文件
-            output_path.to_str().unwrap(),
-        ]);
-        
-        // 添加额外的编码参数
-        for (key, value) in &settings.extra_params {
-            cmd.args([key, value]);
-        }
-        
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
-        
-        // 监控进度
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-            let mut lines = reader.lines();
-            
-            while let Some(line) = lines.next_line().await.unwrap_or(None) {
-                if let Some(progress) = self.parse_progress(&line) {
-                    self.notify_progress(progress).await;
+        // 将 streams 转换为内部结构
+        let streams: Vec<StreamInfo> = probe.streams.drain(..).map(Into::into).collect();
+        let (duration, bitrate, format, video_codec, audio_codec, fps, width, height) = if let Some(fmt) = probe.format {
+            let duration = fmt.duration.parse::<f64>().unwrap_or(0.0);
+            let bitrate = fmt.bit_rate.parse::<u64>().unwrap_or(0);
+            let format = fmt.format_name;
+            let mut video_codec = String::from("unknown");
+            let mut audio_codec = None;
+            let mut fps = 0.0;
+            let mut width = 0;
+            let mut height = 0;
+            for s in &streams {
+                if s.codec_type == "video" {
+                    video_codec = s.codec_name.clone();
+                    fps = s.fps.unwrap_or(0.0);
+                    width = s.width.unwrap_or(0);
+                    height = s.height.unwrap_or(0);
+                } else if s.codec_type == "audio" {
+                    audio_codec = Some(s.codec_name.clone());
                 }
             }
-        }
-        
-        let status = child.wait().await
-            .map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?;
-        
-        if !status.success() {
-            return Err(AppError::FFmpeg("FFmpeg encoding failed".to_string()));
-        }
-        
-        Ok(())
-    }
-
-    /// 批量应用LUT
-    pub async fn batch_apply_lut(
-        &self,
-        tasks: Vec<BatchTask>,
-        settings: Option<EncodingSettings>,
-    ) -> AppResult<Vec<BatchResult>> {
-        let mut results = Vec::new();
-        
-        for task in tasks {
-            let result = match self.apply_lut_to_video(
-                &task.input_path,
-                &task.output_path,
-                &task.lut_path,
-                settings.clone(),
-            ).await {
-                Ok(_) => BatchResult {
-                    task_id: task.id,
-                    success: true,
-                    error: None,
-                    output_path: Some(task.output_path),
-                },
-                Err(e) => BatchResult {
-                    task_id: task.id,
-                    success: false,
-                    error: Some(e.to_string()),
-                    output_path: None,
-                },
-            };
-            
-            results.push(result);
-        }
-        
-        Ok(results)
-    }
-
-    /// 转换视频格式
-    pub async fn convert_video(
-        &self,
-        input_path: &Path,
-        output_path: &Path,
-        settings: EncodingSettings,
-    ) -> AppResult<()> {
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        cmd.args([
-            "-i", input_path.to_str().unwrap(),
-            "-c:v", &settings.video_codec,
-            "-preset", &settings.preset,
-            "-crf", &settings.crf.to_string(),
-            "-c:a", &settings.audio_codec,
-        ]);
-        
-        // 添加分辨率设置
-        if let Some(resolution) = &settings.resolution {
-            cmd.args(["-s", &format!("{}x{}", resolution.width, resolution.height)]);
-        }
-        
-        // 添加帧率设置
-        if let Some(fps) = settings.fps {
-            cmd.args(["-r", &fps.to_string()]);
-        }
-        
-        // 添加额外参数
-        for (key, value) in &settings.extra_params {
-            cmd.args([key, value]);
-        }
-        
-        cmd.args(["-y", output_path.to_str().unwrap()]);
-        
-        let status = cmd.status().await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to run ffmpeg: {}", e)))?;
-        
-        if !status.success() {
-            return Err(AppError::FFmpeg("Video conversion failed".to_string()));
-        }
-        
-        Ok(())
-    }
-
-    /// 提取视频帧
-    pub async fn extract_frames(
-        &self,
-        input_path: &Path,
-        output_dir: &Path,
-        frame_rate: Option<f64>,
-        format: ImageFormat,
-    ) -> AppResult<Vec<PathBuf>> {
-        // 确保输出目录存在
-        tokio::fs::create_dir_all(output_dir).await
-            .map_err(AppError::from)?;
-        
-        let output_pattern = output_dir.join(format!("frame_%04d.{}", format.extension()));
-        
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        cmd.args([
-            "-i", input_path.to_str().unwrap(),
-        ]);
-        
-        // 设置帧率
-        if let Some(fps) = frame_rate {
-            cmd.args(["-vf", &format!("fps={}", fps)]);
-        }
-        
-        cmd.args([
-            "-y",
-            output_pattern.to_str().unwrap(),
-        ]);
-        
-        let status = cmd.status().await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to extract frames: {}", e)))?;
-        
-        if !status.success() {
-            return Err(AppError::FFmpeg("Frame extraction failed".to_string()));
-        }
-        
-        // 收集生成的帧文件
-        let mut frame_files = Vec::new();
-        let mut entries = tokio::fs::read_dir(output_dir).await
-            .map_err(AppError::from)?;
-        
-        while let Some(entry) = entries.next_entry().await
-            .map_err(AppError::from)? {
-            
-            let path = entry.path();
-            if path.is_file() && path.file_name().unwrap().to_str().unwrap().starts_with("frame_") {
-                frame_files.push(path);
-            }
-        }
-        
-        frame_files.sort();
-        Ok(frame_files)
-    }
-
-    /// 从帧创建视频
-    pub async fn create_video_from_frames(
-        &self,
-        frame_dir: &Path,
-        output_path: &Path,
-        frame_rate: f64,
-        settings: EncodingSettings,
-    ) -> AppResult<()> {
-        let input_pattern = frame_dir.join("frame_%04d.png");
-        
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        cmd.args([
-            "-framerate", &frame_rate.to_string(),
-            "-i", input_pattern.to_str().unwrap(),
-            "-c:v", &settings.video_codec,
-            "-preset", &settings.preset,
-            "-crf", &settings.crf.to_string(),
-            "-pix_fmt", "yuv420p",
-            "-y",
-            output_path.to_str().unwrap(),
-        ]);
-        
-        let status = cmd.status().await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to create video: {}", e)))?;
-        
-        if !status.success() {
-            return Err(AppError::FFmpeg("Video creation failed".to_string()));
-        }
-        
-        Ok(())
-    }
-
-    /// 获取支持的编解码器
-    pub async fn get_supported_codecs(&self) -> AppResult<Vec<CodecInfo>> {
-        let output = AsyncCommand::new(&self.ffmpeg_path)
-            .args(["-codecs"])
-            .output()
-            .await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to get codecs: {}", e)))?;
-        
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let codecs = self.parse_codecs(&output_str)?;
-        
-        Ok(codecs)
-    }
-
-    /// 获取支持的格式
-    pub async fn get_supported_formats(&self) -> AppResult<Vec<FormatInfo>> {
-        let output = AsyncCommand::new(&self.ffmpeg_path)
-            .args(["-formats"])
-            .output()
-            .await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to get formats: {}", e)))?;
-        
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let formats = self.parse_formats(&output_str)?;
-        
-        Ok(formats)
-    }
-
-    /// 验证FFmpeg安装
-    pub async fn validate_installation(&self) -> AppResult<FFmpegInfo> {
-        // 检查FFmpeg版本
-        let ffmpeg_output = AsyncCommand::new(&self.ffmpeg_path)
-            .args(["-version"])
-            .output()
-            .await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to check ffmpeg version: {}", e)))?;
-        
-        // 检查FFprobe版本
-        let ffprobe_output = AsyncCommand::new(&self.ffprobe_path)
-            .args(["-version"])
-            .output()
-            .await
-            .map_err(|e| AppError::FFmpeg(format!("Failed to check ffprobe version: {}", e)))?;
-        
-        let ffmpeg_version = self.parse_version(&String::from_utf8_lossy(&ffmpeg_output.stdout))?;
-        let ffprobe_version = self.parse_version(&String::from_utf8_lossy(&ffprobe_output.stdout))?;
-        
-        Ok(FFmpegInfo {
-            ffmpeg_path: self.ffmpeg_path.clone(),
-            ffprobe_path: self.ffprobe_path.clone(),
-            ffmpeg_version,
-            ffprobe_version,
-            available: true,
-        })
-    }
-
-    /// 解析进度信息
-    fn parse_progress(&self, line: &str) -> Option<f64> {
-        // FFmpeg进度输出格式：frame=  123 fps= 25 q=28.0 size=    1024kB time=00:00:05.00 bitrate=1677.7kbits/s speed=1.02x
-        if line.contains("time=") {
-            // 简化的进度解析，实际实现需要更复杂的逻辑
-            // 这里返回一个模拟的进度值
-            Some(0.5) // 50%
+            (duration, bitrate, format, video_codec, audio_codec, fps, width, height)
         } else {
-            None
-        }
-    }
+            (0.0, 0, String::from("unknown"), String::from("unknown"), None, 0.0, 0, 0)
+        };
 
-    /// 通知进度
-    async fn notify_progress(&self, progress: f64) {
-        let callbacks = self.progress_callbacks.lock().await;
-        for callback in callbacks.iter() {
-            callback(progress);
-        }
-    }
-
-    /// 添加进度回调
-    pub async fn add_progress_callback<F>(&self, callback: F)
-    where
-        F: Fn(f64) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.progress_callbacks.lock().await;
-        callbacks.push(Box::new(callback));
-    }
-
-    /// 解析编解码器信息
-    fn parse_codecs(&self, output: &str) -> AppResult<Vec<CodecInfo>> {
-        let mut codecs = Vec::new();
-        
-        for line in output.lines() {
-            if line.starts_with(" ") && line.len() > 10 {
-                // 简化的解析逻辑
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    codecs.push(CodecInfo {
-                        name: parts[1].to_string(),
-                        description: parts[2..].join(" "),
-                        codec_type: if line.contains("V") { CodecType::Video } else { CodecType::Audio },
-                        can_encode: line.contains("E"),
-                        can_decode: line.contains("D"),
-                    });
-                }
-            }
-        }
-        
-        Ok(codecs)
-    }
-
-    /// 解析格式信息
-    fn parse_formats(&self, output: &str) -> AppResult<Vec<FormatInfo>> {
-        let mut formats = Vec::new();
-        
-        for line in output.lines() {
-            if line.starts_with(" ") && line.len() > 10 {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    formats.push(FormatInfo {
-                        name: parts[1].to_string(),
-                        description: parts[2..].join(" "),
-                        can_mux: line.contains("E"),
-                        can_demux: line.contains("D"),
-                    });
-                }
-            }
-        }
-        
-        Ok(formats)
-    }
-
-    /// 解析版本信息
-    fn parse_version(&self, output: &str) -> AppResult<String> {
-        for line in output.lines() {
-            if line.starts_with("ffmpeg version") || line.starts_with("ffprobe version") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    return Ok(parts[2].to_string());
-                }
-            }
-        }
-        
-        Err(AppError::FFmpeg("Could not parse version".to_string()))
-    }
-
-    /// 设置默认编码设置
-    pub fn set_default_settings(&mut self, settings: EncodingSettings) {
-        self.default_settings = settings;
-    }
-
-    /// 获取默认编码设置
-    pub fn get_default_settings(&self) -> &EncodingSettings {
-        &self.default_settings
-    }
-}
-
-/// 编码设置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncodingSettings {
-    pub video_codec: String,
-    pub audio_codec: String,
-    pub preset: String,
-    pub crf: u8,
-    pub resolution: Option<Resolution>,
-    pub fps: Option<f64>,
-    pub bitrate: Option<String>,
-    pub extra_params: HashMap<String, String>,
-}
-
-impl Default for EncodingSettings {
-    fn default() -> Self {
-        Self {
-            video_codec: "libx264".to_string(),
-            audio_codec: "aac".to_string(),
-            preset: "medium".to_string(),
-            crf: 23,
-            resolution: None,
-            fps: None,
-            bitrate: None,
-            extra_params: HashMap::new(),
-        }
-    }
-}
-
-/// 分辨率
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Resolution {
-    pub width: u32,
-    pub height: u32,
-}
-
-/// 视频信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VideoInfo {
-    pub duration: f64,
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-    pub video_codec: String,
-    pub audio_codec: Option<String>,
-    pub bitrate: u64,
-    pub format: String,
-    pub streams: Vec<StreamInfo>,
-}
-
-impl VideoInfo {
-    fn from_probe_result(probe: ProbeResult) -> AppResult<Self> {
-        let format = probe.format.ok_or_else(|| {
-            AppError::FFmpeg("No format information found".to_string())
-        })?;
-        
-        let video_stream = probe.streams.iter()
-            .find(|s| s.codec_type == "video")
-            .ok_or_else(|| AppError::FFmpeg("No video stream found".to_string()))?;
-        
-        let audio_stream = probe.streams.iter()
-            .find(|s| s.codec_type == "audio");
-        
-        Ok(Self {
-            duration: format.duration.parse().unwrap_or(0.0),
-            width: video_stream.width.unwrap_or(0),
-            height: video_stream.height.unwrap_or(0),
-            fps: video_stream.r_frame_rate.parse().unwrap_or(0.0),
-            video_codec: video_stream.codec_name.clone(),
-            audio_codec: audio_stream.map(|s| s.codec_name.clone()),
-            bitrate: format.bit_rate.parse().unwrap_or(0),
-            format: format.format_name,
-            streams: probe.streams.into_iter().map(StreamInfo::from).collect(),
+        Ok(VideoInfo {
+            duration,
+            width,
+            height,
+            fps,
+            video_codec,
+            audio_codec,
+            bitrate,
+            format,
+            streams,
         })
     }
-}
 
-/// 流信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamInfo {
-    pub index: u32,
-    pub codec_type: String,
-    pub codec_name: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub duration: Option<f64>,
-}
-
-impl From<ProbeStream> for StreamInfo {
-    fn from(stream: ProbeStream) -> Self {
-        Self {
-            index: stream.index,
-            codec_type: stream.codec_type,
-            codec_name: stream.codec_name,
-            width: stream.width,
-            height: stream.height,
-            duration: stream.duration.and_then(|d| d.parse().ok()),
-        }
-    }
+    // ... existing code ...
 }
 
 /// FFprobe结果
@@ -812,5 +466,101 @@ mod tests {
         assert_eq!(format.name, "mp4");
         assert!(format.can_mux);
         assert!(format.can_demux);
+    }
+}
+
+/// 分辨率
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Resolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 编码设置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodingSettings {
+    /// 视频编码器，例如 libx264、libx265、copy
+    pub video_codec: String,
+    /// 音频编码器，例如 aac、copy
+    pub audio_codec: String,
+    /// 预设，例如 ultrafast、medium、slow
+    pub preset: String,
+    /// 质量因子（CRF），当未指定码率时使用
+    pub crf: i32,
+    /// 目标分辨率，None 表示保持原分辨率
+    pub resolution: Option<Resolution>,
+    /// 目标帧率
+    pub fps: Option<f64>,
+    /// 目标码率（如 "2M"），与 crf 互斥，优先使用码率
+    pub bitrate: Option<String>,
+    /// 额外参数，形如（"-movflags" => "+faststart"）
+    pub extra_params: std::collections::HashMap<String, String>,
+}
+
+impl Default for EncodingSettings {
+    fn default() -> Self {
+        Self {
+            video_codec: "libx264".to_string(),
+            audio_codec: "aac".to_string(),
+            preset: "medium".to_string(),
+            crf: 23,
+            resolution: None,
+            fps: None,
+            bitrate: None,
+            extra_params: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// 媒体流信息（统一对外结构）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamInfo {
+    pub index: u32,
+    pub codec_type: String,  // video / audio / subtitle / data
+    pub codec_name: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<f64>,
+    pub duration: Option<f64>,
+}
+
+/// 视频信息（FFprobe侧重的技术信息）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoInfo {
+    pub duration: f64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub video_codec: String,
+    pub audio_codec: Option<String>,
+    pub bitrate: u64,
+    pub format: String,
+    pub streams: Vec<StreamInfo>,
+}
+
+/// 解析帧率字符串，如 "30000/1001" 或 "30"
+fn parse_frame_rate_str(s: &str) -> Option<f64> {
+    if let Some((num, den)) = s.split_once('/') {
+        let n: f64 = num.trim().parse().ok()?;
+        let d: f64 = den.trim().parse().ok()?;
+        if d != 0.0 { Some(n / d) } else { None }
+    } else {
+        s.trim().parse::<f64>().ok()
+    }
+}
+
+impl From<ProbeStream> for StreamInfo {
+    fn from(ps: ProbeStream) -> Self {
+        let fps = parse_frame_rate_str(&ps.r_frame_rate);
+        let duration = ps.duration.as_ref().and_then(|d| d.parse::<f64>().ok());
+        StreamInfo {
+            index: ps.index,
+            codec_type: ps.codec_type,
+            codec_name: ps.codec_name,
+            width: ps.width,
+            height: ps.height,
+            fps,
+            duration,
+        }
     }
 }

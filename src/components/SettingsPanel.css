@@ -163,3 +163,40 @@
 @media (prefers-color-scheme: dark) {
   .browse-button:hover, .reset-button:hover { background: color-mix(in oklab, var(--surface-card), white 6%); }
 }
+
+/* FFmpeg section */
+.ffmpeg-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ffmpeg-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ffmpeg-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-soft);
+}
+.status-pill.ok { background: color-mix(in oklab, var(--color-success), white 86%); color: #0b7a33; border-color: color-mix(in oklab, var(--color-success), black 12%); }
+.status-pill.warn { background: color-mix(in oklab, var(--color-warning), white 86%); color: #7a4a00; border-color: color-mix(in oklab, var(--color-warning), black 12%); }
+.status-pill.error { background: color-mix(in oklab, var(--color-danger), white 86%); color: #8a1a16; border-color: color-mix(in oklab, var(--color-danger), black 12%); }
+
+.ffmpeg-message {
+  margin-top: 8px;
+  color: var(--color-fg-subtle);
+  font-size: 0.9rem;
+}
