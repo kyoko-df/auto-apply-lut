@@ -34,8 +34,8 @@ interface ProcessingSettings {
 }
 
 function App() {
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [lutFile, setLutFile] = useState<File | null>(null);
+  const [videoFile, setVideoFile] = useState<string | null>(null);
+  const [lutFile, setLutFile] = useState<string | null>(null);
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -55,13 +55,13 @@ function App() {
     output_directory: ''
   });
 
-  const handleVideoSelect = useCallback((file: File) => {
-    setVideoFile(file);
+  const handleVideoSelect = useCallback((filePath: string) => {
+    setVideoFile(filePath);
     setProcessedVideoPath(null);
   }, []);
 
-  const handleLutSelect = useCallback((file: File) => {
-    setLutFile(file);
+  const handleLutSelect = useCallback((filePath: string) => {
+    setLutFile(filePath);
   }, []);
 
   const handleClearFiles = useCallback(() => {
@@ -77,9 +77,10 @@ function App() {
     }
 
     const taskId = `task_${Date.now()}`;
+    const fileName = videoFile.split('/').pop() || videoFile.split('\\').pop() || 'unknown';
     const newTask: ProcessingTask = {
       id: taskId,
-      name: `处理 ${videoFile.name}`,
+      name: `处理 ${fileName}`,
       progress: 0,
       status: 'pending',
       stage: '准备中...'
@@ -99,8 +100,8 @@ function App() {
 
       // 调用后端处理视频
       const result = await invoke('apply_lut_to_video', {
-        videoPath: videoFile.name, // 实际应该是文件路径
-        lutPath: lutFile.name, // 实际应该是文件路径
+        videoPath: videoFile,
+        lutPath: lutFile,
         settings: settings
       });
 
@@ -193,26 +194,16 @@ function App() {
         <div className="app-grid">
           <div className="upload-section">
             <FileUpload
-              onVideoSelect={(filePath: string) => {
-                // 创建一个模拟的File对象
-                const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'unknown';
-                const mockFile = new File([], fileName, { type: 'video/mp4' });
-                handleVideoSelect(mockFile);
-              }}
-              onLutSelect={(filePath: string) => {
-                // 创建一个模拟的File对象
-                const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'unknown';
-                const mockFile = new File([], fileName, { type: 'application/octet-stream' });
-                handleLutSelect(mockFile);
-              }}
+              onVideoSelect={handleVideoSelect}
+              onLutSelect={handleLutSelect}
               disabled={processingTasks.some(task => task.status === 'processing')}
             />
           </div>
 
           <div className="preview-section">
              <VideoPreview
-               videoPath={videoFile?.name}
-               lutPath={lutFile?.name}
+               videoPath={videoFile || undefined}
+               lutPath={lutFile || undefined}
                onProcessingStart={() => console.log('Processing started')}
                onProcessingComplete={(outputPath) => setProcessedVideoPath(outputPath)}
                onProcessingError={(error) => console.error('Processing error:', error)}
