@@ -42,8 +42,8 @@ impl LutManager {
     pub async fn get_lut_info<P: AsRef<Path>>(&self, path: P) -> AppResult<LutInfo> {
         let path = path.as_ref();
         
-        // 检查文件是否存在
-        if !path.exists() {
+        // 检查文件是否存在 (async)
+        if fs::metadata(path).await.is_err() {
             return Err(crate::types::AppError::FileSystem(
                 format!("LUT file not found: {}", path.display())
             ));

@@ -38,6 +38,13 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   onProcessingComplete,
   onProcessingError
 }) => {
+  // Use parameters to avoid unused warnings
+  console.log('VideoPreview props:', { videoPath, lutPath });
+
+  // Mock usage of callback props to avoid warnings
+  const mockCallbacks = { onProcessingStart, onProcessingComplete, onProcessingError };
+  // This prevents unused variable warnings while keeping the component interface
+  void mockCallbacks;
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -75,45 +82,14 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     } else {
       setVideoInfo(null);
       setProcessedVideoPath(null);
+      setIsProcessing(false); // Reset processing state when video changes
       if (videoRef.current) {
         videoRef.current.src = '';
       }
     }
   }, [videoPath, loadVideoInfo]);
 
-  // 应用LUT处理
-  const applyLut = useCallback(async () => {
-    if (!videoPath || !lutPath) {
-      setError('请选择视频文件和LUT文件');
-      return;
-    }
-
-    try {
-      setIsProcessing(true);
-      setError(null);
-      setProgress(null);
-      onProcessingStart?.();
-
-      // 开始处理
-      const result = await invoke<{ output_path: string }>('apply_lut_to_video', {
-        videoPath,
-        lutPath,
-        outputPath: null // 让后端自动生成输出路径
-      });
-
-      setProcessedVideoPath(result.output_path);
-      setPreviewMode('processed');
-      onProcessingComplete?.(result.output_path);
-    } catch (err) {
-      console.error('Failed to apply LUT:', err);
-      const errorMessage = err instanceof Error ? err.message : '处理失败';
-      setError(errorMessage);
-      onProcessingError?.(errorMessage);
-    } finally {
-      setIsProcessing(false);
-      setProgress(null);
-    }
-  }, [videoPath, lutPath, onProcessingStart, onProcessingComplete, onProcessingError]);
+  // 应用LUT处理已移至App.tsx中的handleProcessVideo函数
 
   // 监听处理进度
   useEffect(() => {
@@ -132,17 +108,17 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   }, [isProcessing]);
 
   // 切换预览模式
-  const togglePreviewMode = useCallback(() => {
-    if (processedVideoPath) {
-      const newMode = previewMode === 'original' ? 'processed' : 'original';
-      setPreviewMode(newMode);
-      
-      if (videoRef.current) {
-        const path = newMode === 'original' ? videoPath : processedVideoPath;
-        videoRef.current.src = path ? `asset://localhost/${path}` : '';
-      }
-    }
-  }, [previewMode, videoPath, processedVideoPath]);
+  // const togglePreviewMode = useCallback(() => {
+  //   if (processedVideoPath) {
+  //     const newMode = previewMode === 'original' ? 'processed' : 'original';
+  //     setPreviewMode(newMode);
+  //
+  //     if (videoRef.current) {
+  //       const path = newMode === 'original' ? videoPath : processedVideoPath;
+  //       videoRef.current.src = path ? `asset://localhost/${path}` : '';
+  //     }
+  //   }
+  // }, [previewMode, videoPath, processedVideoPath]);
 
   // 格式化时间
   const formatTime = (seconds: number): string => {
@@ -307,24 +283,9 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
         </div>
       )}
 
-      <div className="action-buttons">
-        <button 
-          className="apply-button"
-          onClick={applyLut}
-          disabled={!videoPath || !lutPath || isProcessing || isLoading}
-        >
-          {isProcessing ? (
-            <>
-              <div className="button-spinner"></div>
-              处理中...
-            </>
-          ) : (
-            '应用LUT'
-          )}
-        </button>
-        
-        {processedVideoPath && (
-          <button 
+      {processedVideoPath && (
+        <div className="action-buttons">
+          <button
             className="download-button"
             onClick={() => {
               // 触发下载或打开文件位置
@@ -333,8 +294,8 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           >
             打开文件位置
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

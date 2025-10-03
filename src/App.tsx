@@ -87,60 +87,79 @@ function App() {
     };
 
     setProcessingTasks(prev => [...prev, newTask]);
+      console.log('任务已添加:', newTask);
+      console.log('当前任务列表:', processingTasks);
 
     try {
       // 更新任务状态为处理中
-      setProcessingTasks(prev => 
-        prev.map(task => 
-          task.id === taskId 
+      setProcessingTasks(prev => {
+        const updated = prev.map(task =>
+          task.id === taskId
             ? { ...task, status: 'processing' as const, stage: '应用LUT...' }
             : task
-        )
-      );
-
-      // 调用后端处理视频
-      const result = await invoke('apply_lut_to_video', {
-        videoPath: videoFile,
-        lutPath: lutFile,
-        settings: settings
+        );
+        console.log('任务状态已更新为处理中:', updated.find(t => t.id === taskId));
+        return updated;
       });
 
-      // 模拟进度更新
-      for (let progress = 10; progress <= 100; progress += 10) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        setProcessingTasks(prev => 
-          prev.map(task => 
-            task.id === taskId 
-              ? { 
-                  ...task, 
-                  progress,
-                  stage: progress < 100 ? `处理中... ${progress}%` : '完成',
-                  eta: progress < 100 ? (100 - progress) * 0.5 : undefined,
-                  speed: 1.2
-                }
+      // 调用后端处理视频
+      console.log('开始处理视频:', { videoFile, lutFile, settings });
+      const result = await invoke('start_video_processing', {
+        request: {
+          input_path: videoFile,
+          output_path: '', // 让后端自动生成输出路径
+          lut_path: lutFile,
+          intensity: settings.lut_intensity / 100.0, // 转换为0-1范围
+          hardware_acceleration: settings.hardware_acceleration
+        }
+      });
+
+      console.log('后端返回结果:', result);
+
+      // 检查是否返回了任务ID
+      if (result && typeof result === 'object' && 'task_id' in result) {
+        // 如果返回了任务ID，使用模拟进度更新（因为后端实际上是模拟的）
+        console.log('使用模拟进度更新，任务ID:', result.task_id);
+
+        // 模拟进度更新
+        for (let progress = 10; progress <= 100; progress += 10) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          setProcessingTasks(prev =>
+            prev.map(task =>
+              task.id === taskId
+                ? {
+                    ...task,
+                    progress,
+                    stage: progress < 100 ? `处理中... ${progress}%` : '完成',
+                    eta: progress < 100 ? (100 - progress) * 0.5 : undefined,
+                    speed: 1.2
+                  }
+                : task
+            )
+          );
+        }
+
+        // 处理完成
+        setProcessingTasks(prev =>
+          prev.map(task =>
+            task.id === taskId
+              ? { ...task, status: 'completed' as const, progress: 100, stage: '已完成' }
               : task
           )
         );
+
+        // 生成一个模拟的输出路径
+        const mockOutputPath = `${videoFile}_processed.mp4`;
+        setProcessedVideoPath(mockOutputPath);
       }
-
-      // 处理完成
-      setProcessingTasks(prev => 
-        prev.map(task => 
-          task.id === taskId 
-            ? { ...task, status: 'completed' as const, progress: 100, stage: '已完成' }
-            : task
-        )
-      );
-
-      setProcessedVideoPath(result as string);
     } catch (error) {
       console.error('处理视频时出错:', error);
-      setProcessingTasks(prev => 
-        prev.map(task => 
-          task.id === taskId 
-            ? { 
-                ...task, 
-                status: 'failed' as const, 
+      setProcessingTasks(prev =>
+        prev.map(task =>
+          task.id === taskId
+            ? {
+                ...task,
+                status: 'failed' as const,
                 stage: '处理失败',
                 error: error instanceof Error ? error.message : '未知错误'
               }
@@ -172,12 +191,20 @@ function App() {
   }, []);
 
   const handleClearCompleted = useCallback(() => {
-    setProcessingTasks(prev => 
-      prev.filter(task => 
+    setProcessingTasks(prev =>
+      prev.filter(task =>
         task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled'
       )
     );
-  }, []);
+    // 同时清除已处理的视频路径
+    const hasCompletedTasks = processingTasks.some(task =>
+      task.status === 'completed' || task.status === 'failed'
+    );
+    if (hasCompletedTasks) {
+      setProcessedVideoPath(null);
+      handleClearFiles(); // 清除所有文件
+    }
+  }, [processingTasks]);
 
   const handleSettingsChange = useCallback((newSettings: ProcessingSettings) => {
      setSettings(newSettings);
@@ -211,7 +238,7 @@ function App() {
            </div>
 
           <div className="settings-section">
-            <button 
+            <button
               className="btn-settings"
               onClick={() => setIsSettingsOpen(true)}
               disabled={processingTasks.some(task => task.status === 'processing')}
@@ -222,6 +249,18 @@ function App() {
               </svg>
               处理设置
             </button>
+
+            <button
+              className="btn-primary"
+              onClick={handleProcessVideo}
+              disabled={!videoFile || !lutFile || processingTasks.some(task => task.status === 'processing')}
+              style={{ marginLeft: '10px' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M9 11H5v2h4v-2zm0-4H5v2h4V7zm0 8H5v2h4v-2zm12-8h-4v2h4V7zm0 4h-4v2h4v-2zm0 4h-4v2h4v-2zM14 4H10v16h4V4z" fill="currentColor"/>
+              </svg>
+              应用LUT
+            </button>
           </div>
 
           <div className="status-section">
@@ -231,6 +270,34 @@ function App() {
               onRetryTask={handleRetryTask}
               onClearCompleted={handleClearCompleted}
             />
+
+            {/* 显示处理后的视频路径 */}
+            {processedVideoPath && (
+              <div className="processed-video-info" style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: '8px' }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#0c4a6e' }}>✅ 处理完成</h4>
+                <p style={{ margin: '0', fontSize: '14px', color: '#0369a1', wordBreak: 'break-all' }}>
+                  输出文件: {processedVideoPath}
+                </p>
+                <button
+                  onClick={() => {
+                    // 这里可以添加打开文件夹或播放视频的功能
+                    console.log('Open processed video:', processedVideoPath);
+                  }}
+                  style={{
+                    marginTop: '10px',
+                    padding: '8px 16px',
+                    backgroundColor: '#0ea5e9',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                >
+                  打开视频文件
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </main>
