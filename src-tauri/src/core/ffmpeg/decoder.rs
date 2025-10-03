@@ -106,6 +106,7 @@ impl VideoDecoder {
                 codec_name: stream.codec_name.clone(),
                 width: stream.width,
                 height: stream.height,
+                fps: stream.r_frame_rate.as_ref().and_then(|s| self.parse_frame_rate(s).ok()),
                 duration: stream.duration.as_ref().and_then(|d| d.parse().ok()),
             });
         }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use sysinfo::System;
 use tauri::State;
+use std::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CodecInfo {
@@ -89,9 +90,10 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
 
 #[tauri::command]
 pub async fn get_app_settings(
-    config_manager: State<'_, ConfigManager>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<AppSettings, String> {
-    let config = config_manager.get_config();
+    let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let config = cfg.get_config();
     
     Ok(AppSettings {
         default_output_dir: config.default_output_dir.clone().unwrap_or_default(),
@@ -108,7 +110,7 @@ pub async fn get_app_settings(
 #[tauri::command]
 pub async fn update_app_settings(
     settings: AppSettings,
-    _config_manager: State<'_, ConfigManager>,
+    _config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<String, String> {
     // 简化实现，暂时只返回成功
     logger::log_info("App settings update requested");
@@ -261,4 +263,121 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
         video_codecs,
         audio_codecs,
     })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FfmpegInfo {
+    pub mode: String,                 // native | external
+    pub static_linked: bool,          // 是否为静态链接（编译期）
+    pub library_versions: Option<HashMap<String, String>>, // 本地链接库版本（native 时）
+    pub binary_version: Option<String>,                    // 外部可执行版本（external 时）
+}
+
+#[tauri::command]
+pub async fn get_ffmpeg_info(
+    config_manager: State<'_, Mutex<ConfigManager>>,
+) -> Result<FfmpegInfo, String> {
+    // 如果启用了 ffmpeg_native 特性，则读取已链接库的版本信息
+    #[cfg(feature = "ffmpeg_native")]
+    {
+        fn ver_to_str(v: u32) -> String {
+            let major = (v >> 16) & 0xFF;
+            let minor = (v >> 8) & 0xFF;
+            let micro = v & 0xFF;
+            format!("{}.{}.{}", major, minor, micro)
+        }
+
+        let mut libs = HashMap::new();
+        unsafe {
+            libs.insert(
+                "avutil".to_string(),
+                ver_to_str(ffmpeg_sys_next::avutil_version()),
+            );
+            libs.insert(
+                "avcodec".to_string(),
+                ver_to_str(ffmpeg_sys_next::avcodec_version()),
+            );
+            libs.insert(
+                "avformat".to_string(),
+                ver_to_str(ffmpeg_sys_next::avformat_version()),
+            );
+            libs.insert(
+                "avfilter".to_string(),
+                ver_to_str(ffmpeg_sys_next::avfilter_version()),
+            );
+            libs.insert(
+                "avdevice".to_string(),
+                ver_to_str(ffmpeg_sys_next::avdevice_version()),
+            );
+            libs.insert(
+                "swresample".to_string(),
+                ver_to_str(ffmpeg_sys_next::swresample_version()),
+            );
+            libs.insert(
+                "swscale".to_string(),
+                ver_to_str(ffmpeg_sys_next::swscale_version()),
+            );
+        }
+
+        return Ok(FfmpegInfo {
+            mode: "native".to_string(),
+            static_linked: true,
+            library_versions: Some(libs),
+            binary_version: None,
+        });
+    }
+
+    // 未启用 ffmpeg_native 特性时，回退到外部可执行文件版本信息
+    #[cfg(not(feature = "ffmpeg_native"))]
+    {
+        let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+        let ffmpeg_bin = cfg
+            .get_config()
+            .ffmpeg_path
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "ffmpeg".to_string());
+
+        let output = std::process::Command::new(&ffmpeg_bin)
+            .arg("-version")
+            .output()
+            .map_err(|e| format!("无法执行 '{}' 获取版本信息: {}", ffmpeg_bin, e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "执行 '{}' -version 失败，退出码: {:?}",
+                ffmpeg_bin,
+                output.status.code()
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let first_line = stdout.lines().next().unwrap_or("").to_string();
+
+        Ok(FfmpegInfo {
+            mode: "external".to_string(),
+            static_linked: false,
+            library_versions: None,
+            binary_version: Some(first_line),
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FfmpegPathConfig {
+    pub ffmpeg_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_ffmpeg_path_config(config_manager: State<'_, Mutex<ConfigManager>>) -> Result<FfmpegPathConfig, String> {
+    let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+    Ok(FfmpegPathConfig {
+        ffmpeg_path: cfg.get_config().ffmpeg_path.clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn set_ffmpeg_path_config(path: Option<String>, config_manager: State<'_, Mutex<ConfigManager>>) -> Result<(), String> {
+    let mut cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+    cfg.set_ffmpeg_path(path).map_err(|e| e.to_string())
 }

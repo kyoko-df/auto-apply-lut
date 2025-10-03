@@ -2,10 +2,11 @@
 //! 提供视频文件的分析、处理和转换功能
 
 use crate::types::{AppResult, VideoInfo, VideoFormat};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use serde_json::Value;
 use chrono::{DateTime, Utc};
+use crate::utils::config::ConfigManager;
 
 pub mod metadata;
 
@@ -23,13 +24,43 @@ pub struct VideoManager {
 impl VideoManager {
     /// 创建新的视频管理器
     pub fn new() -> AppResult<Self> {
+        // 0) 优先读取配置中的 ffmpeg 路径
+        if let Ok(cfg) = ConfigManager::new() {
+            if let Some(cfg_ffmpeg) = cfg
+                .get_config()
+                .ffmpeg_path
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                // 推断 ffprobe 路径：同目录下可执行名替换
+                let probe_name = if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" };
+                let mut ffprobe_path = PathBuf::from(cfg_ffmpeg);
+                if ffprobe_path.is_file() {
+                    ffprobe_path.pop();
+                    ffprobe_path.push(probe_name);
+                } else if ffprobe_path.ends_with("ffmpeg") || cfg_ffmpeg.ends_with("ffmpeg.exe") {
+                    ffprobe_path.pop();
+                    ffprobe_path.push(probe_name);
+                } else {
+                    ffprobe_path = PathBuf::from(probe_name);
+                }
+
+                let ffmpeg_path = cfg_ffmpeg.clone();
+                let ffprobe_path = ffprobe_path.to_string_lossy().to_string();
+
+                // 如果可执行不可用则回退到自动发现
+                if Self::is_executable_available(&ffmpeg_path)
+                    && Self::is_executable_available(&ffprobe_path)
+                {
+                    return Ok(Self { ffmpeg_path, ffprobe_path });
+                }
+            }
+        }
+
+        // 1) 自动发现
         let ffmpeg_path = Self::find_ffmpeg_path()?;
         let ffprobe_path = Self::find_ffprobe_path()?;
-        
-        Ok(Self {
-            ffmpeg_path,
-            ffprobe_path,
-        })
+        Ok(Self { ffmpeg_path, ffprobe_path })
     }
 
     /// 使用自定义路径创建视频管理器
@@ -129,19 +160,24 @@ impl VideoManager {
 
     /// 查找FFmpeg可执行文件路径
     fn find_ffmpeg_path() -> AppResult<String> {
-        // 首先尝试从环境变量获取
+        // 1) 环境变量
         if let Ok(path) = std::env::var("FFMPEG_PATH") {
-            return Ok(path);
+            if Self::is_executable_available(&path) {
+                return Ok(path);
+            }
         }
 
-        // 尝试常见的安装路径
+        // 2) 打包的二进制（随应用一起分发）
+        if let Some(p) = Self::find_packaged_tool("ffmpeg") { return Ok(p); }
+
+        // 3) 常见路径 + PATH
         let common_paths = [
             "ffmpeg",
             "/usr/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
             "/opt/homebrew/bin/ffmpeg",
-            "C:\\ffmpeg\\bin\\ffmpeg.exe",
-            "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+            "C\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
+            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
         ];
 
         for path in &common_paths {
@@ -157,19 +193,24 @@ impl VideoManager {
 
     /// 查找FFprobe可执行文件路径
     fn find_ffprobe_path() -> AppResult<String> {
-        // 首先尝试从环境变量获取
+        // 1) 环境变量
         if let Ok(path) = std::env::var("FFPROBE_PATH") {
-            return Ok(path);
+            if Self::is_executable_available(&path) {
+                return Ok(path);
+            }
         }
 
-        // 尝试常见的安装路径
+        // 2) 打包的二进制（随应用一起分发）
+        if let Some(p) = Self::find_packaged_tool("ffprobe") { return Ok(p); }
+
+        // 3) 常见路径 + PATH
         let common_paths = [
             "ffprobe",
             "/usr/bin/ffprobe",
             "/usr/local/bin/ffprobe",
             "/opt/homebrew/bin/ffprobe",
-            "C:\\ffmpeg\\bin\\ffprobe.exe",
-            "C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe",
+            "C\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
+            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
         ];
 
         for path in &common_paths {
@@ -187,8 +228,50 @@ impl VideoManager {
     fn is_executable_available(path: &str) -> bool {
         std::process::Command::new(path)
             .arg("-version")
-            .output()
-            .is_ok()
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// 尝试在打包的资源目录查找二进制
+    fn find_packaged_tool(tool: &str) -> Option<String> {
+        // 当前可执行文件所在目录
+        let exe_dir: PathBuf = std::env::current_exe().ok()?.parent()?.to_path_buf();
+
+        #[cfg(target_os = "windows")]
+        let candidates = vec![
+            exe_dir.join("resources").join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir.join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir.join(format!("{}.exe", tool)),
+        ];
+
+        #[cfg(target_os = "macos")]
+        let candidates = {
+            let resources = exe_dir.join("../../Resources");
+            let resources = resources.canonicalize().unwrap_or(resources);
+            vec![
+                resources.join("bin").join("macos").join(tool),
+                resources.join(tool),
+                exe_dir.join(tool),
+            ]
+        };
+
+        #[cfg(target_os = "linux")]
+        let candidates = vec![
+            exe_dir.join("resources").join("bin").join("linux").join(tool),
+            exe_dir.join("bin").join("linux").join(tool),
+            exe_dir.join(tool),
+        ];
+
+        for c in candidates {
+            if c.exists() {
+                let p = c.to_string_lossy().to_string();
+                if Self::is_executable_available(&p) { return Some(p); }
+            }
+        }
+        None
     }
 
     /// 使用FFprobe获取视频元数据

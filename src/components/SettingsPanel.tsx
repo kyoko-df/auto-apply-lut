@@ -53,6 +53,14 @@ async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
   }
 }
 
+// FFmpeg 信息接口（与后端结构对应）
+interface FfmpegInfo {
+  mode: 'native' | 'external';
+  static_linked: boolean;
+  library_versions?: Record<string, string> | null;
+  binary_version?: string | null;
+}
+
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onSettingsChange,
   disabled = false
@@ -80,6 +88,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // FFmpeg 路径与状态
+  const [ffmpegPath, setFfmpegPath] = useState<string>('');
+  const [ffmpegStatus, setFfmpegStatus] = useState<
+    { state: 'unknown' | 'ok' | 'missing' | 'error'; message?: string; info?: FfmpegInfo }
+  >({ state: 'unknown' });
+  const [savingFfmpeg, setSavingFfmpeg] = useState(false);
 
   // 质量预设选项
   const qualityPresets: QualityPreset[] = [
@@ -162,9 +177,28 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   }, []);
 
-  // 组件挂载时加载编解码器
+  // 初始化：加载编解码器、FFmpeg 路径与状态
   useEffect(() => {
     loadAvailableCodecs();
+
+    (async () => {
+      // 读取已保存的路径
+      try {
+        const cfg = await safeInvoke<{ ffmpeg_path: string | null }>('get_ffmpeg_path_config');
+        setFfmpegPath(cfg?.ffmpeg_path ?? '');
+      } catch {
+        // ignore in web preview
+      }
+
+      // 检测 FFmpeg 可用性
+      try {
+        const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
+        setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+      } catch (e) {
+        setFfmpegStatus({ state: 'missing', message: '未检测到可用的 FFmpeg，可设置自定义路径' });
+        setIsExpanded(true); // 引导用户展开设置
+      }
+    })();
   }, [loadAvailableCodecs]);
 
   // 设置变化时通知父组件
@@ -180,11 +214,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     setSettings(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  // 选择输出目录
+  // 选择输出目录（使用 tauri dialog 插件）
   const selectOutputDirectory = useCallback(async () => {
     try {
-      const directory = await safeInvoke<string>('select_output_directory');
-      if (directory) {
+      if (!isTauriEnv()) throw new Error('tauri_unavailable');
+      const dlg = await import('@tauri-apps/plugin-dialog');
+      const directory = await (dlg as any).open({ directory: true, multiple: false });
+      if (typeof directory === 'string' && directory) {
         updateSetting('output_directory', directory);
       }
     } catch (error) {
@@ -192,6 +228,56 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       // console.debug('Directory selection not available in web preview');
     }
   }, [updateSetting]);
+
+  // 浏览选择 FFmpeg 可执行文件
+  const browseFfmpegPath = useCallback(async () => {
+    try {
+      if (!isTauriEnv()) throw new Error('tauri_unavailable');
+      const dlg = await import('@tauri-apps/plugin-dialog');
+      const selected = await (dlg as any).open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: 'FFmpeg Executable', extensions: ['exe', ''] }
+        ]
+      });
+      if (typeof selected === 'string' && selected) {
+        setFfmpegPath(selected);
+      }
+    } catch (e) {
+      // ignore in web preview
+    }
+  }, []);
+
+  // 保存 FFmpeg 路径到后端配置
+  const saveFfmpegPath = useCallback(async () => {
+    try {
+      setSavingFfmpeg(true);
+      await safeInvoke<void>('set_ffmpeg_path_config', { path: ffmpegPath.trim() ? ffmpegPath.trim() : null });
+      // 保存后立即重新检测
+      try {
+        const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
+        setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+      } catch (e) {
+        setFfmpegStatus({ state: 'error', message: '保存成功，但仍无法检测到 FFmpeg，请确认路径是否正确' });
+      }
+    } catch (e) {
+      setFfmpegStatus({ state: 'error', message: '保存失败，请重试或检查权限' });
+    } finally {
+      setSavingFfmpeg(false);
+    }
+  }, [ffmpegPath]);
+
+  // 手动检测
+  const testDetectFfmpeg = useCallback(async () => {
+    try {
+      const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
+      setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+    } catch (e) {
+      setFfmpegStatus({ state: 'missing', message: '未检测到可用的 FFmpeg，请设置自定义路径' });
+    }
+  }, []);
+
   const resetToDefaults = useCallback(() => {
     setSettings({ ...DEFAULT_SETTINGS });
   }, []);
@@ -213,6 +299,56 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <span>正在加载设置...</span>
             </div>
           )}
+
+          {/* FFmpeg 设置区 */}
+          <div className="ffmpeg-section">
+            <div className="ffmpeg-header">
+              <h4>FFmpeg 设置</h4>
+              {ffmpegStatus.state === 'ok' && (
+                <span className="status-pill ok">已检测到</span>
+              )}
+              {ffmpegStatus.state === 'missing' && (
+                <span className="status-pill warn">未检测到</span>
+              )}
+              {ffmpegStatus.state === 'error' && (
+                <span className="status-pill error">异常</span>
+              )}
+            </div>
+            {ffmpegStatus.message && (
+              <div className="ffmpeg-message">{ffmpegStatus.message}</div>
+            )}
+
+            <div className="directory-input" style={{ marginTop: 8 }}>
+              <input
+                type="text"
+                className="setting-input"
+                placeholder="例如 C:\\ffmpeg\\bin\\ffmpeg.exe，留空则使用系统 PATH 查找"
+                value={ffmpegPath}
+                onChange={(e) => setFfmpegPath(e.target.value)}
+                disabled={disabled}
+              />
+              <button
+                className="browse-button"
+                onClick={browseFfmpegPath}
+                disabled={disabled || !isTauriEnv()}
+                title={isTauriEnv() ? '选择 ffmpeg 可执行文件' : '浏览器预览中不可用'}
+              >
+                浏览
+              </button>
+              <button
+                className="btn-primary"
+                onClick={saveFfmpegPath}
+                disabled={disabled || savingFfmpeg}
+                title="保存路径并重新检测"
+              >
+                {savingFfmpeg ? '保存中...' : '保存'}
+              </button>
+            </div>
+            <div className="settings-actions" style={{ justifyContent: 'flex-start' }}>
+              <button className="ghost" onClick={testDetectFfmpeg} disabled={disabled}>重新检测</button>
+              <button className="ghost" onClick={() => setFfmpegPath('')} disabled={disabled}>清除路径</button>
+            </div>
+          </div>
 
           <div className="settings-grid">
             {/* 输出格式 */}
