@@ -118,39 +118,66 @@ function App() {
 
       // 检查是否返回了任务ID
       if (result && typeof result === 'object' && 'task_id' in result) {
-        // 如果返回了任务ID，使用模拟进度更新（因为后端实际上是模拟的）
-        console.log('使用模拟进度更新，任务ID:', result.task_id);
+        const resultWithOutputPath = result as { task_id: string; output_path?: string };
+        console.log('开始真实FFmpeg处理，任务ID:', resultWithOutputPath.task_id);
+        console.log('预期输出路径:', resultWithOutputPath.output_path);
 
-        // 模拟进度更新
-        for (let progress = 10; progress <= 100; progress += 10) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          setProcessingTasks(prev =>
-            prev.map(task =>
-              task.id === taskId
-                ? {
-                    ...task,
-                    progress,
-                    stage: progress < 100 ? `处理中... ${progress}%` : '完成',
-                    eta: progress < 100 ? (100 - progress) * 0.5 : undefined,
-                    speed: 1.2
-                  }
-                : task
-            )
-          );
+        let finalOutputPath = resultWithOutputPath.output_path || `${videoFile}_processed.mp4`;
+        let completed = false;
+
+        // 轮询后端真实任务进度
+        for (;;) {
+          try {
+            const progressInfo = await invoke('get_task_progress', { taskId: resultWithOutputPath.task_id });
+            const pi = progressInfo as { progress: number; status_message?: string };
+
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? {
+                      ...task,
+                      progress: Math.round(pi.progress || 0),
+                      stage: pi.status_message || '处理中...',
+                    }
+                  : task
+              )
+            );
+
+            if ((pi.progress || 0) >= 100) {
+              completed = true;
+              break;
+            }
+          } catch (e) {
+            console.warn('获取任务进度失败:', e);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        // 处理完成
-        setProcessingTasks(prev =>
-          prev.map(task =>
-            task.id === taskId
-              ? { ...task, status: 'completed' as const, progress: 100, stage: '已完成' }
-              : task
-          )
-        );
-
-        // 生成一个模拟的输出路径
-        const mockOutputPath = `${videoFile}_processed.mp4`;
-        setProcessedVideoPath(mockOutputPath);
+        // 完成后确认输出文件是否存在
+        if (completed && finalOutputPath) {
+          try {
+            await invoke('get_file_info', { path: finalOutputPath });
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? { ...task, status: 'completed' as const, progress: 100, stage: '已完成' }
+                  : task
+              )
+            );
+            setProcessedVideoPath(finalOutputPath);
+            console.log('视频处理完成，输出文件:', finalOutputPath);
+          } catch {
+            console.error('处理完成但未找到输出文件:', finalOutputPath);
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? { ...task, status: 'failed' as const, stage: '处理失败：未找到输出文件' }
+                  : task
+              )
+            );
+          }
+        }
       }
     } catch (error) {
       console.error('处理视频时出错:', error);

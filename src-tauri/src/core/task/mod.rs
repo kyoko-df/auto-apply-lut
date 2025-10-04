@@ -236,6 +236,19 @@ impl TaskManager {
         
         Ok(())
     }
+
+    /// 更新任务描述（用于实时状态消息）
+    pub fn update_description(&self, task_id: &str, description: String) -> AppResult<()> {
+        let mut tasks = self.tasks.lock().map_err(|e| {
+            AppError::Internal(format!("Failed to lock tasks: {}", e))
+        })?;
+
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.description = Some(description);
+        }
+
+        Ok(())
+    }
     
     /// 完成任务
     pub fn complete_task(&self, task_id: &str) -> AppResult<()> {
@@ -248,6 +261,19 @@ impl TaskManager {
             let _ = self.tx.send(TaskEvent::Completed(task_id.to_string()));
         }
         
+        Ok(())
+    }
+
+    /// 设置任务输出路径
+    pub fn set_output_path(&self, task_id: &str, output_path: String) -> AppResult<()> {
+        let mut tasks = self.tasks.lock().map_err(|e| {
+            AppError::Internal(format!("Failed to lock tasks: {}", e))
+        })?;
+
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.output_path = Some(output_path);
+        }
+
         Ok(())
     }
     

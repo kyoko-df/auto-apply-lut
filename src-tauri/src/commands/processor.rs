@@ -1,5 +1,6 @@
 use crate::core::lut::{LutManager, LutData};
 use crate::core::ffmpeg::processor::VideoProcessor;
+use crate::core::ffmpeg::processor::ProcessingProgress;
 use crate::core::ffmpeg::EncodingSettings;
 use crate::core::task::{TaskManager, TaskStatus, TaskType};
 use crate::types::{TaskProgress, VideoInfo};
@@ -27,6 +28,7 @@ pub struct ProcessResponse {
     pub task_id: String,
     pub status: String,
     pub message: String,
+    pub output_path: String,
 }
 
 #[tauri::command]
@@ -68,10 +70,7 @@ pub async fn start_video_processing(
         logger::log_error(&format!("Failed to start task {}: {}", task_id, e));
     }
 
-    // For now, create a simple synchronous processing that returns immediately
-    // In a real implementation, this would spawn a background task
-
-    // Generate output path if empty
+    // 生成最终输出路径（如未提供）
     let final_output_path = if request.output_path.is_empty() {
         let input_path = Path::new(&request.input_path);
         let parent = input_path.parent().unwrap_or_else(|| Path::new("."));
@@ -81,31 +80,101 @@ pub async fn start_video_processing(
         let extension = input_path.extension()
             .and_then(|s| s.to_str())
             .unwrap_or("mp4");
-        parent.join(format!("{}_processed.{}", file_stem, extension)).to_string_lossy().to_string()
+        parent.join(format!("{}_lut_applied.{}", file_stem, extension)).to_string_lossy().to_string()
     } else {
         request.output_path.clone()
     };
 
-    // Start processing in background (simplified for now)
+    // 确保最终输出路径的父目录存在且可写
+    let out_parent = Path::new(&final_output_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    if let Err(e) = fs::create_dir_all(&out_parent).await {
+        return Err(format!("Failed to create output directory: {}", e));
+    }
+    // 写权限快速检测
+    let test_file = out_parent.join(".write_test.tmp");
+    match fs::File::create(&test_file).await {
+        Ok(_) => {
+            let _ = fs::remove_file(&test_file).await;
+        }
+        Err(e) => {
+            return Err(format!("Output directory not writable: {}", e));
+        }
+    }
+
+    // 后台启动真实 FFmpeg 处理
     let task_id_clone = task_id.clone();
     let final_output_clone = final_output_path.clone();
     let input_clone = request.input_path.clone();
     let lut_clone = request.lut_path.clone();
+    let tm = task_manager.inner().clone();
+
+    // Extract FFmpeg path from VideoProcessor
+    let ffmpeg_path = video_processor.ffmpeg_path().to_path_buf();
+    let settings = EncodingSettings::default();
 
     tokio::spawn(async move {
-        logger::log_info(&format!("Starting background processing for task: {}", task_id_clone));
+        logger::log_info(&format!("Starting real FFmpeg processing for task: {}", task_id_clone));
+        // 为后台任务创建独立的处理器实例，并接入进度事件
+        let mut vp = crate::core::ffmpeg::processor::VideoProcessor::new(ffmpeg_path);
+        let (tx, mut rx) = mpsc::unbounded_channel::<ProcessingProgress>();
+        vp.set_progress_sender(tx);
 
-        // Simulate processing for now
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        // 转发进度到TaskManager（实时更新进度与状态消息）
+        let tm_progress = tm.clone();
+        tokio::spawn(async move {
+            while let Some(p) = rx.recv().await {
+                let _ = tm_progress.update_progress(&p.task_id, (p.progress * 100.0) as f64);
+                let _ = tm_progress.update_description(&p.task_id, p.message.clone());
+            }
+        });
 
-        // TODO: Implement actual FFmpeg processing here
-        logger::log_info(&format!("Background processing completed for task: {}", task_id_clone));
+        match vp
+            .apply_lut_with_task_id(
+                Path::new(&input_clone),
+                Path::new(&final_output_clone),
+                Path::new(&lut_clone),
+                &settings,
+                task_id_clone.clone(),
+            )
+            .await
+        {
+            Ok(res) => {
+                if res.success {
+                    logger::log_info(&format!(
+                        "FFmpeg processing completed successfully for task: {} -> {:?}",
+                        task_id_clone, res.output_path
+                    ));
+                    let _ = tm.set_output_path(&task_id_clone, final_output_clone.clone());
+                    let _ = tm.update_progress(&task_id_clone, 100.0);
+                    let _ = tm.complete_task(&task_id_clone);
+                } else {
+                    let err_msg = res.error.unwrap_or_else(|| "Unknown error".to_string());
+                    logger::log_error(&format!(
+                        "FFmpeg processing failed for task {}: {}",
+                        task_id_clone,
+                        err_msg
+                    ));
+                    // 将失败摘要同步到任务描述，便于前端显示详细原因
+                    let first_line = err_msg.lines().next().unwrap_or("Unknown error").to_string();
+                    let _ = tm.update_description(&task_id_clone, first_line);
+                    let _ = tm.fail_task(&task_id_clone, err_msg);
+                }
+            }
+            Err(e) => {
+                logger::log_error(&format!("Failed to execute FFmpeg for task {}: {}", task_id_clone, e));
+                let _ = tm.fail_task(&task_id_clone, e.to_string());
+            }
+        }
     });
     
     Ok(ProcessResponse {
         task_id,
         status: "started".to_string(),
         message: "Video processing started".to_string(),
+        output_path: final_output_path,
     })
 }
 

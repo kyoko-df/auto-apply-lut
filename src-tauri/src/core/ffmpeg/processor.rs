@@ -12,6 +12,8 @@ use tokio::sync::{Mutex, mpsc};
 use serde::{Serialize, Deserialize};
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use crate::utils::path_utils::get_app_data_dir;
 
 /// 视频处理器
 pub struct VideoProcessor {
@@ -34,6 +36,11 @@ impl VideoProcessor {
             progress_sender: None,
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// 获取FFmpeg路径
+    pub fn ffmpeg_path(&self) -> &Path {
+        &self.ffmpeg_path
     }
 
     /// 设置进度发送器
@@ -81,14 +88,17 @@ impl VideoProcessor {
         
         // 构建FFmpeg命令
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
+        // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
+        let lut_filter = format!("lut3d=file='{}'", lut_path.to_string_lossy());
         cmd.args([
             "-i", input_path.to_str().unwrap(),
-            "-vf", &format!("lut3d={}", lut_path.to_str().unwrap()),
+            "-vf", &lut_filter,
             "-c:v", &settings.video_codec,
             "-preset", &settings.preset,
             "-crf", &settings.crf.to_string(),
             "-c:a", &settings.audio_codec,
-            "-progress", "pipe:2", // 输出进度到stderr
+            "-loglevel", "debug", // 增强日志输出
+            "-progress", "pipe:1", // 将进度输出到stdout
             "-y", // 覆盖输出文件
             output_path.to_str().unwrap(),
         ]);
@@ -98,10 +108,22 @@ impl VideoProcessor {
             cmd.args([key, value]);
         }
         
-        // 启动进程
+        // 创建日志文件，将stderr重定向到文件
+        let mut log_dir = get_app_data_dir()?;
+        log_dir.push("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file_path = log_dir.join(format!("ffmpeg_{}.log", task_id));
+        let log_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_file_path)
+            .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))?;
+
+        // 启动进程：stdout用于进度解析，stderr写入日志文件
         let mut child = cmd
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::from(log_file))
             .spawn()
             .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
 
@@ -110,8 +132,8 @@ impl VideoProcessor {
         let progress_sender = self.progress_sender.clone();
         let start_time_clone = start_time;
         
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             
             tokio::spawn(async move {
@@ -227,14 +249,17 @@ impl VideoProcessor {
 
         // 构建FFmpeg命令
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
+        // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
+        let lut_filter = format!("lut3d=file='{}'", lut_path.to_string_lossy());
         cmd.args([
             "-i", input_path.to_str().unwrap(),
-            "-vf", &format!("lut3d={}", lut_path.to_str().unwrap()),
+            "-vf", &lut_filter,
             "-c:v", &settings.video_codec,
             "-preset", &settings.preset,
             "-crf", &settings.crf.to_string(),
             "-c:a", &settings.audio_codec,
-            "-progress", "pipe:2",
+            "-loglevel", "debug",
+            "-progress", "pipe:1",
             "-y",
             output_path.to_str().unwrap(),
         ]);
@@ -242,10 +267,22 @@ impl VideoProcessor {
             cmd.args([key, value]);
         }
 
-        // 启动进程
+        // 创建日志文件，将stderr重定向到文件
+        let mut log_dir = get_app_data_dir()?;
+        log_dir.push("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file_path = log_dir.join(format!("ffmpeg_{}.log", task_id));
+        let log_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_file_path)
+            .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))?;
+
+        // 启动进程：stdout用于进度解析，stderr写入日志文件
         let mut child = cmd
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::from(log_file))
             .spawn()
             .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
 
@@ -260,10 +297,12 @@ impl VideoProcessor {
         let task_id_clone = task_id.clone();
         let progress_sender = self.progress_sender.clone();
         let start_time_clone = start_time;
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
+        // 进度读取任务句柄（用于在结束/取消时中止）
+        let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(progress) = Self::parse_ffmpeg_progress(&line) {
                         if let Some(sender) = &progress_sender {
@@ -278,6 +317,7 @@ impl VideoProcessor {
                     }
                 }
             });
+            progress_handle = Some(handle);
         }
 
         // 等待进程完成或接收取消
@@ -292,6 +332,11 @@ impl VideoProcessor {
                 child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
             }
         };
+
+        // 子进程结束后，确保终止进度读取任务以避免持续轮询
+        if let Some(handle) = progress_handle.take() {
+            handle.abort();
+        }
 
         // 完成后清理取消映射
         {
@@ -350,20 +395,38 @@ impl VideoProcessor {
                 file_size: 0,
             })
         } else {
-            // 发送失败进度
+            // 失败：读取部分 FFmpeg 日志片段，帮助定位错误
+            let mut err_summary = String::new();
+            let exit_code = status.code().unwrap_or(-1);
+            err_summary.push_str(&format!("FFmpeg 失败，退出码: {}", exit_code));
+            // 尝试读取日志文件末尾片段
+            let log_snippet = std::fs::read_to_string(&log_file_path)
+                .map(|content| {
+                    let max_chars = 2000usize;
+                    if content.len() > max_chars {
+                        content[content.len()-max_chars..].to_string()
+                    } else {
+                        content
+                    }
+                })
+                .unwrap_or_else(|_| "(无法读取FFmpeg日志)".to_string());
+            err_summary.push_str("\n日志片段：\n");
+            err_summary.push_str(&log_snippet);
+
+            // 发送失败进度（包含摘要）
             self.send_progress(ProcessingProgress {
                 task_id: task_id.clone(),
                 progress: 0.0,
                 stage: ProcessingStage::Failed,
-                message: "LUT应用失败".to_string(),
+                message: format!("LUT应用失败：{}", err_summary.lines().next().unwrap_or("未知错误")),
                 elapsed,
             }).await;
-            
+
             Ok(ProcessingResult {
                 task_id,
                 success: false,
                 output_path: None,
-                error: Some("FFmpeg encoding failed".to_string()),
+                error: Some(err_summary),
                 elapsed,
                 file_size: 0,
             })

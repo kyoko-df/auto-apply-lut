@@ -51,10 +51,26 @@ pub fn run() {
     // 初始化核心服务
     let lut_manager = core::lut::LutManager::new();
     let task_manager = core::task::TaskManager::default();
-    // VideoProcessor 需要 ffmpeg 路径，这里暂用 "ffmpeg" 让其走 PATH
-    let video_processor = core::ffmpeg::processor::VideoProcessor::new(std::path::PathBuf::from("ffmpeg"));
-    // 全局配置管理器
+    // 全局配置管理器需提前初始化，以便读取 ffmpeg 路径
     let config_manager = utils::config::ConfigManager::new().expect("初始化配置管理器失败");
+    // 初始化 VideoProcessor 使用配置或自动发现的 ffmpeg 路径
+    let ffmpeg_path = if let Some(p) = config_manager
+        .get_config()
+        .ffmpeg_path
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+    {
+        std::path::PathBuf::from(p)
+    } else {
+        match core::ffmpeg::discover_ffmpeg_path() {
+            Ok(pb) => pb,
+            Err(e) => {
+                tracing::warn!("自动发现 FFmpeg 失败: {}，退回使用 PATH", e);
+                std::path::PathBuf::from("ffmpeg")
+            }
+        }
+    };
+    let video_processor = core::ffmpeg::processor::VideoProcessor::new(ffmpeg_path);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
