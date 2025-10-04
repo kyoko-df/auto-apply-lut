@@ -88,6 +88,8 @@ pub fn run() {
             commands::system_manager::get_ffmpeg_path_config,
             commands::system_manager::set_ffmpeg_path_config,
             commands::file_manager::get_file_info,
+            commands::file_manager::open_file,
+            commands::file_manager::open_folder,
             commands::processor::get_video_info,
             // LUT
             commands::lut_manager::validate_lut_file,

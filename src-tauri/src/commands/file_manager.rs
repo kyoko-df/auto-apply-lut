@@ -4,6 +4,8 @@
 use crate::utils::logger;
 use serde::{Deserialize, Serialize};
 use crate::core::file::{FileManager as CoreFileManager, FileInfo as CoreFileInfo};
+use std::process::Command;
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
@@ -100,4 +102,76 @@ pub async fn get_file_info(path: String) -> Result<CoreFileInfo, String> {
 
     let info = fm.get_file_info(&path).map_err(|e| e.to_string())?;
     Ok(info)
+}
+
+/// 打开文件（使用系统默认程序）
+#[tauri::command]
+pub async fn open_file(path: String) -> Result<String, String> {
+    logger::log_info(&format!("Opening file: {}", path));
+
+    if !Path::new(&path).exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok("File opened successfully".to_string())
+}
+
+/// 打开文件夹（在文件管理器中显示）
+#[tauri::command]
+pub async fn open_folder(path: String) -> Result<String, String> {
+    logger::log_info(&format!("Opening folder: {}", path));
+
+    if !Path::new(&path).exists() {
+        return Err("Folder does not exist".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok("Folder opened successfully".to_string())
 }

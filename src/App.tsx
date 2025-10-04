@@ -302,27 +302,84 @@ function App() {
             {processedVideoPath && (
               <div className="processed-video-info" style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: '8px' }}>
                 <h4 style={{ margin: '0 0 10px 0', color: '#0c4a6e' }}>✅ 处理完成</h4>
-                <p style={{ margin: '0', fontSize: '14px', color: '#0369a1', wordBreak: 'break-all' }}>
+                <p style={{ margin: '0 0 15px 0', fontSize: '14px', color: '#0369a1', wordBreak: 'break-all' }}>
                   输出文件: {processedVideoPath}
                 </p>
-                <button
-                  onClick={() => {
-                    // 这里可以添加打开文件夹或播放视频的功能
-                    console.log('Open processed video:', processedVideoPath);
-                  }}
-                  style={{
-                    marginTop: '10px',
-                    padding: '8px 16px',
-                    backgroundColor: '#0ea5e9',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px'
-                  }}
-                >
-                  打开视频文件
-                </button>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await invoke('open_file', { path: processedVideoPath });
+                      } catch (error) {
+                        console.error('打开视频文件失败:', error);
+                        alert('打开视频文件失败: ' + (error instanceof Error ? error.message : '未知错误'));
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#0ea5e9',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M8 3v3a2 2 0 002 2h6a2 2 0 002-2V3m-1 8a3 3 0 100 6 3 3 0 000-6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <rect x="3" y="6" width="18" height="15" rx="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    打开视频文件
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        // 获取文件所在的目录 - 使用更可靠的方法
+                        let folderPath = '';
+                        if (processedVideoPath.includes('/')) {
+                          // Unix/Linux/macOS 路径
+                          folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('/'));
+                        } else if (processedVideoPath.includes('\\')) {
+                          // Windows 路径
+                          folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('\\'));
+                        }
+
+                        console.log('原始文件路径:', processedVideoPath);
+                        console.log('提取的文件夹路径:', folderPath);
+
+                        if (!folderPath) {
+                          throw new Error('无法提取文件夹路径');
+                        }
+
+                        await invoke('open_folder', { path: folderPath });
+                      } catch (error) {
+                        console.error('打开文件夹失败:', error);
+                        alert('打开文件夹失败: ' + (error instanceof Error ? error.message : '未知错误'));
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <polyline points="9,22 9,12 15,12 15,22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    打开文件夹
+                  </button>
+                </div>
               </div>
             )}
           </div>
