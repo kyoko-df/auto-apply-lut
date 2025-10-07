@@ -89,7 +89,8 @@ impl VideoProcessor {
         // 构建FFmpeg命令
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
-        let lut_filter = format!("lut3d=file='{}'", lut_path.to_string_lossy());
+        // 添加format=yuv420p滤镜以确保输出兼容性，防止lut3d滤镜自动升级到444
+        let lut_filter = format!("lut3d=file='{}',format=yuv422p", lut_path.to_string_lossy());
         cmd.args([
             "-i", input_path.to_str().unwrap(),
             "-vf", &lut_filter,
@@ -250,7 +251,8 @@ impl VideoProcessor {
         // 构建FFmpeg命令
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
-        let lut_filter = format!("lut3d=file='{}'", lut_path.to_string_lossy());
+        // 添加format=yuv420p滤镜以确保输出兼容性，防止lut3d滤镜自动升级到444
+        let lut_filter = format!("lut3d=file='{}',format=yuv422p", lut_path.to_string_lossy());
         cmd.args([
             "-i", input_path.to_str().unwrap(),
             "-vf", &lut_filter,
