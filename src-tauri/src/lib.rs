@@ -100,6 +100,12 @@ pub fn run() {
             commands::processor::get_task_progress,
             commands::processor::cancel_task,
             commands::processor::get_all_tasks,
+            // Batch
+            commands::batch_manager::scan_directory_for_videos,
+            commands::batch_manager::generate_batch_from_directory,
+            commands::batch_manager::start_batch_processing,
+            commands::batch_manager::get_batch_progress,
+            commands::batch_manager::cancel_batch,
         ])
         .setup(|app| {
             info!("应用初始化完成");
