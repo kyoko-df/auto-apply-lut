@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import MultiFileSelector from './components/MultiFileSelector';
 import LutSelector from './components/LutSelector';
 import VideoPreview from './components/VideoPreview';
@@ -16,6 +17,8 @@ interface ProcessingTask {
   eta?: number;
   speed?: number;
   error?: string;
+  inputPath?: string;
+  outputPath?: string;
 }
 
 interface ProcessingSettings {
@@ -57,9 +60,7 @@ function App() {
     output_directory: ''
   });
 
-  const handleLutSelect = useCallback((filePath: string) => {
-    setLutFile(filePath);
-  }, []);
+  // 直接通过 LutSelector 的 onSelect 设置 LUT 文件
 
   const handleClearFiles = useCallback(() => {
     setVideoFile(null);
@@ -68,70 +69,141 @@ function App() {
     setProcessedVideoPath(null);
   }, []);
 
-  // 批量处理入口：以批量为中心，不再需要单文件入口
+  // 订阅后端批处理事件，实时更新任务列表（每文件与总体）
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        const off = await listen('batch', (event: any) => {
+          const payload = event?.payload || {};
+          const batchId: string = payload.batch_id || 'unknown';
+          const overallProgress: number = payload.overall_progress ?? 0;
+          const message: string = payload.message ?? '';
+          const eventType: string = payload.event_type ?? '';
+          const currentItem = payload.current_item as { id: string; input_path?: string; output_path?: string; progress?: number; status?: string; error?: string } | null;
+
+          // 更新总体任务（以 batchId 作为标识）
+          setProcessingTasks(prev => {
+            const overallId = `batch_${batchId}`;
+            const exists = prev.some(t => t.id === overallId);
+            const updatedOverall: ProcessingTask = {
+              id: overallId,
+              name: `批处理（${batchId}）总体进度`,
+              progress: Math.max(0, Math.min(100, Math.round(overallProgress))),
+              status: eventType === 'Completed' ? 'completed' : eventType === 'Failed' ? 'failed' : 'processing',
+              stage: message || (eventType === 'Completed' ? '批处理完成' : eventType === 'Failed' ? '批处理失败' : '进行中...')
+            };
+            const next = exists
+              ? prev.map(t => t.id === overallId ? updatedOverall : t)
+              : [...prev, updatedOverall];
+
+            // 更新当前文件任务
+            if (currentItem && currentItem.id) {
+              const fileId = currentItem.id;
+              const fileExists = next.some(t => t.id === fileId);
+              const statusMap: Record<string, ProcessingTask['status']> = {
+                Running: 'processing',
+                Completed: 'completed',
+                Failed: 'failed',
+                Pending: 'pending',
+                Cancelled: 'cancelled',
+                Paused: 'pending',
+                Resumed: 'processing',
+              };
+              const fileStatus: ProcessingTask['status'] = statusMap[currentItem.status || 'Running'] || 'processing';
+              const updatedFile: ProcessingTask = {
+                id: fileId,
+                name: currentItem.input_path ? currentItem.input_path.split(/[/\\]/).pop() || fileId : fileId,
+                progress: Math.max(0, Math.min(100, Math.round((currentItem.progress ?? 0)) ?? 0)),
+                status: fileStatus,
+                stage: message || (fileStatus === 'completed' ? '已完成' : fileStatus === 'failed' ? '失败' : '处理中'),
+                error: currentItem.error || undefined,
+                inputPath: currentItem.input_path,
+                outputPath: currentItem.output_path,
+              };
+              return fileExists
+                ? next.map(t => t.id === fileId ? updatedFile : t)
+                : [...next, updatedFile];
+            }
+
+            return next;
+          });
+        });
+        unlisten = off;
+      } catch (e) {
+        console.warn('订阅批处理事件失败:', e);
+      }
+    })();
+    return () => {
+      if (unlisten) {
+        try { unlisten(); } catch {}
+      }
+    };
+  }, []);
+
+  // 批量处理入口：全面改用批处理命令（事件驱动，移除轮询）
   const handleStartBatch = useCallback(async () => {
     if (batchFiles.length === 0 || !lutFile) {
       console.error('需要选择待处理文件（一个或多个）以及 LUT 文件');
       return;
     }
 
-    for (const inputPath of batchFiles) {
-      const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const fileName = inputPath.split('/').pop() || inputPath.split('\\').pop() || 'unknown';
-      const newTask: ProcessingTask = {
-        id: taskId,
-        name: `处理 ${fileName}`,
-        progress: 0,
-        status: 'pending',
-        stage: '准备中...'
-      };
-      setProcessingTasks(prev => [...prev, newTask]);
+    try {
+      // 输出目录：优先使用设置中的目录，否则默认使用首个文件所在目录
+      const first = batchFiles[0];
+      const outputDirectory = (settings.output_directory && settings.output_directory.trim().length > 0)
+        ? settings.output_directory
+        : (first.includes('/')
+            ? first.substring(0, first.lastIndexOf('/'))
+            : first.substring(0, first.lastIndexOf('\\')));
 
-      try {
-        setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'processing', stage: '应用LUT...' } : t));
+      // 组装批量请求条目
+      const items = batchFiles.map((inputPath) => {
+        const p = inputPath.split(/[/\\]/);
+        const fileName = p[p.length - 1] || 'unknown';
+        const stem = fileName.replace(/\.[^/.]+$/, '');
+        const outputPath = `${outputDirectory}/${stem}_processed.mp4`;
+        return {
+          input_path: inputPath,
+          output_path: outputPath,
+          lut_path: lutFile!,
+          intensity: settings.lut_intensity / 100.0,
+        };
+      });
 
-        const result = await invoke('start_video_processing', {
-          request: {
-            input_path: inputPath,
-            output_path: '',
-            lut_path: lutFile,
-            intensity: settings.lut_intensity / 100.0,
-            hardware_acceleration: settings.hardware_acceleration
-          }
-        });
-
-        if (result && typeof result === 'object' && 'task_id' in result) {
-          const { task_id, output_path } = result as { task_id: string; output_path?: string };
-          const expectedOutput = output_path || `${inputPath}_processed.mp4`;
-
-          let done = false;
-          while (!done) {
-            try {
-              const progressInfo = await invoke('get_task_progress', { taskId: task_id });
-              const p = progressInfo as { progress: number; stage?: string; eta?: number; speed?: number };
-              setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, progress: Math.max(0, Math.min(100, Math.round((p.progress || 0)))), stage: p.stage || t.stage, eta: p.eta, speed: p.speed } : t));
-
-              const status = await invoke('get_task_status', { taskId: task_id });
-              if (status === 'completed') {
-                done = true;
-                setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'completed', stage: '处理完成', progress: 100 } : t));
-                setProcessedVideoPath(expectedOutput);
-              } else if (status === 'failed') {
-                done = true;
-                setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'failed', stage: '处理失败' } : t));
-              } else {
-                await new Promise(r => setTimeout(r, 1000));
-              }
-            } catch (pollErr) {
-              console.warn('轮询失败，继续尝试:', pollErr);
-              await new Promise(r => setTimeout(r, 1500));
-            }
-          }
+      const resp = await invoke('start_batch_processing', {
+        request: {
+          items,
+          hardware_acceleration: settings.hardware_acceleration,
+          output_directory: outputDirectory,
+          preserve_structure: true,
         }
-      } catch (error) {
-        console.error('处理任务失败:', error);
-        setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'failed', stage: '处理失败', error: error instanceof Error ? error.message : '未知错误' } : t));
-      }
+      });
+
+      const { batch_id } = resp as { batch_id: string };
+      // 添加总体任务条目，等待事件驱动更新
+      setProcessingTasks(prev => {
+        const overallId = `batch_${batch_id}`;
+        if (prev.some(t => t.id === overallId)) return prev;
+        const newOverall: ProcessingTask = {
+          id: overallId,
+          name: `批处理（${batch_id}）总体进度`,
+          progress: 0,
+          status: 'processing',
+          stage: '已启动，等待事件...'
+        };
+        return [...prev, newOverall];
+      });
+    } catch (error) {
+      console.error('启动批处理失败:', error);
+      setProcessingTasks(prev => [...prev, {
+        id: `batch_error_${Date.now()}`,
+        name: '批处理启动失败',
+        progress: 0,
+        status: 'failed',
+        stage: '批处理失败',
+        error: error instanceof Error ? error.message : '未知错误'
+      }]);
     }
   }, [batchFiles, lutFile, settings]);
 
@@ -241,6 +313,15 @@ function App() {
               </svg>
               开始批量处理
             </button>
+            {(batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')) && (
+              <div style={{ marginTop: 8, fontSize: '0.85rem', color: 'var(--color-fg-subtle)' }}>
+                ⚠️ {batchFiles.length === 0
+                  ? '请先选择至少一个视频文件'
+                  : !lutFile
+                  ? '请先选择一个 LUT 文件'
+                  : '当前有任务进行中，请稍候或清除已完成'}
+              </div>
+            )}
           </div>
 
           <div className="status-section">

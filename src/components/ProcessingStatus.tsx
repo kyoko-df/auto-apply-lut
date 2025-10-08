@@ -1,4 +1,5 @@
 import React from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import './ProcessingStatus.css';
 
 interface ProcessingTask {
@@ -10,6 +11,8 @@ interface ProcessingTask {
   eta?: number;
   speed?: number;
   error?: string;
+  inputPath?: string;
+  outputPath?: string;
 }
 
 interface ProcessingStatusProps {
@@ -150,6 +153,47 @@ const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
                     <span className="task-status">{getStatusText(task.status)}</span>
                   </div>
                   <div className="task-actions">
+                    {(task.inputPath || task.outputPath) && (
+                      <>
+                        <button
+                          className="action-button"
+                          title="打开文件"
+                          onClick={async () => {
+                            try {
+                              const path = task.outputPath || task.inputPath;
+                              if (path) {
+                                await invoke('open_file', { path });
+                              }
+                            } catch (e) {
+                              console.error('打开文件失败:', e);
+                              alert('打开文件失败');
+                            }
+                          }}
+                        >
+                          打开文件
+                        </button>
+                        <button
+                          className="action-button"
+                          title="打开所在文件夹"
+                          onClick={async () => {
+                            try {
+                              const path = task.outputPath || task.inputPath;
+                              if (path) {
+                                const folder = path.includes('/')
+                                  ? path.substring(0, path.lastIndexOf('/'))
+                                  : path.substring(0, path.lastIndexOf('\\'));
+                                await invoke('open_folder', { path: folder });
+                              }
+                            } catch (e) {
+                              console.error('打开文件夹失败:', e);
+                              alert('打开文件夹失败');
+                            }
+                          }}
+                        >
+                          打开文件夹
+                        </button>
+                      </>
+                    )}
                     {task.status === 'processing' && onCancelTask && (
                       <button 
                         className="action-button cancel"
@@ -198,6 +242,47 @@ const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
                     <span className="task-status">{getStatusText(task.status)}</span>
                   </div>
                   <div className="task-actions">
+                    {(task.outputPath || task.inputPath) && (
+                      <>
+                        <button
+                          className="action-button"
+                          title="打开文件"
+                          onClick={async () => {
+                            try {
+                              const path = task.outputPath || task.inputPath;
+                              if (path) {
+                                await invoke('open_file', { path });
+                              }
+                            } catch (e) {
+                              console.error('打开文件失败:', e);
+                              alert('打开文件失败');
+                            }
+                          }}
+                        >
+                          打开文件
+                        </button>
+                        <button
+                          className="action-button"
+                          title="打开所在文件夹"
+                          onClick={async () => {
+                            try {
+                              const path = task.outputPath || task.inputPath;
+                              if (path) {
+                                const folder = path.includes('/')
+                                  ? path.substring(0, path.lastIndexOf('/'))
+                                  : path.substring(0, path.lastIndexOf('\\'));
+                                await invoke('open_folder', { path: folder });
+                              }
+                            } catch (e) {
+                              console.error('打开文件夹失败:', e);
+                              alert('打开文件夹失败');
+                            }
+                          }}
+                        >
+                          打开文件夹
+                        </button>
+                      </>
+                    )}
                     {task.status === 'failed' && onRetryTask && (
                       <button 
                         className="action-button retry"
