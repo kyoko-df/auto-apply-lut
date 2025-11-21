@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import './FileUpload.css';
+import { Palette, X } from 'lucide-react';
 
 interface LutSelectorProps {
   title?: string;
@@ -11,7 +11,6 @@ interface LutSelectorProps {
 const LUT_EXTENSIONS = ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look'];
 
 const LutSelector: React.FC<LutSelectorProps> = ({
-  title = '选择 LUT 文件',
   disabled = false,
   onSelect,
 }) => {
@@ -84,54 +83,58 @@ const LutSelector: React.FC<LutSelectorProps> = ({
   const clear = useCallback(() => notify(null), [notify]);
 
   return (
-    <div className="file-upload" style={{ marginTop: 16 }}>
+    <div className="w-full">
       <input
         ref={inputRef}
         type="file"
         accept={acceptAttr}
-        style={{ display: 'none' }}
+        className="hidden"
         onChange={handleInput}
       />
 
-      <div className="upload-section">
-        <h3>{title}</h3>
-        <div
-          className={`upload-area ${dragOver ? 'drag-over' : ''} ${disabled ? 'disabled' : ''}`}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          onClick={pickLut}
-        >
-          <div className="upload-content">
-            {lutPath ? (
-              <div className="file-info">
-                <div className="file-icon lut-icon">🎨</div>
-                <div className="file-details">
-                  <div className="file-name">{lutPath.split('/').pop() || lutPath.split('\\').pop() || lutPath}</div>
-                  <div className="file-meta">
-                    <span className="file-size" style={{ fontSize: '0.8rem' }}>{lutPath}</span>
-                  </div>
-                </div>
-                <button
-                  className="clear-button"
-                  onClick={(e) => { e.stopPropagation(); clear(); }}
-                  disabled={disabled}
-                  aria-label="清除LUT"
-                >
-                  ✕
-                </button>
+      <div
+        className={`
+          relative border border-dashed rounded-lg p-3 transition-all duration-200 ease-apple cursor-pointer
+          ${dragOver
+            ? 'border-[var(--color-accent)] bg-[var(--color-accent-subtle)]'
+            : 'border-[var(--color-border)] hover:border-[var(--color-text-secondary)] bg-[var(--color-surface)]'
+          }
+          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+        `}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onClick={pickLut}
+      >
+        {lutPath ? (
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-md bg-[var(--color-accent)] text-white">
+              <Palette size={14} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-[var(--color-text-primary)] truncate">
+                {lutPath.split(/[/\\]/).pop() || lutPath}
               </div>
-            ) : (
-              <div className="upload-placeholder">
-                <div className="upload-icon">🎨</div>
-                <div className="upload-text">
-                  <div className="primary-text">点击或拖拽选择 LUT 文件</div>
-                  <div className="secondary-text">支持 {LUT_EXTENSIONS.join(', ').toUpperCase()}</div>
-                </div>
+              <div className="text-[10px] text-[var(--color-text-tertiary)] truncate">
+                {lutPath}
               </div>
-            )}
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); clear(); }}
+              className="p-1 rounded-full hover:bg-[var(--color-background)] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] transition-colors"
+              disabled={disabled}
+            >
+              <X size={12} />
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-center py-1">
+            <div className="flex items-center gap-2 text-[var(--color-text-secondary)]">
+              <Palette size={14} />
+              <span className="text-xs font-medium">选择 LUT 文件</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

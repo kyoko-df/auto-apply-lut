@@ -1,6 +1,6 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import './ProcessingStatus.css';
+import { Clock, Activity, CheckCircle, XCircle, AlertCircle, FolderOpen, FileVideo, X, RotateCcw } from 'lucide-react';
 
 interface ProcessingTask {
   id: string;
@@ -54,266 +54,160 @@ const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
 
   const getStatusIcon = (status: ProcessingTask['status']) => {
     switch (status) {
-      case 'pending':
-        return '⏳';
-      case 'processing':
-        return '⚡';
-      case 'completed':
-        return '✅';
-      case 'failed':
-        return '❌';
-      case 'cancelled':
-        return '⏹️';
-      default:
-        return '❓';
+      case 'pending': return <Clock size={16} className="text-[var(--color-text-tertiary)]" />;
+      case 'processing': return <Activity size={16} className="text-[var(--color-accent)] animate-pulse" />;
+      case 'completed': return <CheckCircle size={16} className="text-[var(--color-success)]" />;
+      case 'failed': return <AlertCircle size={16} className="text-[var(--color-danger)]" />;
+      case 'cancelled': return <XCircle size={16} className="text-[var(--color-text-tertiary)]" />;
+      default: return <AlertCircle size={16} className="text-[var(--color-text-tertiary)]" />;
     }
   };
 
-  const getStatusText = (status: ProcessingTask['status']) => {
-    switch (status) {
-      case 'pending':
-        return '等待中';
-      case 'processing':
-        return '处理中';
-      case 'completed':
-        return '已完成';
-      case 'failed':
-        return '失败';
-      case 'cancelled':
-        return '已取消';
-      default:
-        return '未知';
-    }
-  };
-
-  const activeTasks = tasks.filter(task => 
+  const activeTasks = tasks.filter(task =>
     task.status === 'pending' || task.status === 'processing'
   );
-  const completedTasks = tasks.filter(task => 
+  const completedTasks = tasks.filter(task =>
     task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
   );
 
-  const overallProgress = tasks.length > 0 
-    ? tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length 
+  const overallProgress = tasks.length > 0
+    ? tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length
     : 0;
 
   if (tasks.length === 0) {
     return (
-      <div className={`processing-status empty ${className}`}>
-        <div className="empty-state">
-          <div className="empty-icon">📋</div>
-          <p>暂无处理任务</p>
+      <div className={`flex flex-col items-center justify-center p-8 text-[var(--color-text-tertiary)] ${className}`}>
+        <div className="p-4 rounded-full bg-[var(--color-surface)] mb-3">
+          <Activity size={24} />
         </div>
+        <p className="text-sm">暂无处理任务</p>
       </div>
     );
   }
 
   return (
-    <div className={`processing-status ${className}`}>
-      <div className="status-header">
-        <h3>处理状态</h3>
-        <div className="header-actions">
-          {completedTasks.length > 0 && (
-            <button 
-              className="clear-button"
-              onClick={onClearCompleted}
-              title="清除已完成任务"
-            >
-              清除已完成
-            </button>
-          )}
-        </div>
+    <div className={`space-y-6 ${className}`}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">处理状态</h3>
+        {completedTasks.length > 0 && onClearCompleted && (
+          <button
+            onClick={onClearCompleted}
+            className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+          >
+            清除已完成
+          </button>
+        )}
       </div>
 
       {activeTasks.length > 0 && (
-        <div className="overall-progress">
-          <div className="progress-info">
-            <span>总体进度</span>
-            <span>{Math.round(overallProgress)}%</span>
+        <div className="apple-card bg-[var(--color-surface)]">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-medium text-[var(--color-text-secondary)]">总体进度</h4>
+            <span className="text-sm font-semibold text-[var(--color-text-primary)]">{Math.round(overallProgress)}%</span>
           </div>
-          <div className="progress-bar">
-            <div 
-              className="progress-fill"
+          <div className="h-2 bg-[var(--color-background)] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-[var(--color-accent)] transition-all duration-300 ease-apple"
               style={{ width: `${overallProgress}%` }}
             />
           </div>
         </div>
       )}
 
-      <div className="tasks-container">
-        {activeTasks.length > 0 && (
-          <div className="active-tasks">
-            <h4>进行中的任务</h4>
-            {activeTasks.map(task => (
-              <div key={task.id} className="task-item active">
-                <div className="task-header">
-                  <div className="task-info">
-                    <span className="task-icon">{getStatusIcon(task.status)}</span>
-                    <span className="task-name">{task.name}</span>
-                    <span className="task-status">{getStatusText(task.status)}</span>
+      <div className="space-y-3">
+        {activeTasks.map(task => (
+          <div key={task.id} className="apple-card bg-[var(--color-surface)]">
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-3">
+                {getStatusIcon(task.status)}
+                <div>
+                  <div className="text-sm font-medium text-[var(--color-text-primary)]">{task.name}</div>
+                  <div className="text-xs text-[var(--color-text-secondary)] mt-0.5 flex items-center gap-2">
+                    <span>{task.stage}</span>
+                    {task.eta && <span>• 剩余 {formatTime(task.eta)}</span>}
+                    {task.speed && <span>• {formatSpeed(task.speed)}</span>}
                   </div>
-                  <div className="task-actions">
-                    {(task.inputPath || task.outputPath) && (
-                      <>
-                        <button
-                          className="action-button"
-                          title="打开文件"
-                          onClick={async () => {
-                            try {
-                              const path = task.outputPath || task.inputPath;
-                              if (path) {
-                                await invoke('open_file', { path });
-                              }
-                            } catch (e) {
-                              console.error('打开文件失败:', e);
-                              alert('打开文件失败');
-                            }
-                          }}
-                        >
-                          打开文件
-                        </button>
-                        <button
-                          className="action-button"
-                          title="打开所在文件夹"
-                          onClick={async () => {
-                            try {
-                              const path = task.outputPath || task.inputPath;
-                              if (path) {
-                                const folder = path.includes('/')
-                                  ? path.substring(0, path.lastIndexOf('/'))
-                                  : path.substring(0, path.lastIndexOf('\\'));
-                                await invoke('open_folder', { path: folder });
-                              }
-                            } catch (e) {
-                              console.error('打开文件夹失败:', e);
-                              alert('打开文件夹失败');
-                            }
-                          }}
-                        >
-                          打开文件夹
-                        </button>
-                      </>
-                    )}
-                    {task.status === 'processing' && onCancelTask && (
-                      <button 
-                        className="action-button cancel"
-                        onClick={() => onCancelTask(task.id)}
-                        title="取消任务"
-                      >
-                        取消
-                      </button>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="task-progress">
-                  <div className="progress-bar">
-                    <div 
-                      className="progress-fill"
-                      style={{ width: `${task.progress}%` }}
-                    />
-                  </div>
-                  <span className="progress-text">{Math.round(task.progress)}%</span>
-                </div>
-                
-                <div className="task-details">
-                  <span className="task-stage">{task.stage}</span>
-                  {task.eta && (
-                    <span className="task-eta">剩余: {formatTime(task.eta)}</span>
-                  )}
-                  {task.speed && (
-                    <span className="task-speed">速度: {formatSpeed(task.speed)}</span>
-                  )}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+              {task.status === 'processing' && onCancelTask && (
+                <button
+                  onClick={() => onCancelTask(task.id)}
+                  className="p-1 hover:bg-[var(--color-background)] rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
 
-        {completedTasks.length > 0 && (
-          <div className="completed-tasks">
-            <h4>已完成的任务</h4>
-            {completedTasks.map(task => (
-              <div key={task.id} className={`task-item completed ${task.status}`}>
-                <div className="task-header">
-                  <div className="task-info">
-                    <span className="task-icon">{getStatusIcon(task.status)}</span>
-                    <span className="task-name">{task.name}</span>
-                    <span className="task-status">{getStatusText(task.status)}</span>
-                  </div>
-                  <div className="task-actions">
-                    {(task.outputPath || task.inputPath) && (
-                      <>
-                        <button
-                          className="action-button"
-                          title="打开文件"
-                          onClick={async () => {
-                            try {
-                              const path = task.outputPath || task.inputPath;
-                              if (path) {
-                                await invoke('open_file', { path });
-                              }
-                            } catch (e) {
-                              console.error('打开文件失败:', e);
-                              alert('打开文件失败');
-                            }
-                          }}
-                        >
-                          打开文件
-                        </button>
-                        <button
-                          className="action-button"
-                          title="打开所在文件夹"
-                          onClick={async () => {
-                            try {
-                              const path = task.outputPath || task.inputPath;
-                              if (path) {
-                                const folder = path.includes('/')
-                                  ? path.substring(0, path.lastIndexOf('/'))
-                                  : path.substring(0, path.lastIndexOf('\\'));
-                                await invoke('open_folder', { path: folder });
-                              }
-                            } catch (e) {
-                              console.error('打开文件夹失败:', e);
-                              alert('打开文件夹失败');
-                            }
-                          }}
-                        >
-                          打开文件夹
-                        </button>
-                      </>
-                    )}
-                    {task.status === 'failed' && onRetryTask && (
-                      <button 
-                        className="action-button retry"
-                        onClick={() => onRetryTask(task.id)}
-                        title="重试任务"
-                      >
-                        重试
-                      </button>
+            <div className="h-1.5 bg-[var(--color-background)] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-accent)] transition-all duration-300 ease-apple"
+                style={{ width: `${task.progress}%` }}
+              />
+            </div>
+          </div>
+        ))}
+
+        {completedTasks.map(task => (
+          <div key={task.id} className="apple-card bg-[var(--color-surface)] opacity-80 hover:opacity-100 transition-opacity">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                {getStatusIcon(task.status)}
+                <div>
+                  <div className="text-sm font-medium text-[var(--color-text-primary)]">{task.name}</div>
+                  <div className="text-xs text-[var(--color-text-secondary)] mt-0.5">
+                    {task.error ? (
+                      <span className="text-[var(--color-danger)]">{task.error}</span>
+                    ) : (
+                      '已完成'
                     )}
                   </div>
                 </div>
-                
-                {task.status === 'completed' && (
-                  <div className="task-progress">
-                    <div className="progress-bar">
-                      <div className="progress-fill completed" style={{ width: '100%' }} />
-                    </div>
-                    <span className="progress-text">100%</span>
-                  </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {(task.outputPath || task.inputPath) && (
+                  <>
+                    <button
+                      onClick={() => {
+                        const path = task.outputPath || task.inputPath;
+                        if (path) invoke('open_file', { path });
+                      }}
+                      className="p-1.5 hover:bg-[var(--color-background)] rounded text-[var(--color-text-secondary)] transition-colors"
+                      title="打开文件"
+                    >
+                      <FileVideo size={14} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const path = task.outputPath || task.inputPath;
+                        if (path) {
+                          const folder = path.includes('/')
+                            ? path.substring(0, path.lastIndexOf('/'))
+                            : path.substring(0, path.lastIndexOf('\\'));
+                          invoke('open_folder', { path: folder });
+                        }
+                      }}
+                      className="p-1.5 hover:bg-[var(--color-background)] rounded text-[var(--color-text-secondary)] transition-colors"
+                      title="所在文件夹"
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </>
                 )}
-                
-                {task.error && (
-                  <div className="task-error">
-                    <span className="error-label">错误:</span>
-                    <span className="error-message">{task.error}</span>
-                  </div>
+                {task.status === 'failed' && onRetryTask && (
+                  <button
+                    onClick={() => onRetryTask(task.id)}
+                    className="p-1.5 hover:bg-[var(--color-background)] rounded text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition-colors"
+                    title="重试"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
                 )}
               </div>
-            ))}
+            </div>
           </div>
-        )}
+        ))}
       </div>
     </div>
   );
