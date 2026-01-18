@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Settings, Film, Layers, Play, RefreshCw, FolderOpen, FileVideo } from 'lucide-react';
 import MultiFileSelector from './components/MultiFileSelector';
 import LutSelector from './components/LutSelector';
 import VideoPreview from './components/VideoPreview';
@@ -61,6 +60,8 @@ function App() {
     output_directory: ''
   });
 
+  // 直接通过 LutSelector 的 onSelect 设置 LUT 文件
+
   const handleClearFiles = useCallback(() => {
     setVideoFile(null);
     setBatchFiles([]);
@@ -68,6 +69,7 @@ function App() {
     setProcessedVideoPath(null);
   }, []);
 
+  // 订阅后端批处理事件，实时更新任务列表（每文件与总体）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     (async () => {
@@ -80,8 +82,9 @@ function App() {
           const eventType: string = payload.event_type ?? '';
           const currentItem = payload.current_item as { id: string; input_path?: string; output_path?: string; progress?: number; status?: string; error?: string } | null;
 
+          // 更新总体任务（以 batchId 作为标识）
           setProcessingTasks(prev => {
-            const overallId = `batch_${batchId} `;
+            const overallId = `batch_${batchId}`;
             const exists = prev.some(t => t.id === overallId);
             const updatedOverall: ProcessingTask = {
               id: overallId,
@@ -94,6 +97,7 @@ function App() {
               ? prev.map(t => t.id === overallId ? updatedOverall : t)
               : [...prev, updatedOverall];
 
+            // 更新当前文件任务
             if (currentItem && currentItem.id) {
               const fileId = currentItem.id;
               const fileExists = next.some(t => t.id === fileId);
@@ -132,11 +136,12 @@ function App() {
     })();
     return () => {
       if (unlisten) {
-        try { unlisten(); } catch { }
+        try { unlisten(); } catch {}
       }
     };
   }, []);
 
+  // 批量处理入口：全面改用批处理命令（事件驱动，移除轮询）
   const handleStartBatch = useCallback(async () => {
     if (batchFiles.length === 0 || !lutFile) {
       console.error('需要选择待处理文件（一个或多个）以及 LUT 文件');
@@ -144,13 +149,15 @@ function App() {
     }
 
     try {
+      // 输出目录：优先使用设置中的目录，否则默认使用首个文件所在目录
       const first = batchFiles[0];
       const outputDirectory = (settings.output_directory && settings.output_directory.trim().length > 0)
         ? settings.output_directory
         : (first.includes('/')
-          ? first.substring(0, first.lastIndexOf('/'))
-          : first.substring(0, first.lastIndexOf('\\')));
+            ? first.substring(0, first.lastIndexOf('/'))
+            : first.substring(0, first.lastIndexOf('\\')));
 
+      // 组装批量请求条目
       const items = batchFiles.map((inputPath) => {
         const p = inputPath.split(/[/\\]/);
         const fileName = p[p.length - 1] || 'unknown';
@@ -174,6 +181,7 @@ function App() {
       });
 
       const { batch_id } = resp as { batch_id: string };
+      // 添加总体任务条目，等待事件驱动更新
       setProcessingTasks(prev => {
         const overallId = `batch_${batch_id}`;
         if (prev.some(t => t.id === overallId)) return prev;
@@ -200,9 +208,9 @@ function App() {
   }, [batchFiles, lutFile, settings]);
 
   const handleCancelTask = useCallback((taskId: string) => {
-    setProcessingTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
+    setProcessingTasks(prev => 
+      prev.map(task => 
+        task.id === taskId 
           ? { ...task, status: 'cancelled' as const, stage: '已取消' }
           : task
       )
@@ -210,13 +218,14 @@ function App() {
   }, []);
 
   const handleRetryTask = useCallback((taskId: string) => {
-    setProcessingTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
+    setProcessingTasks(prev => 
+      prev.map(task => 
+        task.id === taskId 
           ? { ...task, status: 'pending' as const, progress: 0, stage: '准备重试...', error: undefined }
           : task
       )
     );
+    // 这里可以重新触发处理逻辑
   }, []);
 
   const handleClearCompleted = useCallback(() => {
@@ -225,191 +234,192 @@ function App() {
         task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled'
       )
     );
+    // 同时清除已处理的视频路径
     const hasCompletedTasks = processingTasks.some(task =>
       task.status === 'completed' || task.status === 'failed'
     );
     if (hasCompletedTasks) {
       setProcessedVideoPath(null);
-      handleClearFiles();
+      handleClearFiles(); // 清除所有文件
     }
   }, [processingTasks]);
 
   const handleSettingsChange = useCallback((newSettings: ProcessingSettings) => {
-    setSettings(newSettings);
-  }, []);
+     setSettings(newSettings);
+   }, []);
 
   return (
-    <div className="flex h-screen w-full bg-[var(--color-background)] text-[var(--color-text-primary)] font-sans overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-80 flex-shrink-0 bg-[var(--color-surface-translucent)] backdrop-blur-xl border-r border-[var(--color-border)] flex flex-col">
-        <div className="h-12 flex items-center px-4 border-b border-[var(--color-border)] drag-region">
-          <div className="flex items-center gap-2 text-[var(--color-text-primary)] font-semibold">
-            <Film size={18} className="text-[var(--color-accent)]" />
-            <span>Auto Apply LUT</span>
-          </div>
-        </div>
+    <div className="app">
+      <header className="app-header">
+        <h1>Auto Apply LUT</h1>
+        <p>自动化视频LUT应用工具</p>
+      </header>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* File Selection Section */}
-          <section>
-            <h3 className="section-title flex items-center gap-2">
-              <FileVideo size={14} />
-              视频文件
-            </h3>
-            <MultiFileSelector
-              title="选择视频"
-              acceptExtensions={["mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v"]}
-              disabled={processingTasks.some(task => task.status === 'processing')}
-              onChange={setBatchFiles}
-            />
-            {batchFiles.length > 0 && (
-              <div className="mt-2 px-2 py-1 bg-[var(--color-surface)] rounded text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-                已选择 {batchFiles.length} 个文件
-              </div>
-            )}
-          </section>
-
-          {/* LUT Selection Section */}
-          <section>
-            <h3 className="section-title flex items-center gap-2">
-              <Layers size={14} />
-              LUT 预设
-            </h3>
-            <LutSelector
-              disabled={processingTasks.some(task => task.status === 'processing')}
-              onSelect={setLutFile}
-            />
-          </section>
-
-          {/* Actions Section */}
-          <section className="pt-4 border-t border-[var(--color-border)]">
-            <button
-              className="apple-button w-full justify-center mb-3"
-              onClick={handleStartBatch}
-              disabled={batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')}
-            >
-              <Play size={16} fill="currentColor" />
-              开始处理
-            </button>
-
-            <button
-              className="apple-button secondary w-full justify-center"
-              onClick={() => setIsSettingsOpen(true)}
-              disabled={processingTasks.some(task => task.status === 'processing')}
-            >
-              <Settings size={16} />
-              处理设置
-            </button>
-          </section>
-        </div>
-
-        {/* Status Footer in Sidebar */}
-        <div className="p-3 border-t border-[var(--color-border)] bg-[var(--color-surface)] text-xs text-[var(--color-text-secondary)]">
-          {processingTasks.some(task => task.status === 'processing') ? (
-            <div className="flex items-center gap-2 text-[var(--color-accent)]">
-              <RefreshCw size={12} className="animate-spin" />
-              正在处理任务...
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[var(--color-success)]"></div>
-              就绪
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 bg-[var(--color-background)]">
-        <div className="flex-1 p-6 overflow-y-auto">
-          <div className="max-w-4xl mx-auto space-y-6">
-            {/* Preview Area */}
-            <div className="apple-card p-0 overflow-hidden bg-black aspect-video flex items-center justify-center relative group">
-              <VideoPreview
-                videoPath={videoFile || undefined}
-                lutPath={lutFile || undefined}
-                onProcessingStart={() => console.log('Processing started')}
-                onProcessingComplete={(outputPath) => setProcessedVideoPath(outputPath)}
-                onProcessingError={(error) => console.error('Processing error:', error)}
+      <main className="app-main">
+        <div className="app-grid">
+          <div className="upload-section">
+            <div style={{ marginTop: 16 }}>
+              <MultiFileSelector
+                title="批量选择待处理视频"
+                acceptExtensions={["mp4","mov","avi","mkv","wmv","flv","webm","m4v"]}
+                disabled={processingTasks.some(task => task.status === 'processing')}
+                onChange={setBatchFiles}
               />
-              {!videoFile && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-tertiary)] pointer-events-none">
-                  <Film size={48} strokeWidth={1} />
-                  <p className="mt-4 text-sm font-medium">选择视频以预览</p>
+              {batchFiles.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: '0.9rem', color: 'var(--color-fg-subtle)' }}>
+                  已选择 {batchFiles.length} 个文件
                 </div>
               )}
             </div>
-
-            {/* Task List / Status */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">处理队列</h2>
-                {processingTasks.length > 0 && (
-                  <button
-                    onClick={handleClearCompleted}
-                    className="text-xs text-[var(--color-accent)] hover:underline"
-                  >
-                    清除已完成
-                  </button>
-                )}
-              </div>
-
-              <ProcessingStatus
-                tasks={processingTasks}
-                onCancelTask={handleCancelTask}
-                onRetryTask={handleRetryTask}
-                onClearCompleted={handleClearCompleted}
+            <div style={{ marginTop: 16 }}>
+              <LutSelector
+                disabled={processingTasks.some(task => task.status === 'processing')}
+                onSelect={setLutFile}
               />
             </div>
+          </div>
 
-            {/* Completed File Actions */}
+          <div className="preview-section">
+             <VideoPreview
+               videoPath={videoFile || undefined}
+               lutPath={lutFile || undefined}
+               onProcessingStart={() => console.log('Processing started')}
+               onProcessingComplete={(outputPath) => setProcessedVideoPath(outputPath)}
+               onProcessingError={(error) => console.error('Processing error:', error)}
+             />
+           </div>
+
+          <div className="settings-section">
+            <button
+              className="btn-settings"
+              onClick={() => setIsSettingsOpen(true)}
+              disabled={processingTasks.some(task => task.status === 'processing')}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              处理设置
+            </button>
+
+            <button
+              className="btn-primary"
+              onClick={handleStartBatch}
+              disabled={batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')}
+              style={{ marginLeft: '10px' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M9 11H5v2h4v-2zm0-4H5v2h4V7zm0 8H5v2h4v-2zm12-8h-4v2h4V7zm0 4h-4v2h4v-2zm0 4h-4v2h4v-2zM14 4H10v16h4V4z" fill="currentColor"/>
+              </svg>
+              开始批量处理
+            </button>
+            {(batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')) && (
+              <div style={{ marginTop: 8, fontSize: '0.85rem', color: 'var(--color-fg-subtle)' }}>
+                ⚠️ {batchFiles.length === 0
+                  ? '请先选择至少一个视频文件'
+                  : !lutFile
+                  ? '请先选择一个 LUT 文件'
+                  : '当前有任务进行中，请稍候或清除已完成'}
+              </div>
+            )}
+          </div>
+
+          <div className="status-section">
+            <ProcessingStatus
+              tasks={processingTasks}
+              onCancelTask={handleCancelTask}
+              onRetryTask={handleRetryTask}
+              onClearCompleted={handleClearCompleted}
+            />
+
+            {/* 显示处理后的视频路径 */}
             {processedVideoPath && (
-              <div className="apple-card bg-[var(--color-surface)] border-l-4 border-l-[var(--color-success)]">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="font-medium text-[var(--color-text-primary)] flex items-center gap-2">
-                      <div className="w-5 h-5 rounded-full bg-[var(--color-success)] flex items-center justify-center text-white">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                      </div>
-                      处理完成
-                    </h4>
-                    <p className="mt-1 text-sm text-[var(--color-text-secondary)] break-all">
-                      {processedVideoPath}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      className="apple-button secondary text-xs"
-                      onClick={() => invoke('open_file', { path: processedVideoPath })}
-                    >
-                      <FileVideo size={14} />
-                      打开
-                    </button>
-                    <button
-                      className="apple-button secondary text-xs"
-                      onClick={() => {
-                        let folderPath = processedVideoPath;
+              <div className="processed-video-info" style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: '8px' }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#0c4a6e' }}>✅ 处理完成</h4>
+                <p style={{ margin: '0 0 15px 0', fontSize: '14px', color: '#0369a1', wordBreak: 'break-all' }}>
+                  输出文件: {processedVideoPath}
+                </p>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await invoke('open_file', { path: processedVideoPath });
+                      } catch (error) {
+                        console.error('打开视频文件失败:', error);
+                        alert('打开视频文件失败: ' + (error instanceof Error ? error.message : '未知错误'));
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#0ea5e9',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M8 3v3a2 2 0 002 2h6a2 2 0 002-2V3m-1 8a3 3 0 100 6 3 3 0 000-6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <rect x="3" y="6" width="18" height="15" rx="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    打开视频文件
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        // 获取文件所在的目录 - 使用更可靠的方法
+                        let folderPath = '';
                         if (processedVideoPath.includes('/')) {
+                          // Unix/Linux/macOS 路径
                           folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('/'));
                         } else if (processedVideoPath.includes('\\')) {
+                          // Windows 路径
                           folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('\\'));
                         }
-                        invoke('open_folder', { path: folderPath });
-                      }}
-                    >
-                      <FolderOpen size={14} />
-                      所在文件夹
-                    </button>
-                  </div>
+
+                        console.log('原始文件路径:', processedVideoPath);
+                        console.log('提取的文件夹路径:', folderPath);
+
+                        if (!folderPath) {
+                          throw new Error('无法提取文件夹路径');
+                        }
+
+                        await invoke('open_folder', { path: folderPath });
+                      } catch (error) {
+                        console.error('打开文件夹失败:', error);
+                        alert('打开文件夹失败: ' + (error instanceof Error ? error.message : '未知错误'));
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#10b981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <polyline points="9,22 9,12 15,12 15,22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    打开文件夹
+                  </button>
                 </div>
               </div>
             )}
           </div>
         </div>
       </main>
-
+      
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

@@ -1,10 +1,10 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Upload, FileVideo, X } from 'lucide-react';
+import './FileUpload.css';
 
 interface MultiFileSelectorProps {
   title?: string;
-  acceptExtensions?: string[];
+  acceptExtensions?: string[]; // e.g. ['mp4','mov']
   disabled?: boolean;
   onChange: (paths: string[]) => void;
 }
@@ -20,6 +20,8 @@ const MultiFileSelector: React.FC<MultiFileSelectorProps> = ({
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Browser fallback input
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const extensionsSet = useMemo(() => new Set(acceptExtensions.map(e => e.toLowerCase())), [acceptExtensions]);
@@ -31,7 +33,8 @@ const MultiFileSelector: React.FC<MultiFileSelectorProps> = ({
 
   const dedupeMerge = useCallback((prev: string[], next: string[]) => {
     const merged = [...prev, ...next];
-    return Array.from(new Set(merged.map(p => p.trim())));
+    const uniq = Array.from(new Set(merged.map(p => p.trim())));
+    return uniq;
   }, []);
 
   const pickFiles = useCallback(async () => {
@@ -44,14 +47,18 @@ const MultiFileSelector: React.FC<MultiFileSelectorProps> = ({
         filters: [{ name: 'Video Files', extensions: acceptExtensions }],
       });
 
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
-        const next = dedupeMerge(selectedPaths, paths);
+      if (selected && Array.isArray(selected)) {
+        const next = dedupeMerge(selectedPaths, selected);
+        notifyChange(next);
+      } else if (typeof selected === 'string') {
+        const next = dedupeMerge(selectedPaths, [selected]);
         notifyChange(next);
       } else {
+        // User cancelled or not in Tauri env: fallback to browser input
         fileInputRef.current?.click();
       }
     } catch (e) {
+      // Fallback in non-Tauri environments
       fileInputRef.current?.click();
     } finally {
       setLoading(false);
@@ -100,67 +107,101 @@ const MultiFileSelector: React.FC<MultiFileSelectorProps> = ({
     notifyChange(next);
   }, [notifyChange, selectedPaths]);
 
+  const clearAll = useCallback(() => {
+    notifyChange([]);
+  }, [notifyChange]);
+
+  // Compose accept string for input
   const acceptAttr = useMemo(() => '.' + Array.from(extensionsSet).join(',.'), [extensionsSet]);
 
+  useEffect(() => {
+    // Sync prop changes (acceptExtensions) won't reset existing selections
+  }, [acceptExtensions]);
+
   return (
-    <div className="w-full">
+    <div className="file-upload" style={{ marginTop: 16 }}>
+      {/* Hidden input as browser fallback */}
       <input
         ref={fileInputRef}
         type="file"
         multiple
         accept={acceptAttr}
-        className="hidden"
+        style={{ display: 'none' }}
         onChange={handleInputChange}
       />
 
-      {title && <div className="mb-2 text-sm font-medium text-[var(--color-text-secondary)]">{title}</div>}
+      <div className="upload-section">
+        <h3>{title}</h3>
 
-      <div
-        className={`
-          relative border border-dashed rounded-lg p-4 transition-all duration-200 ease-apple cursor-pointer
-          ${dragOver
-            ? 'border-[var(--color-accent)] bg-[var(--color-accent-subtle)]'
-            : 'border-[var(--color-border)] hover:border-[var(--color-text-secondary)] bg-[var(--color-surface)]'
-          }
-          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-        `}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={pickFiles}
-      >
-        <div className="flex flex-col items-center justify-center text-center py-2">
-          <div className={`p-2 rounded-full mb-2 ${dragOver ? 'bg-[var(--color-accent)] text-white' : 'bg-[var(--color-background)] text-[var(--color-text-secondary)]'}`}>
-            <Upload size={18} />
-          </div>
-          <p className="text-xs font-medium text-[var(--color-text-primary)]">点击或拖拽上传</p>
-          <p className="text-[10px] text-[var(--color-text-tertiary)] mt-1">支持 MP4, MOV 等格式</p>
-        </div>
-      </div>
-
-      {selectedPaths.length > 0 && (
-        <div className="mt-3 space-y-2 max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
-          {selectedPaths.map((p) => {
-            const name = p.split(/[/\\]/).pop() || p;
-            return (
-              <div key={p} className="group flex items-center gap-2 p-2 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent-subtle)] transition-colors">
-                <FileVideo size={14} className="text-[var(--color-accent)] flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-[var(--color-text-primary)] truncate" title={name}>{name}</div>
-                  <div className="text-[10px] text-[var(--color-text-tertiary)] truncate" title={p}>{p}</div>
-                </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); removeItem(p); }}
-                  className="p-1 rounded-full hover:bg-[var(--color-background)] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] transition-colors opacity-0 group-hover:opacity-100"
-                  disabled={disabled}
-                >
-                  <X size={12} />
-                </button>
+        <div
+          className={`upload-area ${dragOver ? 'drag-over' : ''} ${disabled ? 'disabled' : ''}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onClick={pickFiles}
+        >
+          <div className="upload-content">
+            <div className="upload-placeholder">
+              <div className="upload-icon">📁</div>
+              <div className="upload-text">
+                <div className="primary-text">点击或拖拽添加文件</div>
+                <div className="secondary-text">支持 {acceptExtensions.join(', ').toUpperCase()} 等格式</div>
+                <div className="hint-text">可多次选择，自动累积并去重</div>
               </div>
-            );
-          })}
+            </div>
+          </div>
         </div>
-      )}
+
+        {selectedPaths.length > 0 && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {selectedPaths.map((p) => {
+              const name = p.split('/').pop() || p.split('\\').pop() || p;
+              return (
+                <div key={p} className="file-info">
+                  <div className="file-icon video-icon">🎬</div>
+                  <div className="file-details">
+                    <div className="file-name">{name}</div>
+                    <div className="file-meta">
+                      <span className="file-size" style={{ fontSize: '0.8rem' }}>{p}</span>
+                    </div>
+                  </div>
+                  <button
+                    className="clear-button"
+                    onClick={(e) => { e.stopPropagation(); removeItem(p); }}
+                    disabled={disabled}
+                    aria-label="移除"
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || loading}
+                style={{
+                  padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-soft)',
+                  background: 'var(--surface-card)', cursor: 'pointer'
+                }}
+              >
+                通过浏览器选择
+              </button>
+              <button
+                onClick={clearAll}
+                disabled={disabled || loading}
+                style={{
+                  padding: '8px 12px', borderRadius: 8, border: 'none',
+                  background: 'var(--color-danger)', color: 'white', cursor: 'pointer'
+                }}
+              >
+                清空全部
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
