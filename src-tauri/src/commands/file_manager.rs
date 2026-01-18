@@ -5,7 +5,10 @@ use crate::utils::logger;
 use serde::{Deserialize, Serialize};
 use crate::core::file::{FileManager as CoreFileManager, FileInfo as CoreFileInfo};
 use std::process::Command;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tauri::State;
+use crate::utils::config::ConfigManager;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
@@ -174,4 +177,83 @@ pub async fn open_folder(path: String) -> Result<String, String> {
     }
 
     Ok("Folder opened successfully".to_string())
+}
+
+fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, String> {
+    let ffplay_name = if cfg!(target_os = "windows") { "ffplay.exe" } else { "ffplay" };
+
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Some(ffmpeg_path) = cfg_ffmpeg_path.filter(|s| !s.trim().is_empty()) {
+        let pb = PathBuf::from(&ffmpeg_path);
+        if pb.is_absolute() {
+            if pb.is_file() {
+                if let Some(parent) = pb.parent() {
+                    candidates.push(parent.join(ffplay_name).to_string_lossy().to_string());
+                }
+            } else if let Some(parent) = pb.parent() {
+                candidates.push(parent.join(ffplay_name).to_string_lossy().to_string());
+            }
+        } else {
+            candidates.push(ffplay_name.to_string());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        candidates.extend([
+            "C:\\ffmpeg\\bin\\ffplay.exe".to_string(),
+            "C:\\Program Files\\ffmpeg\\bin\\ffplay.exe".to_string(),
+            "ffplay.exe".to_string(),
+        ]);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidates.extend([
+            "/opt/homebrew/bin/ffplay".to_string(),
+            "/usr/local/bin/ffplay".to_string(),
+            "/usr/bin/ffplay".to_string(),
+            "ffplay".to_string(),
+        ]);
+    }
+
+    for cand in candidates {
+        let pb = PathBuf::from(&cand);
+        if pb.is_absolute() {
+            if pb.exists() {
+                return Ok(cand);
+            }
+        } else if Command::new(&cand).arg("-version").output().is_ok() {
+            return Ok(cand);
+        }
+    }
+
+    Err("ffplay not found. Please install FFmpeg with ffplay or add it to PATH.".to_string())
+}
+
+#[tauri::command]
+pub async fn play_with_ffplay(path: String, config_manager: State<'_, Mutex<ConfigManager>>) -> Result<String, String> {
+    logger::log_info(&format!("Playing with ffplay: {}", path));
+
+    if !Path::new(&path).exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    let cfg_ffmpeg_path = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?
+        .get_config()
+        .ffmpeg_path
+        .clone();
+
+    let ffplay = resolve_ffplay_executable(cfg_ffmpeg_path)?;
+
+    Command::new(ffplay)
+        .args(["-autoexit", "-loglevel", "warning"])
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to launch ffplay: {}", e))?;
+
+    Ok("ffplay launched".to_string())
 }

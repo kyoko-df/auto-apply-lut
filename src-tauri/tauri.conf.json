@@ -14,12 +14,16 @@
     "windows": [
       {
         "title": "auto-apply-lut",
-        "width": 800,
-        "height": 600
+        "width": 1420,
+        "height": 1080
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "$APPDATA/**", "$LOCALDATA/**", "$TEMP/**"]
+      }
     }
   },
   "bundle": {

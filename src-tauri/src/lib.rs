@@ -90,6 +90,7 @@ pub fn run() {
             commands::file_manager::get_file_info,
             commands::file_manager::open_file,
             commands::file_manager::open_folder,
+            commands::file_manager::play_with_ffplay,
             commands::processor::get_video_info,
             // LUT
             commands::lut_manager::validate_lut_file,

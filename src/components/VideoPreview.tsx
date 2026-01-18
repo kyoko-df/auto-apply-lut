@@ -52,7 +52,64 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   const [progress, setProgress] = useState<ProcessingProgress | null>(null);
   const [previewMode, setPreviewMode] = useState<'original' | 'processed'>('original');
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
+  const [videoSrc, setVideoSrc] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+
+  const isTauriEnv = useCallback(
+    () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__,
+    []
+  );
+
+  const buildAssetUrl = useCallback((path: string) => {
+    const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '');
+    return `asset://localhost/${encodeURI(normalized)}`;
+  }, []);
+
+  const guessVideoMimeType = useCallback((path: string) => {
+    const ext = path.split('.').pop()?.toLowerCase();
+    switch (ext) {
+      case 'mp4':
+      case 'm4v':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'webm':
+        return 'video/webm';
+      case 'ogv':
+        return 'video/ogg';
+      default:
+        return '';
+    }
+  }, []);
+
+  const resolveVideoSrc = useCallback(
+    async (path: string) => {
+      if (!isTauriEnv()) return '';
+      try {
+        const mod = await import('@tauri-apps/api/core');
+        const convertFileSrc = (mod as any).convertFileSrc;
+        if (typeof convertFileSrc === 'function') {
+          return convertFileSrc(path);
+        }
+      } catch {
+        // ignore
+      }
+      return buildAssetUrl(path);
+    },
+    [buildAssetUrl, isTauriEnv]
+  );
+
+  const applyVideoSource = useCallback(
+    async (path?: string | null) => {
+      if (!path) {
+        setVideoSrc('');
+        return;
+      }
+      const src = await resolveVideoSrc(path);
+      setVideoSrc(src);
+    },
+    [resolveVideoSrc]
+  );
 
   // 加载视频信息
   const loadVideoInfo = useCallback(async (path: string) => {
@@ -62,34 +119,40 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       
       const info = await invoke<VideoInfo>('get_video_info', { path });
       setVideoInfo(info);
-      
-      // 设置视频源
-      if (videoRef.current) {
-        videoRef.current.src = `asset://localhost/${path}`;
-      }
+      await applyVideoSource(path);
     } catch (err) {
       console.error('Failed to load video info:', err);
       setError('无法加载视频信息');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [applyVideoSource]);
 
   // 当视频路径改变时加载视频信息
   useEffect(() => {
     if (videoPath) {
+      setPreviewMode('original');
       loadVideoInfo(videoPath);
     } else {
       setVideoInfo(null);
       setProcessedVideoPath(null);
       setIsProcessing(false); // Reset processing state when video changes
-      if (videoRef.current) {
-        videoRef.current.src = '';
-      }
+      setVideoSrc('');
     }
   }, [videoPath, loadVideoInfo]);
 
   // 应用LUT处理已移至App.tsx中的handleProcessVideo函数
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (!videoSrc) return;
+    if (isLoading) return;
+    try {
+      videoRef.current.load();
+    } catch {
+      // ignore
+    }
+  }, [videoSrc, isLoading]);
 
   // 监听处理进度
   useEffect(() => {
@@ -150,29 +213,42 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     <div className="video-preview">
       <div className="preview-header">
         <h3>视频预览</h3>
-        {processedVideoPath && (
+        {videoPath && (
           <div className="preview-controls">
-            <button 
-              className={`mode-button ${previewMode === 'original' ? 'active' : ''}`}
-              onClick={() => {
-                setPreviewMode('original');
-                if (videoRef.current && videoPath) {
-                  videoRef.current.src = `asset://localhost/${videoPath}`;
+            {processedVideoPath && (
+              <>
+                <button 
+                  className={`mode-button ${previewMode === 'original' ? 'active' : ''}`}
+                  onClick={async () => {
+                    setPreviewMode('original');
+                    await applyVideoSource(videoPath);
+                  }}
+                >
+                  原始
+                </button>
+                <button 
+                  className={`mode-button ${previewMode === 'processed' ? 'active' : ''}`}
+                  onClick={async () => {
+                    setPreviewMode('processed');
+                    await applyVideoSource(processedVideoPath);
+                  }}
+                >
+                  处理后
+                </button>
+              </>
+            )}
+            <button
+              className="mode-button"
+              onClick={async () => {
+                const path = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+                try {
+                  await invoke('play_with_ffplay', { path });
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : '启动 ffplay 失败');
                 }
               }}
             >
-              原始
-            </button>
-            <button 
-              className={`mode-button ${previewMode === 'processed' ? 'active' : ''}`}
-              onClick={() => {
-                setPreviewMode('processed');
-                if (videoRef.current && processedVideoPath) {
-                  videoRef.current.src = `asset://localhost/${processedVideoPath}`;
-                }
-              }}
-            >
-              处理后
+              ffplay 播放
             </button>
           </div>
         )}
@@ -199,8 +275,22 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
               ref={videoRef}
               controls
               className="video-player"
-              onError={() => setError('视频加载失败')}
+              onError={(e) => {
+                const mediaError = e.currentTarget.error;
+                if (mediaError?.code) {
+                  setError(`视频加载失败（错误码 ${mediaError.code}）`);
+                } else {
+                  setError('视频加载失败');
+                }
+              }}
             >
+              {videoSrc && (
+                <source
+                  key={videoSrc}
+                  src={videoSrc}
+                  type={guessVideoMimeType(previewMode === 'original' ? (videoPath ?? '') : (processedVideoPath ?? ''))}
+                />
+              )}
               您的浏览器不支持视频播放
             </video>
             
