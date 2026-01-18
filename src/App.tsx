@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import MultiFileSelector from './components/MultiFileSelector';
-import LutSelector from './components/LutSelector';
+import FileUpload from './components/FileUpload';
 import VideoPreview from './components/VideoPreview';
 import SettingsModal from './components/SettingsModal';
 import ProcessingStatus from './components/ProcessingStatus';
@@ -38,7 +37,6 @@ function App() {
   const [videoFile, setVideoFile] = useState<string | null>(null);
   const [lutFile, setLutFile] = useState<string | null>(null);
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
-  const [batchFiles, setBatchFiles] = useState<string[]>([]);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ProcessingSettings>({
@@ -57,83 +55,146 @@ function App() {
     output_directory: ''
   });
 
+  const handleVideoSelect = useCallback((filePath: string) => {
+    setVideoFile(filePath);
+    setProcessedVideoPath(null);
+  }, []);
+
   const handleLutSelect = useCallback((filePath: string) => {
     setLutFile(filePath);
   }, []);
 
   const handleClearFiles = useCallback(() => {
     setVideoFile(null);
-    setBatchFiles([]);
     setLutFile(null);
     setProcessedVideoPath(null);
   }, []);
 
-  // 批量处理入口：以批量为中心，不再需要单文件入口
-  const handleStartBatch = useCallback(async () => {
-    if (batchFiles.length === 0 || !lutFile) {
-      console.error('需要选择待处理文件（一个或多个）以及 LUT 文件');
+  const handleProcessVideo = useCallback(async () => {
+    if (!videoFile || !lutFile) {
+      console.error('需要选择视频文件和LUT文件');
       return;
     }
 
-    for (const inputPath of batchFiles) {
-      const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const fileName = inputPath.split('/').pop() || inputPath.split('\\').pop() || 'unknown';
-      const newTask: ProcessingTask = {
-        id: taskId,
-        name: `处理 ${fileName}`,
-        progress: 0,
-        status: 'pending',
-        stage: '准备中...'
-      };
-      setProcessingTasks(prev => [...prev, newTask]);
+    const taskId = `task_${Date.now()}`;
+    const fileName = videoFile.split('/').pop() || videoFile.split('\\').pop() || 'unknown';
+    const newTask: ProcessingTask = {
+      id: taskId,
+      name: `处理 ${fileName}`,
+      progress: 0,
+      status: 'pending',
+      stage: '准备中...'
+    };
 
-      try {
-        setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'processing', stage: '应用LUT...' } : t));
+    setProcessingTasks(prev => [...prev, newTask]);
+      console.log('任务已添加:', newTask);
+      console.log('当前任务列表:', processingTasks);
 
-        const result = await invoke('start_video_processing', {
-          request: {
-            input_path: inputPath,
-            output_path: '',
-            lut_path: lutFile,
-            intensity: settings.lut_intensity / 100.0,
-            hardware_acceleration: settings.hardware_acceleration
-          }
-        });
+    try {
+      // 更新任务状态为处理中
+      setProcessingTasks(prev => {
+        const updated = prev.map(task =>
+          task.id === taskId
+            ? { ...task, status: 'processing' as const, stage: '应用LUT...' }
+            : task
+        );
+        console.log('任务状态已更新为处理中:', updated.find(t => t.id === taskId));
+        return updated;
+      });
 
-        if (result && typeof result === 'object' && 'task_id' in result) {
-          const { task_id, output_path } = result as { task_id: string; output_path?: string };
-          const expectedOutput = output_path || `${inputPath}_processed.mp4`;
+      // 调用后端处理视频
+      console.log('开始处理视频:', { videoFile, lutFile, settings });
+      const result = await invoke('start_video_processing', {
+        request: {
+          input_path: videoFile,
+          output_path: '', // 让后端自动生成输出路径
+          lut_path: lutFile,
+          intensity: settings.lut_intensity / 100.0, // 转换为0-1范围
+          hardware_acceleration: settings.hardware_acceleration
+        }
+      });
 
-          let done = false;
-          while (!done) {
-            try {
-              const progressInfo = await invoke('get_task_progress', { taskId: task_id });
-              const p = progressInfo as { progress: number; stage?: string; eta?: number; speed?: number };
-              setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, progress: Math.max(0, Math.min(100, Math.round((p.progress || 0)))), stage: p.stage || t.stage, eta: p.eta, speed: p.speed } : t));
+      console.log('后端返回结果:', result);
 
-              const status = await invoke('get_task_status', { taskId: task_id });
-              if (status === 'completed') {
-                done = true;
-                setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'completed', stage: '处理完成', progress: 100 } : t));
-                setProcessedVideoPath(expectedOutput);
-              } else if (status === 'failed') {
-                done = true;
-                setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'failed', stage: '处理失败' } : t));
-              } else {
-                await new Promise(r => setTimeout(r, 1000));
-              }
-            } catch (pollErr) {
-              console.warn('轮询失败，继续尝试:', pollErr);
-              await new Promise(r => setTimeout(r, 1500));
+      // 检查是否返回了任务ID
+      if (result && typeof result === 'object' && 'task_id' in result) {
+        const resultWithOutputPath = result as { task_id: string; output_path?: string };
+        console.log('开始真实FFmpeg处理，任务ID:', resultWithOutputPath.task_id);
+        console.log('预期输出路径:', resultWithOutputPath.output_path);
+
+        let finalOutputPath = resultWithOutputPath.output_path || `${videoFile}_processed.mp4`;
+        let completed = false;
+
+        // 轮询后端真实任务进度
+        for (;;) {
+          try {
+            const progressInfo = await invoke('get_task_progress', { taskId: resultWithOutputPath.task_id });
+            const pi = progressInfo as { progress: number; status_message?: string };
+
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? {
+                      ...task,
+                      progress: Math.round(pi.progress || 0),
+                      stage: pi.status_message || '处理中...',
+                    }
+                  : task
+              )
+            );
+
+            if ((pi.progress || 0) >= 100) {
+              completed = true;
+              break;
             }
+          } catch (e) {
+            console.warn('获取任务进度失败:', e);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // 完成后确认输出文件是否存在
+        if (completed && finalOutputPath) {
+          try {
+            await invoke('get_file_info', { path: finalOutputPath });
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? { ...task, status: 'completed' as const, progress: 100, stage: '已完成' }
+                  : task
+              )
+            );
+            setProcessedVideoPath(finalOutputPath);
+            console.log('视频处理完成，输出文件:', finalOutputPath);
+          } catch {
+            console.error('处理完成但未找到输出文件:', finalOutputPath);
+            setProcessingTasks(prev =>
+              prev.map(task =>
+                task.id === taskId
+                  ? { ...task, status: 'failed' as const, stage: '处理失败：未找到输出文件' }
+                  : task
+              )
+            );
           }
         }
-      } catch (error) {
-        console.error('处理任务失败:', error);
-        setProcessingTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'failed', stage: '处理失败', error: error instanceof Error ? error.message : '未知错误' } : t));
       }
+    } catch (error) {
+      console.error('处理视频时出错:', error);
+      setProcessingTasks(prev =>
+        prev.map(task =>
+          task.id === taskId
+            ? {
+                ...task,
+                status: 'failed' as const,
+                stage: '处理失败',
+                error: error instanceof Error ? error.message : '未知错误'
+              }
+            : task
+        )
+      );
     }
-  }, [batchFiles, lutFile, settings]);
+  }, [videoFile, lutFile, settings]);
 
   const handleCancelTask = useCallback((taskId: string) => {
     setProcessingTasks(prev => 
@@ -186,25 +247,11 @@ function App() {
       <main className="app-main">
         <div className="app-grid">
           <div className="upload-section">
-            <div style={{ marginTop: 16 }}>
-              <MultiFileSelector
-                title="批量选择待处理视频"
-                acceptExtensions={["mp4","mov","avi","mkv","wmv","flv","webm","m4v"]}
-                disabled={processingTasks.some(task => task.status === 'processing')}
-                onChange={setBatchFiles}
-              />
-              {batchFiles.length > 0 && (
-                <div style={{ marginTop: 8, fontSize: '0.9rem', color: 'var(--color-fg-subtle)' }}>
-                  已选择 {batchFiles.length} 个文件
-                </div>
-              )}
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <LutSelector
-                disabled={processingTasks.some(task => task.status === 'processing')}
-                onSelect={setLutFile}
-              />
-            </div>
+            <FileUpload
+              onVideoSelect={handleVideoSelect}
+              onLutSelect={handleLutSelect}
+              disabled={processingTasks.some(task => task.status === 'processing')}
+            />
           </div>
 
           <div className="preview-section">
@@ -232,14 +279,14 @@ function App() {
 
             <button
               className="btn-primary"
-              onClick={handleStartBatch}
-              disabled={batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')}
+              onClick={handleProcessVideo}
+              disabled={!videoFile || !lutFile || processingTasks.some(task => task.status === 'processing')}
               style={{ marginLeft: '10px' }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                 <path d="M9 11H5v2h4v-2zm0-4H5v2h4V7zm0 8H5v2h4v-2zm12-8h-4v2h4V7zm0 4h-4v2h4v-2zm0 4h-4v2h4v-2zM14 4H10v16h4V4z" fill="currentColor"/>
               </svg>
-              开始批量处理
+              应用LUT
             </button>
           </div>
 
