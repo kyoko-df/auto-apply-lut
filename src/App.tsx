@@ -241,45 +241,37 @@ function App() {
   return (
     <div className="flex h-screen w-full bg-[var(--color-background)] text-[var(--color-text-primary)] font-sans overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-80 flex-shrink-0 bg-[var(--color-surface-translucent)] backdrop-blur-xl border-r border-[var(--color-border)] flex flex-col z-20">
-        <div className="h-14 flex items-center px-5 border-b border-[var(--color-border)] drag-region shrink-0">
-          <div className="flex items-center gap-2.5 text-[var(--color-text-primary)] font-semibold select-none">
-            <div className="p-1.5 bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-hover)] rounded-lg text-white shadow-sm">
-              <Film size={16} strokeWidth={2.5} />
-            </div>
-            <span className="tracking-tight">Auto Apply LUT</span>
+      <aside className="w-80 flex-shrink-0 bg-[var(--color-surface-translucent)] backdrop-blur-xl border-r border-[var(--color-border)] flex flex-col">
+        <div className="h-12 flex items-center px-4 border-b border-[var(--color-border)] drag-region">
+          <div className="flex items-center gap-2 text-[var(--color-text-primary)] font-semibold">
+            <Film size={18} className="text-[var(--color-accent)]" />
+            <span>Auto Apply LUT</span>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-8 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* File Selection Section */}
           <section>
-            <h3 className="section-title flex items-center gap-2 mb-3 px-1">
+            <h3 className="section-title flex items-center gap-2">
               <FileVideo size={14} />
               视频文件
             </h3>
             <MultiFileSelector
-              title=""
+              title="选择视频"
               acceptExtensions={["mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v"]}
               disabled={processingTasks.some(task => task.status === 'processing')}
               onChange={setBatchFiles}
             />
             {batchFiles.length > 0 && (
-              <div className="mt-3 px-3 py-2 bg-[var(--color-surface)] rounded-lg text-xs font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] shadow-sm flex justify-between items-center">
-                <span>已选择 {batchFiles.length} 个文件</span>
-                <button 
-                  onClick={handleClearFiles}
-                  className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
-                >
-                  清除
-                </button>
+              <div className="mt-2 px-2 py-1 bg-[var(--color-surface)] rounded text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+                已选择 {batchFiles.length} 个文件
               </div>
             )}
           </section>
 
           {/* LUT Selection Section */}
           <section>
-            <h3 className="section-title flex items-center gap-2 mb-3 px-1">
+            <h3 className="section-title flex items-center gap-2">
               <Layers size={14} />
               LUT 预设
             </h3>
@@ -288,40 +280,40 @@ function App() {
               onSelect={setLutFile}
             />
           </section>
-        </div>
 
-        {/* Fixed Actions Footer */}
-        <div className="p-5 border-t border-[var(--color-border)] bg-[var(--color-surface)]/50 backdrop-blur-sm space-y-3 shrink-0">
-          <button
-            className="apple-button w-full justify-center h-10 text-[15px] shadow-sm hover:shadow-md transition-all"
-            onClick={handleStartBatch}
-            disabled={batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')}
-          >
-            <Play size={16} fill="currentColor" className="mr-1" />
-            开始处理
-          </button>
+          {/* Actions Section */}
+          <section className="pt-4 border-t border-[var(--color-border)]">
+            <button
+              className="apple-button w-full justify-center mb-3"
+              onClick={handleStartBatch}
+              disabled={batchFiles.length === 0 || !lutFile || processingTasks.some(task => task.status === 'processing')}
+            >
+              <Play size={16} fill="currentColor" />
+              开始处理
+            </button>
 
-          <button
-            className="apple-button secondary w-full justify-center h-10 text-[14px]"
-            onClick={() => setIsSettingsOpen(true)}
-            disabled={processingTasks.some(task => task.status === 'processing')}
-          >
-            <Settings size={16} className="mr-1" />
-            处理设置
-          </button>
+            <button
+              className="apple-button secondary w-full justify-center"
+              onClick={() => setIsSettingsOpen(true)}
+              disabled={processingTasks.some(task => task.status === 'processing')}
+            >
+              <Settings size={16} />
+              处理设置
+            </button>
+          </section>
         </div>
 
         {/* Status Footer in Sidebar */}
-        <div className="px-5 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface)] text-xs text-[var(--color-text-secondary)] shrink-0">
+        <div className="p-3 border-t border-[var(--color-border)] bg-[var(--color-surface)] text-xs text-[var(--color-text-secondary)]">
           {processingTasks.some(task => task.status === 'processing') ? (
             <div className="flex items-center gap-2 text-[var(--color-accent)]">
               <RefreshCw size={12} className="animate-spin" />
-              <span className="font-medium">正在处理任务...</span>
+              正在处理任务...
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[var(--color-success)] shadow-[0_0_8px_rgba(52,199,89,0.4)]"></div>
-              <span className="font-medium">就绪</span>
+              <div className="w-2 h-2 rounded-full bg-[var(--color-success)]"></div>
+              就绪
             </div>
           )}
         </div>
