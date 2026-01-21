@@ -24,6 +24,8 @@ pub struct AppState {
     pub db: Option<database::DatabaseManager>,
 }
 
+pub struct FfplayState(pub Mutex<Option<std::process::Child>>);
+
 // 示例命令 - 后续会被实际功能替换
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -80,6 +82,7 @@ pub fn run() {
         .manage(task_manager)
         .manage(video_processor)
         .manage(Mutex::new(config_manager))
+        .manage(FfplayState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
@@ -91,7 +94,10 @@ pub fn run() {
             commands::file_manager::open_file,
             commands::file_manager::open_folder,
             commands::file_manager::play_with_ffplay,
+            commands::file_manager::stop_ffplay,
             commands::processor::get_video_info,
+            commands::processor::render_preview_frame,
+            commands::processor::prefetch_preview_frames,
             // LUT
             commands::lut_manager::validate_lut_file,
             commands::lut_manager::get_lut_info,

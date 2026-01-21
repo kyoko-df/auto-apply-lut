@@ -12,6 +12,7 @@ use tauri::State;
 use uuid::Uuid;
 use tokio::sync::mpsc;
 use tokio::fs;
+use tokio::process::Command as AsyncCommand;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,4 +276,216 @@ pub async fn get_video_info(path: String, config_manager: State<'_, Mutex<Config
         .get_video_info(&std::path::Path::new(&path))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreviewFrameResponse {
+    pub png_path: String,
+    pub timestamp: f64,
+}
+
+#[tauri::command]
+pub async fn render_preview_frame(
+    path: String,
+    timestamp: f64,
+    width: Option<u32>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
+) -> Result<PreviewFrameResponse, String> {
+    if fs::metadata(&path).await.is_err() {
+        return Err("Input file does not exist".to_string());
+    }
+
+    let cfg_ffmpeg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?
+        .get_config()
+        .ffmpeg_path
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+
+    let ffmpeg_path = if let Some(p) = cfg_ffmpeg {
+        let pb = PathBuf::from(&p);
+        if pb.exists() { pb } else { PathBuf::from("ffmpeg") }
+    } else {
+        crate::core::ffmpeg::discover_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"))
+    };
+
+    let out_dir = std::env::temp_dir().join("auto-apply-lut-preview");
+    fs::create_dir_all(&out_dir)
+        .await
+        .map_err(|e| format!("Failed to create preview directory: {}", e))?;
+
+    let t_ms = (timestamp.max(0.0) * 1000.0).round() as u64;
+    let out_path = out_dir.join(format!("frame_{}_{}.png", Uuid::new_v4(), t_ms));
+
+    let ts = format!("{:.3}", timestamp.max(0.0));
+    let mut cmd = AsyncCommand::new(ffmpeg_path);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-ss")
+        .arg(ts)
+        .arg("-i")
+        .arg(&path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-an");
+
+    if let Some(w) = width.filter(|v| *v > 0) {
+        cmd.arg("-vf").arg(format!("scale={}:-2", w));
+    }
+
+    cmd.arg(&out_path);
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let msg = if stderr.trim().is_empty() {
+            "ffmpeg failed to render frame".to_string()
+        } else {
+            stderr
+        };
+        return Err(msg);
+    }
+
+    Ok(PreviewFrameResponse {
+        png_path: out_path.to_string_lossy().to_string(),
+        timestamp: timestamp.max(0.0),
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreviewFrameItem {
+    pub image_path: String,
+    pub timestamp: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreviewFramesResponse {
+    pub start_time: f64,
+    pub fps: f64,
+    pub frames: Vec<PreviewFrameItem>,
+}
+
+#[tauri::command]
+pub async fn prefetch_preview_frames(
+    path: String,
+    start_time: f64,
+    duration: f64,
+    fps: f64,
+    width: Option<u32>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
+) -> Result<PreviewFramesResponse, String> {
+    if fs::metadata(&path).await.is_err() {
+        return Err("Input file does not exist".to_string());
+    }
+
+    let fps = if fps.is_finite() && fps > 0.0 { fps } else { 12.0 };
+    let duration = if duration.is_finite() && duration > 0.0 { duration } else { 3.0 };
+    let start_time = start_time.max(0.0);
+
+    let cfg_ffmpeg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?
+        .get_config()
+        .ffmpeg_path
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+
+    let ffmpeg_path = if let Some(p) = cfg_ffmpeg {
+        let pb = PathBuf::from(&p);
+        if pb.exists() { pb } else { PathBuf::from("ffmpeg") }
+    } else {
+        crate::core::ffmpeg::discover_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"))
+    };
+
+    let out_root = std::env::temp_dir().join("auto-apply-lut-preview-segments");
+    fs::create_dir_all(&out_root)
+        .await
+        .map_err(|e| format!("Failed to create preview directory: {}", e))?;
+    let out_dir = out_root.join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&out_dir)
+        .await
+        .map_err(|e| format!("Failed to create segment directory: {}", e))?;
+
+    let out_pattern = out_dir.join("frame_%05d.jpg");
+
+    let mut cmd = AsyncCommand::new(ffmpeg_path);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-ss")
+        .arg(format!("{:.3}", start_time))
+        .arg("-t")
+        .arg(format!("{:.3}", duration))
+        .arg("-i")
+        .arg(&path)
+        .arg("-an")
+        .arg("-vf");
+
+    let mut vf = format!("fps={}", fps);
+    if let Some(w) = width.filter(|v| *v > 0) {
+        vf.push_str(&format!(",scale={}:-2", w));
+    }
+    cmd.arg(vf);
+
+    cmd.arg("-q:v")
+        .arg("4")
+        .arg("-vsync")
+        .arg("vfr")
+        .arg("-y")
+        .arg(out_pattern);
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let msg = if stderr.trim().is_empty() {
+            "ffmpeg failed to prefetch frames".to_string()
+        } else {
+            stderr
+        };
+        return Err(msg);
+    }
+
+    let mut frames = Vec::new();
+    let mut entries = fs::read_dir(&out_dir)
+        .await
+        .map_err(|e| format!("Failed to read segment directory: {}", e))?;
+    let mut image_paths: Vec<PathBuf> = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read segment directory entry: {}", e))?
+    {
+        let p = entry.path();
+        if p.is_file() {
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("frame_") && name.ends_with(".jpg") {
+                    image_paths.push(p);
+                }
+            }
+        }
+    }
+    image_paths.sort();
+    for (i, p) in image_paths.into_iter().enumerate() {
+        let ts = start_time + (i as f64) / fps;
+        frames.push(PreviewFrameItem {
+            image_path: p.to_string_lossy().to_string(),
+            timestamp: ts,
+        });
+    }
+
+    Ok(PreviewFramesResponse {
+        start_time,
+        fps,
+        frames,
+    })
 }

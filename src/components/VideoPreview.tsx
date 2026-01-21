@@ -31,6 +31,16 @@ interface ProcessingProgress {
   speed: string;
 }
 
+type CanvasBuffer = {
+  startTime: number;
+  fps: number;
+  frameUrls: string[];
+};
+
+const CANVAS_FPS = 12;
+const CANVAS_SEGMENT_SECONDS = 4;
+const CANVAS_MAX_BUFFER_SECONDS = 20;
+
 const VideoPreview: React.FC<VideoPreviewProps> = ({
   videoPath,
   lutPath,
@@ -51,9 +61,24 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState<ProcessingProgress | null>(null);
   const [previewMode, setPreviewMode] = useState<'original' | 'processed'>('original');
+  const [playerTab, setPlayerTab] = useState<'video' | 'canvas' | 'ffplay'>('video');
+  const [isFfplayStarting, setIsFfplayStarting] = useState(false);
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasSeekTime, setCanvasSeekTime] = useState(0);
+  const [canvasBuffer, setCanvasBuffer] = useState<CanvasBuffer | null>(null);
+  const [canvasFrameIndex, setCanvasFrameIndex] = useState(0);
+  const [isCanvasPlaying, setIsCanvasPlaying] = useState(false);
+  const [isCanvasRendering, setIsCanvasRendering] = useState(false);
+  const canvasInFlightRef = useRef(false);
+  const canvasPlaybackTimerRef = useRef<number | null>(null);
+  const canvasPrefetchSeqRef = useRef(0);
+  const canvasBufferRef = useRef<CanvasBuffer | null>(null);
+  const canvasFrameIndexRef = useRef(0);
+  const canvasImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const canvasSeekDebounceRef = useRef<number | null>(null);
 
   const isTauriEnv = useCallback(
     () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__,
@@ -111,6 +136,214 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     [resolveVideoSrc]
   );
 
+  const stopFfplay = useCallback(async () => {
+    try {
+      await invoke('stop_ffplay');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const startFfplay = useCallback(async (path?: string | null) => {
+    if (!path) return;
+    try {
+      setIsFfplayStarting(true);
+      setError(null);
+      await invoke('play_with_ffplay', { path });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动 ffplay 失败');
+    } finally {
+      setIsFfplayStarting(false);
+    }
+  }, []);
+
+  const drawImageToCanvas = useCallback((img: HTMLImageElement) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  }, []);
+
+  useEffect(() => {
+    canvasBufferRef.current = canvasBuffer;
+  }, [canvasBuffer]);
+
+  useEffect(() => {
+    canvasFrameIndexRef.current = canvasFrameIndex;
+  }, [canvasFrameIndex]);
+
+  const drawCanvasUrl = useCallback(
+    async (url: string) => {
+      const cache = canvasImageCacheRef.current;
+      let img = cache.get(url);
+      if (!img) {
+        img = new Image();
+        img.src = url;
+        cache.set(url, img);
+      }
+      if (!img.complete) {
+        await new Promise<void>((resolve) => {
+          img!.onload = () => resolve();
+          img!.onerror = () => resolve();
+        });
+      }
+      drawImageToCanvas(img);
+    },
+    [drawImageToCanvas]
+  );
+
+  const loadCanvasSegment = useCallback(
+    async (path: string, segmentStart: number, seekTime?: number) => {
+      if (!isTauriEnv()) {
+        setError('Canvas 预览仅在 Tauri 环境可用');
+        return;
+      }
+      if (!path) return;
+      if (canvasInFlightRef.current) return;
+      canvasInFlightRef.current = true;
+      setIsCanvasRendering(true);
+      setError(null);
+      const seq = ++canvasPrefetchSeqRef.current;
+      try {
+        const res = await invoke<{
+          start_time: number;
+          fps: number;
+          frames: Array<{ image_path: string; timestamp: number }>;
+        }>('prefetch_preview_frames', {
+          path,
+          start_time: segmentStart,
+          duration: CANVAS_SEGMENT_SECONDS,
+          fps: CANVAS_FPS,
+          width: 960
+        });
+
+        if (seq !== canvasPrefetchSeqRef.current) return;
+
+        const urls = await Promise.all(
+          res.frames.map(async (f) => {
+            const u = await resolveVideoSrc(f.image_path);
+            return u;
+          })
+        );
+        const frameUrls = urls.filter((u): u is string => !!u);
+        if (frameUrls.length === 0) {
+          setError('未能生成预览帧');
+          setCanvasBuffer(null);
+          return;
+        }
+
+        const startTime = Number.isFinite(res.start_time) ? res.start_time : segmentStart;
+        const fpsValue = Number.isFinite(res.fps) && res.fps > 0 ? res.fps : CANVAS_FPS;
+        const initialTime = typeof seekTime === 'number' ? seekTime : startTime;
+        const initialIndex = Math.max(
+          0,
+          Math.min(frameUrls.length - 1, Math.floor((initialTime - startTime) * fpsValue))
+        );
+
+        for (const u of frameUrls.slice(0, Math.min(8, frameUrls.length))) {
+          const cache = canvasImageCacheRef.current;
+          if (cache.has(u)) continue;
+          const img = new Image();
+          img.src = u;
+          cache.set(u, img);
+        }
+
+        setCanvasBuffer({ startTime, fps: fpsValue, frameUrls });
+        setCanvasFrameIndex(initialIndex);
+        setCanvasSeekTime(startTime + initialIndex / fpsValue);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '预取预览帧失败');
+      } finally {
+        canvasInFlightRef.current = false;
+        setIsCanvasRendering(false);
+      }
+    },
+    [isTauriEnv, resolveVideoSrc]
+  );
+
+  const appendCanvasSegment = useCallback(
+    async (path: string, segmentStart: number) => {
+      if (!isTauriEnv()) return;
+      if (!path) return;
+      if (canvasInFlightRef.current) return;
+      const buf = canvasBufferRef.current;
+      if (!buf) return;
+
+      const expectedStart = buf.startTime + buf.frameUrls.length / buf.fps;
+      if (Math.abs(expectedStart - segmentStart) > 0.5) return;
+
+      canvasInFlightRef.current = true;
+      try {
+        const res = await invoke<{
+          start_time: number;
+          fps: number;
+          frames: Array<{ image_path: string; timestamp: number }>;
+        }>('prefetch_preview_frames', {
+          path,
+          start_time: segmentStart,
+          duration: CANVAS_SEGMENT_SECONDS,
+          fps: CANVAS_FPS,
+          width: 960
+        });
+
+        const urls = await Promise.all(res.frames.map((f) => resolveVideoSrc(f.image_path)));
+        const moreUrls = urls.filter((u): u is string => !!u);
+        if (moreUrls.length === 0) return;
+
+        const maxFrames = Math.max(1, Math.floor(CANVAS_MAX_BUFFER_SECONDS * (buf.fps || CANVAS_FPS)));
+        const currentIndex = canvasFrameIndexRef.current;
+
+        let drop = 0;
+        const newLen = buf.frameUrls.length + moreUrls.length;
+        if (newLen > maxFrames) {
+          drop = Math.min(newLen - maxFrames, currentIndex);
+        }
+
+        setCanvasBuffer((prev) => {
+          if (!prev) return prev;
+          if (Math.abs(prev.startTime + prev.frameUrls.length / prev.fps - segmentStart) > 0.5) return prev;
+          const merged = [...prev.frameUrls, ...moreUrls];
+          const trimmed = drop > 0 ? merged.slice(drop) : merged;
+          const nextStart = prev.startTime + drop / prev.fps;
+          return { ...prev, startTime: nextStart, frameUrls: trimmed };
+        });
+        if (drop > 0) {
+          setCanvasFrameIndex((i) => Math.max(0, i - drop));
+        }
+      } catch {
+        // ignore
+      } finally {
+        canvasInFlightRef.current = false;
+      }
+    },
+    [isTauriEnv, resolveVideoSrc]
+  );
+
+  const seekCanvasTo = useCallback(
+    async (path: string, time: number) => {
+      const t = Math.max(0, time);
+      setIsCanvasPlaying(false);
+      setCanvasSeekTime(t);
+      const buf = canvasBufferRef.current;
+      if (buf) {
+        const end = buf.startTime + buf.frameUrls.length / buf.fps;
+        if (t >= buf.startTime && t <= end) {
+          const idx = Math.max(0, Math.min(buf.frameUrls.length - 1, Math.floor((t - buf.startTime) * buf.fps)));
+          setCanvasFrameIndex(idx);
+          return;
+        }
+      }
+      await loadCanvasSegment(path, Math.max(0, t - 0.1), t);
+    },
+    [loadCanvasSegment]
+  );
+
   // 加载视频信息
   const loadVideoInfo = useCallback(async (path: string) => {
     try {
@@ -132,6 +365,12 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   useEffect(() => {
     if (videoPath) {
       setPreviewMode('original');
+      setPlayerTab('video');
+      setCanvasSeekTime(0);
+      setCanvasBuffer(null);
+      setCanvasFrameIndex(0);
+      canvasImageCacheRef.current.clear();
+      setIsCanvasPlaying(false);
       loadVideoInfo(videoPath);
     } else {
       setVideoInfo(null);
@@ -142,6 +381,85 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   }, [videoPath, loadVideoInfo]);
 
   // 应用LUT处理已移至App.tsx中的handleProcessVideo函数
+
+  useEffect(() => {
+    if (!videoPath) return;
+    const activePath = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+    if (playerTab === 'ffplay') {
+      startFfplay(activePath);
+      return;
+    }
+    stopFfplay();
+    if (playerTab === 'video') {
+      applyVideoSource(activePath);
+      return;
+    }
+    setVideoSrc('');
+    void seekCanvasTo(activePath, canvasSeekTime);
+  }, [applyVideoSource, canvasSeekTime, playerTab, previewMode, processedVideoPath, seekCanvasTo, startFfplay, stopFfplay, videoPath]);
+
+  useEffect(() => {
+    return () => {
+      void stopFfplay();
+    };
+  }, [stopFfplay]);
+
+  useEffect(() => {
+    if (!videoPath) return;
+    if (playerTab !== 'canvas') return;
+    if (canvasPlaybackTimerRef.current) {
+      window.clearInterval(canvasPlaybackTimerRef.current);
+      canvasPlaybackTimerRef.current = null;
+    }
+    if (!isCanvasPlaying) return;
+    const fps = canvasBuffer?.fps ?? CANVAS_FPS;
+    const interval = window.setInterval(() => {
+      setCanvasFrameIndex((prev) => {
+        const buf = canvasBufferRef.current;
+        if (!buf) return prev;
+        const next = prev + 1;
+        if (next >= buf.frameUrls.length) {
+          window.setTimeout(() => setIsCanvasPlaying(false), 0);
+          return prev;
+        }
+        return next;
+      });
+    }, 1000 / fps);
+    canvasPlaybackTimerRef.current = interval;
+    return () => {
+      if (canvasPlaybackTimerRef.current) {
+        window.clearInterval(canvasPlaybackTimerRef.current);
+        canvasPlaybackTimerRef.current = null;
+      }
+    };
+  }, [canvasBuffer?.fps, isCanvasPlaying, playerTab, videoPath]);
+
+  useEffect(() => {
+    if (!videoPath) return;
+    if (playerTab !== 'canvas') return;
+    const buf = canvasBuffer;
+    if (!buf) return;
+    const url = buf.frameUrls[canvasFrameIndex];
+    if (!url) return;
+    void drawCanvasUrl(url).catch((e) => {
+      setError(e instanceof Error ? e.message : '渲染预览帧失败');
+    });
+  }, [canvasBuffer, canvasFrameIndex, drawCanvasUrl, playerTab, videoPath]);
+
+  useEffect(() => {
+    if (!videoPath) return;
+    if (playerTab !== 'canvas') return;
+    const buf = canvasBuffer;
+    if (!buf) return;
+    const t = buf.startTime + canvasFrameIndex / buf.fps;
+    if (Number.isFinite(t)) setCanvasSeekTime(t);
+    if (!isCanvasPlaying) return;
+    const remaining = buf.frameUrls.length - canvasFrameIndex;
+    if (remaining > Math.ceil(buf.fps)) return;
+    const activePath = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+    const nextStart = buf.startTime + buf.frameUrls.length / buf.fps;
+    void appendCanvasSegment(activePath, nextStart);
+  }, [appendCanvasSegment, canvasBuffer, canvasFrameIndex, isCanvasPlaying, playerTab, previewMode, processedVideoPath, videoPath]);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -215,41 +533,44 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
         <h3>视频预览</h3>
         {videoPath && (
           <div className="preview-controls">
+            <button
+              className={`mode-button ${playerTab === 'video' ? 'active' : ''}`}
+              onClick={() => setPlayerTab('video')}
+            >
+              内置
+            </button>
+            <button
+              className={`mode-button ${playerTab === 'canvas' ? 'active' : ''}`}
+              onClick={() => setPlayerTab('canvas')}
+            >
+              Canvas
+            </button>
+            <button
+              className={`mode-button ${playerTab === 'ffplay' ? 'active' : ''}`}
+              onClick={() => setPlayerTab('ffplay')}
+            >
+              ffplay
+            </button>
             {processedVideoPath && (
               <>
                 <button 
                   className={`mode-button ${previewMode === 'original' ? 'active' : ''}`}
-                  onClick={async () => {
+                  onClick={() => {
                     setPreviewMode('original');
-                    await applyVideoSource(videoPath);
                   }}
                 >
                   原始
                 </button>
                 <button 
                   className={`mode-button ${previewMode === 'processed' ? 'active' : ''}`}
-                  onClick={async () => {
+                  onClick={() => {
                     setPreviewMode('processed');
-                    await applyVideoSource(processedVideoPath);
                   }}
                 >
                   处理后
                 </button>
               </>
             )}
-            <button
-              className="mode-button"
-              onClick={async () => {
-                const path = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
-                try {
-                  await invoke('play_with_ffplay', { path });
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : '启动 ffplay 失败');
-                }
-              }}
-            >
-              ffplay 播放
-            </button>
           </div>
         )}
       </div>
@@ -269,7 +590,7 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           </div>
         )}
 
-        {videoPath && !isLoading && !error && (
+        {videoPath && !isLoading && !error && playerTab === 'video' && (
           <div className="video-container">
             <video 
               ref={videoRef}
@@ -298,6 +619,96 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
               <div className="preview-mode-indicator">
                 {previewMode === 'original' ? '原始视频' : '处理后视频'}
               </div>
+            </div>
+          </div>
+        )}
+
+        {videoPath && !isLoading && !error && playerTab === 'canvas' && (
+          <div style={{ width: '100%' }}>
+            <div className="video-container">
+              <canvas ref={canvasRef} className="video-player" />
+              <div className="video-overlay">
+                <div className="preview-mode-indicator">
+                  {isCanvasRendering ? '渲染中…' : 'Canvas 预览'}
+                </div>
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: 12 }}>
+              <button
+                className="apply-button"
+                onClick={() => setIsCanvasPlaying(v => !v)}
+                disabled={isCanvasRendering}
+              >
+                {isCanvasPlaying ? '暂停' : '播放'}
+              </button>
+              <button
+                className="download-button"
+                onClick={() => {
+                  setIsCanvasPlaying(false);
+                  if (canvasSeekDebounceRef.current) {
+                    window.clearTimeout(canvasSeekDebounceRef.current);
+                    canvasSeekDebounceRef.current = null;
+                  }
+                  const path = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+                  void seekCanvasTo(path, 0);
+                }}
+              >
+                复位
+              </button>
+            </div>
+            <div style={{ padding: '0 12px', marginTop: 12 }}>
+              <input
+                type="range"
+                min={0}
+                max={videoInfo?.duration ?? 0}
+                step={0.04}
+                value={canvasSeekTime}
+                onChange={(e) => {
+                  setIsCanvasPlaying(false);
+                  const t = Number(e.target.value);
+                  setCanvasSeekTime(t);
+                  if (canvasSeekDebounceRef.current) {
+                    window.clearTimeout(canvasSeekDebounceRef.current);
+                  }
+                  const path = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+                  canvasSeekDebounceRef.current = window.setTimeout(() => {
+                    void seekCanvasTo(path, t);
+                  }, 150);
+                }}
+                style={{ width: '100%' }}
+                disabled={!videoInfo?.duration}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, color: '#6b7280', fontSize: '0.85rem', fontWeight: 500 }}>
+                <span>{formatTime(canvasSeekTime)}</span>
+                <span>{videoInfo?.duration ? formatTime(videoInfo.duration) : '--:--'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {videoPath && !isLoading && !error && playerTab === 'ffplay' && (
+          <div className="empty-state">
+            <div className="empty-icon">🎞️</div>
+            <div className="empty-text">{isFfplayStarting ? '正在启动 ffplay…' : '使用 ffplay 播放（外部窗口）'}</div>
+            <div className="action-buttons">
+              <button
+                className="apply-button"
+                onClick={async () => {
+                  const path = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+                  await startFfplay(path);
+                }}
+                disabled={isFfplayStarting}
+              >
+                重新播放
+              </button>
+              <button
+                className="download-button"
+                onClick={async () => {
+                  await stopFfplay();
+                }}
+              >
+                停止播放
+              </button>
             </div>
           </div>
         )}

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
 use crate::utils::config::ConfigManager;
+use crate::FfplayState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
@@ -233,7 +234,11 @@ fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, 
 }
 
 #[tauri::command]
-pub async fn play_with_ffplay(path: String, config_manager: State<'_, Mutex<ConfigManager>>) -> Result<String, String> {
+pub async fn play_with_ffplay(
+    path: String,
+    config_manager: State<'_, Mutex<ConfigManager>>,
+    ffplay_state: State<'_, FfplayState>,
+) -> Result<String, String> {
     logger::log_info(&format!("Playing with ffplay: {}", path));
 
     if !Path::new(&path).exists() {
@@ -249,11 +254,39 @@ pub async fn play_with_ffplay(path: String, config_manager: State<'_, Mutex<Conf
 
     let ffplay = resolve_ffplay_executable(cfg_ffmpeg_path)?;
 
-    Command::new(ffplay)
+    let mut guard = ffplay_state
+        .0
+        .lock()
+        .map_err(|e| format!("ffplay state lock poisoned: {}", e))?;
+
+    if let Some(mut prev) = guard.take() {
+        let _ = prev.kill();
+        let _ = prev.wait();
+    }
+
+    let child = Command::new(ffplay)
         .args(["-autoexit", "-loglevel", "warning"])
         .arg(&path)
         .spawn()
         .map_err(|e| format!("Failed to launch ffplay: {}", e))?;
 
+    *guard = Some(child);
+
     Ok("ffplay launched".to_string())
+}
+
+#[tauri::command]
+pub async fn stop_ffplay(ffplay_state: State<'_, FfplayState>) -> Result<String, String> {
+    let mut guard = ffplay_state
+        .0
+        .lock()
+        .map_err(|e| format!("ffplay state lock poisoned: {}", e))?;
+
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok("ffplay stopped".to_string());
+    }
+
+    Ok("ffplay not running".to_string())
 }
