@@ -38,8 +38,11 @@ type CanvasBuffer = {
 };
 
 const CANVAS_FPS = 12;
-const CANVAS_SEGMENT_SECONDS = 4;
-const CANVAS_MAX_BUFFER_SECONDS = 20;
+const CANVAS_SEGMENT_SECONDS = 6;
+const CANVAS_MAX_BUFFER_SECONDS = 45;
+const CANVAS_FRAME_WIDTH = 640;
+const CANVAS_DECODE_AHEAD_SECONDS = 3;
+const CANVAS_MAX_BITMAP_CACHE = 240;
 
 const VideoPreview: React.FC<VideoPreviewProps> = ({
   videoPath,
@@ -73,17 +76,39 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   const [isCanvasPlaying, setIsCanvasPlaying] = useState(false);
   const [isCanvasRendering, setIsCanvasRendering] = useState(false);
   const canvasInFlightRef = useRef(false);
-  const canvasPlaybackTimerRef = useRef<number | null>(null);
   const canvasPrefetchSeqRef = useRef(0);
   const canvasBufferRef = useRef<CanvasBuffer | null>(null);
   const canvasFrameIndexRef = useRef(0);
   const canvasImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const canvasBitmapCacheRef = useRef<Map<string, ImageBitmap>>(new Map());
+  const canvasBitmapPendingRef = useRef<Map<string, Promise<ImageBitmap | null>>>(new Map());
+  const canvasDrawInFlightRef = useRef(false);
+  const canvasRafRef = useRef<number | null>(null);
+  const canvasPlayStartPerfRef = useRef(0);
+  const canvasPlayStartTimeRef = useRef(0);
+  const canvasLastDrawnIndexRef = useRef(-1);
+  const canvasLastUiUpdatePerfRef = useRef(0);
+  const canvasActivePathRef = useRef<string>('');
   const canvasSeekDebounceRef = useRef<number | null>(null);
 
   const isTauriEnv = useCallback(
     () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__,
     []
   );
+
+  const errorToMessage = useCallback((e: unknown, fallback: string) => {
+    if (typeof e === 'string' && e.trim()) return e;
+    if (e && typeof e === 'object') {
+      const anyE = e as any;
+      if (typeof anyE.message === 'string' && anyE.message.trim()) return anyE.message;
+      if (typeof anyE.error === 'string' && anyE.error.trim()) return anyE.error;
+      if (typeof anyE.toString === 'function') {
+        const s = String(anyE.toString());
+        if (s && s !== '[object Object]') return s;
+      }
+    }
+    return fallback;
+  }, []);
 
   const buildAssetUrl = useCallback((path: string) => {
     const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -151,11 +176,11 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       setError(null);
       await invoke('play_with_ffplay', { path });
     } catch (e) {
-      setError(e instanceof Error ? e.message : '启动 ffplay 失败');
+      setError(errorToMessage(e, '启动 ffplay 失败'));
     } finally {
       setIsFfplayStarting(false);
     }
-  }, []);
+  }, [errorToMessage]);
 
   const drawImageToCanvas = useCallback((img: HTMLImageElement) => {
     const canvas = canvasRef.current;
@@ -170,6 +195,19 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   }, []);
 
+  const drawBitmapToCanvas = useCallback((bmp: ImageBitmap) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = bmp.width;
+    const h = bmp.height;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  }, []);
+
   useEffect(() => {
     canvasBufferRef.current = canvasBuffer;
   }, [canvasBuffer]);
@@ -178,14 +216,79 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     canvasFrameIndexRef.current = canvasFrameIndex;
   }, [canvasFrameIndex]);
 
-  const drawCanvasUrl = useCallback(
-    async (url: string) => {
-      const cache = canvasImageCacheRef.current;
-      let img = cache.get(url);
+  const pruneBitmapCache = useCallback(() => {
+    const cache = canvasBitmapCacheRef.current;
+    while (cache.size > CANVAS_MAX_BITMAP_CACHE) {
+      const firstKey = cache.keys().next().value as string | undefined;
+      if (!firstKey) break;
+      const bmp = cache.get(firstKey);
+      if (bmp) bmp.close();
+      cache.delete(firstKey);
+    }
+  }, []);
+
+  const decodeToBitmap = useCallback(async (url: string): Promise<ImageBitmap | null> => {
+    if (typeof window === 'undefined') return null;
+    if (typeof (window as any).createImageBitmap !== 'function') return null;
+    try {
+      const imgCache = canvasImageCacheRef.current;
+      let img = imgCache.get(url);
       if (!img) {
         img = new Image();
         img.src = url;
-        cache.set(url, img);
+        imgCache.set(url, img);
+      }
+      if (typeof img.decode === 'function') {
+        try {
+          await img.decode();
+        } catch {
+          // ignore
+        }
+      } else if (!img.complete) {
+        await new Promise<void>((resolve) => {
+          img!.onload = () => resolve();
+          img!.onerror = () => resolve();
+        });
+      }
+      const bmp = await createImageBitmap(img);
+      return bmp;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const getFrameDrawable = useCallback(
+    async (url: string): Promise<{ bmp?: ImageBitmap; img?: HTMLImageElement } | null> => {
+      const bmpCache = canvasBitmapCacheRef.current;
+      const bmp = bmpCache.get(url);
+      if (bmp) {
+        bmpCache.delete(url);
+        bmpCache.set(url, bmp);
+        return { bmp };
+      }
+
+      const pending = canvasBitmapPendingRef.current.get(url);
+      if (pending) {
+        const b = await pending;
+        if (b) return { bmp: b };
+      } else {
+        const p = decodeToBitmap(url);
+        canvasBitmapPendingRef.current.set(url, p);
+        const b = await p;
+        canvasBitmapPendingRef.current.delete(url);
+        if (b) {
+          bmpCache.set(url, b);
+          pruneBitmapCache();
+          return { bmp: b };
+        }
+      }
+
+      const imgCache = canvasImageCacheRef.current;
+      let img = imgCache.get(url);
+      if (!img) {
+        img = new Image();
+        img.src = url;
+        imgCache.set(url, img);
       }
       if (!img.complete) {
         await new Promise<void>((resolve) => {
@@ -193,9 +296,93 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           img!.onerror = () => resolve();
         });
       }
-      drawImageToCanvas(img);
+      return { img };
     },
-    [drawImageToCanvas]
+    [decodeToBitmap, pruneBitmapCache]
+  );
+
+  const drawCanvasUrl = useCallback(
+    async (url: string) => {
+      if (!url) return;
+      if (canvasDrawInFlightRef.current) return;
+      canvasDrawInFlightRef.current = true;
+      try {
+        const drawable = await getFrameDrawable(url);
+        if (!drawable) return;
+        if (drawable.bmp) {
+          drawBitmapToCanvas(drawable.bmp);
+          return;
+        }
+        if (drawable.img) {
+          drawImageToCanvas(drawable.img);
+        }
+      } finally {
+        canvasDrawInFlightRef.current = false;
+      }
+    },
+    [drawBitmapToCanvas, drawImageToCanvas, getFrameDrawable]
+  );
+
+  const stopCanvasPlayback = useCallback(() => {
+    if (canvasRafRef.current) {
+      window.cancelAnimationFrame(canvasRafRef.current);
+      canvasRafRef.current = null;
+    }
+  }, []);
+
+  const drawCanvasFrameAtIndex = useCallback(
+    async (index: number, waitForDecode: boolean) => {
+      const buf = canvasBufferRef.current;
+      if (!buf) return;
+      const url = buf.frameUrls[index];
+      if (!url) return;
+
+      if (!waitForDecode) {
+        const cached = canvasBitmapCacheRef.current.get(url);
+        if (cached) {
+          canvasBitmapCacheRef.current.delete(url);
+          canvasBitmapCacheRef.current.set(url, cached);
+          drawBitmapToCanvas(cached);
+          canvasLastDrawnIndexRef.current = index;
+          return;
+        }
+        return;
+      }
+
+      const drawable = await getFrameDrawable(url);
+      if (!drawable) return;
+      if (drawable.bmp) {
+        drawBitmapToCanvas(drawable.bmp);
+        canvasLastDrawnIndexRef.current = index;
+        return;
+      }
+      if (drawable.img) {
+        drawImageToCanvas(drawable.img);
+        canvasLastDrawnIndexRef.current = index;
+      }
+    },
+    [drawBitmapToCanvas, drawImageToCanvas, getFrameDrawable]
+  );
+
+  const predecodeFrames = useCallback(
+    async (urls: string[], startIndex: number, count: number) => {
+      const end = Math.min(urls.length, startIndex + count);
+      for (let i = startIndex; i < end; i++) {
+        const u = urls[i];
+        if (!u) continue;
+        if (canvasBitmapCacheRef.current.has(u)) continue;
+        if (canvasBitmapPendingRef.current.has(u)) continue;
+        const p = decodeToBitmap(u);
+        canvasBitmapPendingRef.current.set(u, p);
+        void p.then((bmp) => {
+          canvasBitmapPendingRef.current.delete(u);
+          if (!bmp) return;
+          canvasBitmapCacheRef.current.set(u, bmp);
+          pruneBitmapCache();
+        });
+      }
+    },
+    [decodeToBitmap, pruneBitmapCache]
   );
 
   const loadCanvasSegment = useCallback(
@@ -217,10 +404,10 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           frames: Array<{ image_path: string; timestamp: number }>;
         }>('prefetch_preview_frames', {
           path,
-          start_time: segmentStart,
+          startTime: segmentStart,
           duration: CANVAS_SEGMENT_SECONDS,
           fps: CANVAS_FPS,
-          width: 960
+          width: CANVAS_FRAME_WIDTH
         });
 
         if (seq !== canvasPrefetchSeqRef.current) return;
@@ -246,25 +433,18 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           Math.min(frameUrls.length - 1, Math.floor((initialTime - startTime) * fpsValue))
         );
 
-        for (const u of frameUrls.slice(0, Math.min(8, frameUrls.length))) {
-          const cache = canvasImageCacheRef.current;
-          if (cache.has(u)) continue;
-          const img = new Image();
-          img.src = u;
-          cache.set(u, img);
-        }
-
         setCanvasBuffer({ startTime, fps: fpsValue, frameUrls });
         setCanvasFrameIndex(initialIndex);
         setCanvasSeekTime(startTime + initialIndex / fpsValue);
+        void predecodeFrames(frameUrls, initialIndex, Math.ceil(fpsValue * CANVAS_DECODE_AHEAD_SECONDS));
       } catch (e) {
-        setError(e instanceof Error ? e.message : '预取预览帧失败');
+        setError(errorToMessage(e, '预取预览帧失败'));
       } finally {
         canvasInFlightRef.current = false;
         setIsCanvasRendering(false);
       }
     },
-    [isTauriEnv, resolveVideoSrc]
+    [errorToMessage, isTauriEnv, predecodeFrames, resolveVideoSrc]
   );
 
   const appendCanvasSegment = useCallback(
@@ -286,10 +466,10 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
           frames: Array<{ image_path: string; timestamp: number }>;
         }>('prefetch_preview_frames', {
           path,
-          start_time: segmentStart,
+          startTime: segmentStart,
           duration: CANVAS_SEGMENT_SECONDS,
           fps: CANVAS_FPS,
-          width: 960
+          width: CANVAS_FRAME_WIDTH
         });
 
         const urls = await Promise.all(res.frames.map((f) => resolveVideoSrc(f.image_path)));
@@ -303,6 +483,17 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
         const newLen = buf.frameUrls.length + moreUrls.length;
         if (newLen > maxFrames) {
           drop = Math.min(newLen - maxFrames, currentIndex);
+        }
+
+        if (drop > 0) {
+          const dropped = buf.frameUrls.slice(0, drop);
+          for (const u of dropped) {
+            const bmp = canvasBitmapCacheRef.current.get(u);
+            if (bmp) bmp.close();
+            canvasBitmapCacheRef.current.delete(u);
+            canvasBitmapPendingRef.current.delete(u);
+            canvasImageCacheRef.current.delete(u);
+          }
         }
 
         setCanvasBuffer((prev) => {
@@ -355,11 +546,11 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       await applyVideoSource(path);
     } catch (err) {
       console.error('Failed to load video info:', err);
-      setError('无法加载视频信息');
+      setError(errorToMessage(err, '无法加载视频信息'));
     } finally {
       setIsLoading(false);
     }
-  }, [applyVideoSource]);
+  }, [applyVideoSource, errorToMessage]);
 
   // 当视频路径改变时加载视频信息
   useEffect(() => {
@@ -370,7 +561,13 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       setCanvasBuffer(null);
       setCanvasFrameIndex(0);
       canvasImageCacheRef.current.clear();
+      for (const bmp of canvasBitmapCacheRef.current.values()) {
+        bmp.close();
+      }
+      canvasBitmapCacheRef.current.clear();
+      canvasBitmapPendingRef.current.clear();
       setIsCanvasPlaying(false);
+      stopCanvasPlayback();
       loadVideoInfo(videoPath);
     } else {
       setVideoInfo(null);
@@ -378,7 +575,7 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       setIsProcessing(false); // Reset processing state when video changes
       setVideoSrc('');
     }
-  }, [videoPath, loadVideoInfo]);
+  }, [videoPath, loadVideoInfo, stopCanvasPlayback]);
 
   // 应用LUT处理已移至App.tsx中的handleProcessVideo函数
 
@@ -386,17 +583,32 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     if (!videoPath) return;
     const activePath = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
     if (playerTab === 'ffplay') {
+      setIsCanvasPlaying(false);
+      stopCanvasPlayback();
       startFfplay(activePath);
       return;
     }
     stopFfplay();
     if (playerTab === 'video') {
+      setIsCanvasPlaying(false);
+      stopCanvasPlayback();
       applyVideoSource(activePath);
       return;
     }
     setVideoSrc('');
     void seekCanvasTo(activePath, canvasSeekTime);
-  }, [applyVideoSource, canvasSeekTime, playerTab, previewMode, processedVideoPath, seekCanvasTo, startFfplay, stopFfplay, videoPath]);
+  }, [
+    applyVideoSource,
+    canvasSeekTime,
+    playerTab,
+    previewMode,
+    processedVideoPath,
+    seekCanvasTo,
+    startFfplay,
+    stopCanvasPlayback,
+    stopFfplay,
+    videoPath
+  ]);
 
   useEffect(() => {
     return () => {
@@ -405,38 +617,82 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   }, [stopFfplay]);
 
   useEffect(() => {
+    stopCanvasPlayback();
     if (!videoPath) return;
     if (playerTab !== 'canvas') return;
-    if (canvasPlaybackTimerRef.current) {
-      window.clearInterval(canvasPlaybackTimerRef.current);
-      canvasPlaybackTimerRef.current = null;
-    }
     if (!isCanvasPlaying) return;
-    const fps = canvasBuffer?.fps ?? CANVAS_FPS;
-    const interval = window.setInterval(() => {
-      setCanvasFrameIndex((prev) => {
-        const buf = canvasBufferRef.current;
-        if (!buf) return prev;
-        const next = prev + 1;
-        if (next >= buf.frameUrls.length) {
-          window.setTimeout(() => setIsCanvasPlaying(false), 0);
-          return prev;
-        }
-        return next;
-      });
-    }, 1000 / fps);
-    canvasPlaybackTimerRef.current = interval;
-    return () => {
-      if (canvasPlaybackTimerRef.current) {
-        window.clearInterval(canvasPlaybackTimerRef.current);
-        canvasPlaybackTimerRef.current = null;
+    const buf0 = canvasBufferRef.current;
+    if (!buf0) {
+      setIsCanvasPlaying(false);
+      return;
+    }
+
+    canvasActivePathRef.current = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
+    canvasPlayStartPerfRef.current = performance.now();
+    canvasPlayStartTimeRef.current = buf0.startTime + canvasFrameIndexRef.current / buf0.fps;
+    canvasLastUiUpdatePerfRef.current = 0;
+    canvasLastDrawnIndexRef.current = -1;
+
+    const tick = (now: number) => {
+      const buf = canvasBufferRef.current;
+      if (!buf) {
+        setIsCanvasPlaying(false);
+        stopCanvasPlayback();
+        return;
       }
+
+      const elapsed = (now - canvasPlayStartPerfRef.current) / 1000;
+      const t = canvasPlayStartTimeRef.current + Math.max(0, elapsed);
+      const idx = Math.max(0, Math.floor((t - buf.startTime) * buf.fps));
+
+      if (idx >= buf.frameUrls.length) {
+        setIsCanvasPlaying(false);
+        stopCanvasPlayback();
+        return;
+      }
+
+      if (idx !== canvasLastDrawnIndexRef.current) {
+        void predecodeFrames(buf.frameUrls, idx, Math.ceil(buf.fps * CANVAS_DECODE_AHEAD_SECONDS));
+        void drawCanvasFrameAtIndex(idx, false);
+      }
+
+      const remaining = buf.frameUrls.length - idx;
+      if (remaining <= Math.ceil(buf.fps) && !canvasInFlightRef.current) {
+        const nextStart = buf.startTime + buf.frameUrls.length / buf.fps;
+        void appendCanvasSegment(canvasActivePathRef.current, nextStart);
+      }
+
+      if (now - canvasLastUiUpdatePerfRef.current > 200) {
+        canvasLastUiUpdatePerfRef.current = now;
+        setCanvasFrameIndex(idx);
+        setCanvasSeekTime(t);
+      } else {
+        canvasFrameIndexRef.current = idx;
+      }
+
+      canvasRafRef.current = window.requestAnimationFrame(tick);
     };
-  }, [canvasBuffer?.fps, isCanvasPlaying, playerTab, videoPath]);
+
+    canvasRafRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      stopCanvasPlayback();
+    };
+  }, [
+    appendCanvasSegment,
+    drawCanvasFrameAtIndex,
+    isCanvasPlaying,
+    playerTab,
+    predecodeFrames,
+    previewMode,
+    processedVideoPath,
+    stopCanvasPlayback,
+    videoPath
+  ]);
 
   useEffect(() => {
     if (!videoPath) return;
     if (playerTab !== 'canvas') return;
+    if (isCanvasPlaying) return;
     const buf = canvasBuffer;
     if (!buf) return;
     const url = buf.frameUrls[canvasFrameIndex];
@@ -444,22 +700,7 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     void drawCanvasUrl(url).catch((e) => {
       setError(e instanceof Error ? e.message : '渲染预览帧失败');
     });
-  }, [canvasBuffer, canvasFrameIndex, drawCanvasUrl, playerTab, videoPath]);
-
-  useEffect(() => {
-    if (!videoPath) return;
-    if (playerTab !== 'canvas') return;
-    const buf = canvasBuffer;
-    if (!buf) return;
-    const t = buf.startTime + canvasFrameIndex / buf.fps;
-    if (Number.isFinite(t)) setCanvasSeekTime(t);
-    if (!isCanvasPlaying) return;
-    const remaining = buf.frameUrls.length - canvasFrameIndex;
-    if (remaining > Math.ceil(buf.fps)) return;
-    const activePath = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
-    const nextStart = buf.startTime + buf.frameUrls.length / buf.fps;
-    void appendCanvasSegment(activePath, nextStart);
-  }, [appendCanvasSegment, canvasBuffer, canvasFrameIndex, isCanvasPlaying, playerTab, previewMode, processedVideoPath, videoPath]);
+  }, [canvasBuffer, canvasFrameIndex, drawCanvasUrl, isCanvasPlaying, playerTab, videoPath]);
 
   useEffect(() => {
     if (!videoRef.current) return;

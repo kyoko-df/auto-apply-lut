@@ -413,6 +413,18 @@ pub async fn prefetch_preview_frames(
         .map_err(|e| format!("Failed to create segment directory: {}", e))?;
 
     let out_pattern = out_dir.join("frame_%05d.jpg");
+    let out_pattern_str = out_pattern.to_string_lossy().to_string();
+
+    logger::log_info(&format!(
+        "Prefetch preview frames: input='{}', start_time={:.3}, duration={:.3}, fps={:.3}, width={:?}, ffmpeg='{}', out='{}'",
+        path,
+        start_time,
+        duration,
+        fps,
+        width,
+        ffmpeg_path.to_string_lossy(),
+        out_pattern_str
+    ));
 
     let mut cmd = AsyncCommand::new(ffmpeg_path);
     cmd.arg("-hide_banner")
@@ -420,10 +432,10 @@ pub async fn prefetch_preview_frames(
         .arg("error")
         .arg("-ss")
         .arg(format!("{:.3}", start_time))
-        .arg("-t")
-        .arg(format!("{:.3}", duration))
         .arg("-i")
         .arg(&path)
+        .arg("-t")
+        .arg(format!("{:.3}", duration))
         .arg("-an")
         .arg("-vf");
 
@@ -438,7 +450,7 @@ pub async fn prefetch_preview_frames(
         .arg("-vsync")
         .arg("vfr")
         .arg("-y")
-        .arg(out_pattern);
+        .arg(out_pattern_str);
 
     let output = cmd
         .output()
@@ -446,12 +458,20 @@ pub async fn prefetch_preview_frames(
         .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
 
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let msg = if stderr.trim().is_empty() {
+        let msg = if stderr.trim().is_empty() && stdout.trim().is_empty() {
             "ffmpeg failed to prefetch frames".to_string()
+        } else if stderr.trim().is_empty() {
+            stdout
         } else {
             stderr
         };
+        logger::log_error(&format!(
+            "Prefetch preview frames failed (status={}): {}",
+            output.status,
+            msg
+        ));
         return Err(msg);
     }
 
