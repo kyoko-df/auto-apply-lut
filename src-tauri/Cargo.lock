@@ -262,6 +262,7 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "async-trait",
+ "base64 0.22.1",
  "bincode",
  "chrono",
  "digest",

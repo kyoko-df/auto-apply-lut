@@ -96,8 +96,6 @@ pub fn run() {
             commands::file_manager::play_with_ffplay,
             commands::file_manager::stop_ffplay,
             commands::processor::get_video_info,
-            commands::processor::render_preview_frame,
-            commands::processor::prefetch_preview_frames,
             // LUT
             commands::lut_manager::validate_lut_file,
             commands::lut_manager::get_lut_info,

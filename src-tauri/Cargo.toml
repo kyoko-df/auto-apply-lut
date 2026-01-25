@@ -27,6 +27,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 futures = "0.3"
 anyhow = "1.0"
+base64 = "0.22"
 glob = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
@@ -60,4 +61,3 @@ ffmpeg-sys-next = { version = "6", default-features = false, optional = true }
 default = []
 # Enable this to build with statically linked FFmpeg via ffmpeg-next/ffmpeg-sys-next
 ffmpeg_native = ["dep:ffmpeg-next", "dep:ffmpeg-sys-next"]
-

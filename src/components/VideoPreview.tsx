@@ -31,18 +31,23 @@ interface ProcessingProgress {
   speed: string;
 }
 
-type CanvasBuffer = {
-  startTime: number;
-  fps: number;
-  frameUrls: string[];
+type WebCodecsVideoDecoderConfig = {
+  codec: string;
+  codedWidth?: number;
+  codedHeight?: number;
+  description?: ArrayBuffer;
 };
 
-const CANVAS_FPS = 12;
-const CANVAS_SEGMENT_SECONDS = 6;
-const CANVAS_MAX_BUFFER_SECONDS = 45;
-const CANVAS_FRAME_WIDTH = 640;
-const CANVAS_DECODE_AHEAD_SECONDS = 3;
-const CANVAS_MAX_BITMAP_CACHE = 240;
+type WebCodecsVideoFrame = {
+  timestamp: number;
+  displayWidth: number;
+  displayHeight: number;
+  codedWidth: number;
+  codedHeight: number;
+  close: () => void;
+};
+
+const CANVAS_SEEK_STEP = 0.04;
 
 const VideoPreview: React.FC<VideoPreviewProps> = ({
   videoPath,
@@ -51,13 +56,10 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   onProcessingComplete,
   onProcessingError
 }) => {
-  // Use parameters to avoid unused warnings
-  console.log('VideoPreview props:', { videoPath, lutPath });
-
-  // Mock usage of callback props to avoid warnings
-  const mockCallbacks = { onProcessingStart, onProcessingComplete, onProcessingError };
-  // This prevents unused variable warnings while keeping the component interface
-  void mockCallbacks;
+  void lutPath;
+  void onProcessingStart;
+  void onProcessingComplete;
+  void onProcessingError;
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -70,26 +72,32 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   const [videoSrc, setVideoSrc] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isCanvasPlayingRef = useRef(false);
   const [canvasSeekTime, setCanvasSeekTime] = useState(0);
-  const [canvasBuffer, setCanvasBuffer] = useState<CanvasBuffer | null>(null);
-  const [canvasFrameIndex, setCanvasFrameIndex] = useState(0);
+  const canvasSeekTimeRef = useRef(0);
   const [isCanvasPlaying, setIsCanvasPlaying] = useState(false);
   const [isCanvasRendering, setIsCanvasRendering] = useState(false);
-  const canvasInFlightRef = useRef(false);
-  const canvasPrefetchSeqRef = useRef(0);
-  const canvasBufferRef = useRef<CanvasBuffer | null>(null);
-  const canvasFrameIndexRef = useRef(0);
-  const canvasImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const canvasBitmapCacheRef = useRef<Map<string, ImageBitmap>>(new Map());
-  const canvasBitmapPendingRef = useRef<Map<string, Promise<ImageBitmap | null>>>(new Map());
-  const canvasDrawInFlightRef = useRef(false);
-  const canvasRafRef = useRef<number | null>(null);
-  const canvasPlayStartPerfRef = useRef(0);
-  const canvasPlayStartTimeRef = useRef(0);
-  const canvasLastDrawnIndexRef = useRef(-1);
-  const canvasLastUiUpdatePerfRef = useRef(0);
   const canvasActivePathRef = useRef<string>('');
   const canvasSeekDebounceRef = useRef<number | null>(null);
+  const canvasLastUiUpdatePerfRef = useRef(0);
+  const canvasFetchAbortRef = useRef<AbortController | null>(null);
+  const canvasDecodeSessionIdRef = useRef(0);
+  const canvasDecoderConfigRef = useRef<WebCodecsVideoDecoderConfig | null>(null);
+  const canvasMp4TimescaleRef = useRef<number>(0);
+  const canvasMp4SamplesRef = useRef<
+    Array<{
+      is_sync: boolean;
+      cts: number;
+      dts: number;
+      duration: number;
+      data: Uint8Array;
+    }>
+  >([]);
+  const canvasPlaybackRafIdRef = useRef<number | null>(null);
+  const canvasPlaybackQueueRef = useRef<Array<{ frame: WebCodecsVideoFrame; timestampUs: number }>>([]);
+  const canvasPlaybackDecodeDoneRef = useRef(false);
+  const canvasPlaybackStartPerfRef = useRef<number | null>(null);
+  const canvasPlaybackBaseTimestampUsRef = useRef<number | null>(null);
 
   const isTauriEnv = useCallback(
     () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__,
@@ -182,357 +190,342 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
     }
   }, [errorToMessage]);
 
-  const drawImageToCanvas = useCallback((img: HTMLImageElement) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  }, []);
-
-  const drawBitmapToCanvas = useCallback((bmp: ImageBitmap) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const w = bmp.width;
-    const h = bmp.height;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  }, []);
+  useEffect(() => {
+    isCanvasPlayingRef.current = isCanvasPlaying;
+  }, [isCanvasPlaying]);
 
   useEffect(() => {
-    canvasBufferRef.current = canvasBuffer;
-  }, [canvasBuffer]);
+    canvasSeekTimeRef.current = canvasSeekTime;
+  }, [canvasSeekTime]);
 
   useEffect(() => {
-    canvasFrameIndexRef.current = canvasFrameIndex;
-  }, [canvasFrameIndex]);
-
-  const pruneBitmapCache = useCallback(() => {
-    const cache = canvasBitmapCacheRef.current;
-    while (cache.size > CANVAS_MAX_BITMAP_CACHE) {
-      const firstKey = cache.keys().next().value as string | undefined;
-      if (!firstKey) break;
-      const bmp = cache.get(firstKey);
-      if (bmp) bmp.close();
-      cache.delete(firstKey);
+    if (playerTab === 'canvas') {
+      setPlayerTab('video');
     }
-  }, []);
+  }, [playerTab]);
 
-  const decodeToBitmap = useCallback(async (url: string): Promise<ImageBitmap | null> => {
-    if (typeof window === 'undefined') return null;
-    if (typeof (window as any).createImageBitmap !== 'function') return null;
-    try {
-      const imgCache = canvasImageCacheRef.current;
-      let img = imgCache.get(url);
-      if (!img) {
-        img = new Image();
-        img.src = url;
-        imgCache.set(url, img);
-      }
-      if (typeof img.decode === 'function') {
+  const closeCanvasPlaybackFrameQueue = useCallback(() => {
+    const q = canvasPlaybackQueueRef.current;
+    while (q.length) {
+      const item = q.shift();
+      if (item) {
         try {
-          await img.decode();
+          item.frame.close();
         } catch {
           // ignore
         }
-      } else if (!img.complete) {
-        await new Promise<void>((resolve) => {
-          img!.onload = () => resolve();
-          img!.onerror = () => resolve();
-        });
       }
-      const bmp = await createImageBitmap(img);
-      return bmp;
-    } catch {
-      return null;
     }
   }, []);
-
-  const getFrameDrawable = useCallback(
-    async (url: string): Promise<{ bmp?: ImageBitmap; img?: HTMLImageElement } | null> => {
-      const bmpCache = canvasBitmapCacheRef.current;
-      const bmp = bmpCache.get(url);
-      if (bmp) {
-        bmpCache.delete(url);
-        bmpCache.set(url, bmp);
-        return { bmp };
-      }
-
-      const pending = canvasBitmapPendingRef.current.get(url);
-      if (pending) {
-        const b = await pending;
-        if (b) return { bmp: b };
-      } else {
-        const p = decodeToBitmap(url);
-        canvasBitmapPendingRef.current.set(url, p);
-        const b = await p;
-        canvasBitmapPendingRef.current.delete(url);
-        if (b) {
-          bmpCache.set(url, b);
-          pruneBitmapCache();
-          return { bmp: b };
-        }
-      }
-
-      const imgCache = canvasImageCacheRef.current;
-      let img = imgCache.get(url);
-      if (!img) {
-        img = new Image();
-        img.src = url;
-        imgCache.set(url, img);
-      }
-      if (!img.complete) {
-        await new Promise<void>((resolve) => {
-          img!.onload = () => resolve();
-          img!.onerror = () => resolve();
-        });
-      }
-      return { img };
-    },
-    [decodeToBitmap, pruneBitmapCache]
-  );
-
-  const drawCanvasUrl = useCallback(
-    async (url: string) => {
-      if (!url) return;
-      if (canvasDrawInFlightRef.current) return;
-      canvasDrawInFlightRef.current = true;
-      try {
-        const drawable = await getFrameDrawable(url);
-        if (!drawable) return;
-        if (drawable.bmp) {
-          drawBitmapToCanvas(drawable.bmp);
-          return;
-        }
-        if (drawable.img) {
-          drawImageToCanvas(drawable.img);
-        }
-      } finally {
-        canvasDrawInFlightRef.current = false;
-      }
-    },
-    [drawBitmapToCanvas, drawImageToCanvas, getFrameDrawable]
-  );
 
   const stopCanvasPlayback = useCallback(() => {
-    if (canvasRafRef.current) {
-      window.cancelAnimationFrame(canvasRafRef.current);
-      canvasRafRef.current = null;
+    canvasDecodeSessionIdRef.current += 1;
+    if (canvasPlaybackRafIdRef.current !== null) {
+      window.cancelAnimationFrame(canvasPlaybackRafIdRef.current);
+      canvasPlaybackRafIdRef.current = null;
+    }
+    canvasPlaybackStartPerfRef.current = null;
+    canvasPlaybackBaseTimestampUsRef.current = null;
+    canvasPlaybackDecodeDoneRef.current = false;
+    closeCanvasPlaybackFrameQueue();
+  }, [closeCanvasPlaybackFrameQueue]);
+
+  const resetCanvasPipeline = useCallback(() => {
+    stopCanvasPlayback();
+    if (canvasFetchAbortRef.current) {
+      try {
+        canvasFetchAbortRef.current.abort();
+      } catch {
+        // ignore
+      }
+      canvasFetchAbortRef.current = null;
+    }
+    canvasDecoderConfigRef.current = null;
+    canvasMp4TimescaleRef.current = 0;
+    canvasMp4SamplesRef.current = [];
+    canvasActivePathRef.current = '';
+  }, [stopCanvasPlayback]);
+
+  const drawFrameToCanvas = useCallback((frame: WebCodecsVideoFrame) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = frame.displayWidth || frame.codedWidth;
+    const h = frame.displayHeight || frame.codedHeight;
+    if (!w || !h) return;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    try {
+      ctx.drawImage(frame as any, 0, 0, canvas.width, canvas.height);
+    } catch {
+      // ignore
     }
   }, []);
 
-  const drawCanvasFrameAtIndex = useCallback(
-    async (index: number, waitForDecode: boolean) => {
-      const buf = canvasBufferRef.current;
-      if (!buf) return;
-      const url = buf.frameUrls[index];
-      if (!url) return;
+  const extractCodecDescription = useCallback((mp4boxFile: any, trackId: number, codec: string) => {
+    const track = typeof mp4boxFile.getTrackById === 'function' ? mp4boxFile.getTrackById(trackId) : null;
+    const entry = track?.trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
+    const box =
+      codec.startsWith('avc1') || codec.startsWith('avc3')
+        ? entry?.avcC
+        : codec.startsWith('hvc1') || codec.startsWith('hev1')
+          ? entry?.hvcC
+          : null;
+    if (!box) return undefined;
+    const written = typeof box.write === 'function' ? box.write() : box;
+    if (written instanceof ArrayBuffer) {
+      const u8 = new Uint8Array(written);
+      const copy = new Uint8Array(u8.byteLength);
+      copy.set(u8);
+      return copy.buffer;
+    }
+    if (ArrayBuffer.isView(written)) {
+      const view = written as ArrayBufferView;
+      const u8 = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+      const copy = new Uint8Array(u8.byteLength);
+      copy.set(u8);
+      return copy.buffer;
+    }
+    return undefined;
+  }, []);
 
-      if (!waitForDecode) {
-        const cached = canvasBitmapCacheRef.current.get(url);
-        if (cached) {
-          canvasBitmapCacheRef.current.delete(url);
-          canvasBitmapCacheRef.current.set(url, cached);
-          drawBitmapToCanvas(cached);
-          canvasLastDrawnIndexRef.current = index;
-          return;
-        }
-        return;
+  const ensureCanvasPipelineReady = useCallback(
+    async (path: string) => {
+      if (!path) return false;
+      if (canvasActivePathRef.current === path && canvasDecoderConfigRef.current && canvasMp4SamplesRef.current.length) {
+        return true;
       }
 
-      const drawable = await getFrameDrawable(url);
-      if (!drawable) return;
-      if (drawable.bmp) {
-        drawBitmapToCanvas(drawable.bmp);
-        canvasLastDrawnIndexRef.current = index;
-        return;
-      }
-      if (drawable.img) {
-        drawImageToCanvas(drawable.img);
-        canvasLastDrawnIndexRef.current = index;
-      }
-    },
-    [drawBitmapToCanvas, drawImageToCanvas, getFrameDrawable]
-  );
-
-  const predecodeFrames = useCallback(
-    async (urls: string[], startIndex: number, count: number) => {
-      const end = Math.min(urls.length, startIndex + count);
-      for (let i = startIndex; i < end; i++) {
-        const u = urls[i];
-        if (!u) continue;
-        if (canvasBitmapCacheRef.current.has(u)) continue;
-        if (canvasBitmapPendingRef.current.has(u)) continue;
-        const p = decodeToBitmap(u);
-        canvasBitmapPendingRef.current.set(u, p);
-        void p.then((bmp) => {
-          canvasBitmapPendingRef.current.delete(u);
-          if (!bmp) return;
-          canvasBitmapCacheRef.current.set(u, bmp);
-          pruneBitmapCache();
-        });
-      }
-    },
-    [decodeToBitmap, pruneBitmapCache]
-  );
-
-  const loadCanvasSegment = useCallback(
-    async (path: string, segmentStart: number, seekTime?: number) => {
-      if (!isTauriEnv()) {
-        setError('Canvas 预览仅在 Tauri 环境可用');
-        return;
-      }
-      if (!path) return;
-      if (canvasInFlightRef.current) return;
-      canvasInFlightRef.current = true;
-      setIsCanvasRendering(true);
+      resetCanvasPipeline();
+      canvasActivePathRef.current = path;
       setError(null);
-      const seq = ++canvasPrefetchSeqRef.current;
-      try {
-        const res = await invoke<{
-          start_time: number;
-          fps: number;
-          frames: Array<{ image_path: string; timestamp: number }>;
-        }>('prefetch_preview_frames', {
-          path,
-          startTime: segmentStart,
-          duration: CANVAS_SEGMENT_SECONDS,
-          fps: CANVAS_FPS,
-          width: CANVAS_FRAME_WIDTH
-        });
 
-        if (seq !== canvasPrefetchSeqRef.current) return;
-
-        const urls = await Promise.all(
-          res.frames.map(async (f) => {
-            const u = await resolveVideoSrc(f.image_path);
-            return u;
-          })
-        );
-        const frameUrls = urls.filter((u): u is string => !!u);
-        if (frameUrls.length === 0) {
-          setError('未能生成预览帧');
-          setCanvasBuffer(null);
-          return;
-        }
-
-        const startTime = Number.isFinite(res.start_time) ? res.start_time : segmentStart;
-        const fpsValue = Number.isFinite(res.fps) && res.fps > 0 ? res.fps : CANVAS_FPS;
-        const initialTime = typeof seekTime === 'number' ? seekTime : startTime;
-        const initialIndex = Math.max(
-          0,
-          Math.min(frameUrls.length - 1, Math.floor((initialTime - startTime) * fpsValue))
-        );
-
-        setCanvasBuffer({ startTime, fps: fpsValue, frameUrls });
-        setCanvasFrameIndex(initialIndex);
-        setCanvasSeekTime(startTime + initialIndex / fpsValue);
-        void predecodeFrames(frameUrls, initialIndex, Math.ceil(fpsValue * CANVAS_DECODE_AHEAD_SECONDS));
-      } catch (e) {
-        setError(errorToMessage(e, '预取预览帧失败'));
-      } finally {
-        canvasInFlightRef.current = false;
-        setIsCanvasRendering(false);
+      const ext = path.split('.').pop()?.toLowerCase();
+      if (ext !== 'mp4' && ext !== 'm4v') {
+        setError('Canvas(WebCodecs) 仅支持 MP4/M4V（请切换“内置”预览）');
+        return false;
       }
-    },
-    [errorToMessage, isTauriEnv, predecodeFrames, resolveVideoSrc]
-  );
+      const hasWebCodecs = typeof (globalThis as any).VideoDecoder === 'function' && typeof (globalThis as any).EncodedVideoChunk === 'function';
+      if (!hasWebCodecs) {
+        setError('当前运行环境不支持 WebCodecs（请切换“内置”预览）');
+        return false;
+      }
+      if (videoInfo?.size && videoInfo.size > 700 * 1024 * 1024) {
+        setError('该视频文件过大，Canvas(WebCodecs) 预览可能占用大量内存（请切换“内置”预览）');
+        return false;
+      }
 
-  const appendCanvasSegment = useCallback(
-    async (path: string, segmentStart: number) => {
-      if (!isTauriEnv()) return;
-      if (!path) return;
-      if (canvasInFlightRef.current) return;
-      const buf = canvasBufferRef.current;
-      if (!buf) return;
-
-      const expectedStart = buf.startTime + buf.frameUrls.length / buf.fps;
-      if (Math.abs(expectedStart - segmentStart) > 0.5) return;
-
-      canvasInFlightRef.current = true;
+      setIsCanvasRendering(true);
       try {
-        const res = await invoke<{
-          start_time: number;
-          fps: number;
-          frames: Array<{ image_path: string; timestamp: number }>;
-        }>('prefetch_preview_frames', {
-          path,
-          startTime: segmentStart,
-          duration: CANVAS_SEGMENT_SECONDS,
-          fps: CANVAS_FPS,
-          width: CANVAS_FRAME_WIDTH
+        const src = await resolveVideoSrc(path);
+        if (!src) {
+          setError('无法加载视频资源');
+          return false;
+        }
+        const controller = new AbortController();
+        canvasFetchAbortRef.current = controller;
+        const resp = await fetch(src, { signal: controller.signal });
+        if (!resp.ok) {
+          setError(`加载视频失败（${resp.status}）`);
+          return false;
+        }
+        const buf = await resp.arrayBuffer();
+
+        const mp4boxModule: any = await import('mp4box');
+        const MP4Box: any = mp4boxModule?.default ?? mp4boxModule;
+        const mp4boxFile = MP4Box.createFile();
+
+        let trackId: number | null = null;
+        let expectedSamples = 0;
+        let resolveSamplesReady: (() => void) | null = null;
+        const samplesReady = new Promise<void>((resolve) => {
+          resolveSamplesReady = resolve;
         });
 
-        const urls = await Promise.all(res.frames.map((f) => resolveVideoSrc(f.image_path)));
-        const moreUrls = urls.filter((u): u is string => !!u);
-        if (moreUrls.length === 0) return;
+        const ready = await new Promise<{
+          trackId: number;
+          codec: string;
+          codedWidth: number;
+          codedHeight: number;
+          timescale: number;
+          expectedSamples: number;
+        }>((resolve, reject) => {
+          mp4boxFile.onError = (e: any) => {
+            reject(e);
+          };
+          mp4boxFile.onReady = (info: any) => {
+            const videoTrack = info?.tracks?.find((t: any) => t?.video);
+            if (!videoTrack?.id) {
+              reject(new Error('未找到视频轨道'));
+              return;
+            }
+            trackId = videoTrack.id;
+            expectedSamples = Number(videoTrack.nb_samples ?? 0);
+            resolve({
+              trackId: videoTrack.id,
+              codec: String(videoTrack.codec || ''),
+              codedWidth: Number(videoTrack.video?.width ?? 0),
+              codedHeight: Number(videoTrack.video?.height ?? 0),
+              timescale: Number(videoTrack.timescale ?? 0),
+              expectedSamples
+            });
+          };
+          mp4boxFile.onSamples = (id: number, _user: any, samples: any[]) => {
+            if (trackId === null || id !== trackId) return;
+            for (const s of samples) {
+              const data: Uint8Array = s?.data instanceof Uint8Array ? s.data : new Uint8Array(s?.data ?? []);
+              canvasMp4SamplesRef.current.push({
+                is_sync: !!s?.is_sync,
+                cts: Number(s?.cts ?? 0),
+                dts: Number(s?.dts ?? 0),
+                duration: Number(s?.duration ?? 0),
+                data
+              });
+            }
+            if (expectedSamples > 0 && canvasMp4SamplesRef.current.length >= expectedSamples && resolveSamplesReady) {
+              resolveSamplesReady();
+              resolveSamplesReady = null;
+            }
+          };
 
-        const maxFrames = Math.max(1, Math.floor(CANVAS_MAX_BUFFER_SECONDS * (buf.fps || CANVAS_FPS)));
-        const currentIndex = canvasFrameIndexRef.current;
+          mp4boxFile.setExtractionOptions = mp4boxFile.setExtractionOptions || mp4boxFile.setExtractionOptions;
+          const ab = buf.slice(0);
+          (ab as any).fileStart = 0;
+          mp4boxFile.appendBuffer(ab);
+          mp4boxFile.flush();
+        });
 
-        let drop = 0;
-        const newLen = buf.frameUrls.length + moreUrls.length;
-        if (newLen > maxFrames) {
-          drop = Math.min(newLen - maxFrames, currentIndex);
-        }
+        const description = extractCodecDescription(mp4boxFile, ready.trackId, ready.codec);
+        const cfg: WebCodecsVideoDecoderConfig = {
+          codec: ready.codec,
+          codedWidth: ready.codedWidth,
+          codedHeight: ready.codedHeight,
+          description
+        };
 
-        if (drop > 0) {
-          const dropped = buf.frameUrls.slice(0, drop);
-          for (const u of dropped) {
-            const bmp = canvasBitmapCacheRef.current.get(u);
-            if (bmp) bmp.close();
-            canvasBitmapCacheRef.current.delete(u);
-            canvasBitmapPendingRef.current.delete(u);
-            canvasImageCacheRef.current.delete(u);
+        const isConfigSupportedFn = (globalThis as any).VideoDecoder?.isConfigSupported as
+          | ((config: WebCodecsVideoDecoderConfig) => Promise<{ supported: boolean }>)
+          | undefined;
+        if (isConfigSupportedFn) {
+          const support = await isConfigSupportedFn(cfg);
+          if (!support?.supported) {
+            setError('当前运行环境不支持该视频编码（请切换“内置”预览）');
+            return false;
           }
         }
 
-        setCanvasBuffer((prev) => {
-          if (!prev) return prev;
-          if (Math.abs(prev.startTime + prev.frameUrls.length / prev.fps - segmentStart) > 0.5) return prev;
-          const merged = [...prev.frameUrls, ...moreUrls];
-          const trimmed = drop > 0 ? merged.slice(drop) : merged;
-          const nextStart = prev.startTime + drop / prev.fps;
-          return { ...prev, startTime: nextStart, frameUrls: trimmed };
-        });
-        if (drop > 0) {
-          setCanvasFrameIndex((i) => Math.max(0, i - drop));
+        canvasDecoderConfigRef.current = cfg;
+        canvasMp4TimescaleRef.current = ready.timescale;
+
+        mp4boxFile.setExtractionOptions(ready.trackId, null, { nbSamples: 1000 });
+        mp4boxFile.start();
+        mp4boxFile.flush();
+
+        if (ready.expectedSamples > 0) {
+          await Promise.race([samplesReady, new Promise<void>((resolve) => window.setTimeout(resolve, 3000))]);
         }
-      } catch {
-        // ignore
+
+        if (!canvasMp4SamplesRef.current.length) {
+          setError('Canvas(WebCodecs) 未能解析到视频帧样本');
+          return false;
+        }
+        return true;
+      } catch (e) {
+        setError(errorToMessage(e, 'Canvas(WebCodecs) 初始化失败'));
+        return false;
       } finally {
-        canvasInFlightRef.current = false;
+        setIsCanvasRendering(false);
       }
     },
-    [isTauriEnv, resolveVideoSrc]
+    [errorToMessage, extractCodecDescription, resetCanvasPipeline, resolveVideoSrc, videoInfo?.size]
   );
 
   const seekCanvasTo = useCallback(
     async (path: string, time: number) => {
-      const t = Math.max(0, time);
+      const t0 = Math.max(0, time);
       setIsCanvasPlaying(false);
-      setCanvasSeekTime(t);
-      const buf = canvasBufferRef.current;
-      if (buf) {
-        const end = buf.startTime + buf.frameUrls.length / buf.fps;
-        if (t >= buf.startTime && t <= end) {
-          const idx = Math.max(0, Math.min(buf.frameUrls.length - 1, Math.floor((t - buf.startTime) * buf.fps)));
-          setCanvasFrameIndex(idx);
+      stopCanvasPlayback();
+      setIsCanvasRendering(true);
+      try {
+        const ok = await ensureCanvasPipelineReady(path);
+        if (!ok) {
           return;
         }
+        const cfg = canvasDecoderConfigRef.current;
+        const timescale = canvasMp4TimescaleRef.current;
+        const samples = canvasMp4SamplesRef.current;
+        if (!cfg || !timescale || !samples.length) {
+          setError('Canvas(WebCodecs) 预览未就绪');
+          return;
+        }
+
+        const t = videoInfo?.duration ? Math.min(t0, videoInfo.duration) : t0;
+        const targetTs = Math.round(t * timescale);
+        let targetIndex = samples.findIndex((s) => s.cts >= targetTs);
+        if (targetIndex < 0) targetIndex = samples.length - 1;
+        let keyIndex = targetIndex;
+        while (keyIndex > 0 && !samples[keyIndex].is_sync) keyIndex -= 1;
+        while (keyIndex > 0 && !samples[keyIndex].is_sync) keyIndex -= 1;
+
+        const sessionId = ++canvasDecodeSessionIdRef.current;
+        let lastFrame: WebCodecsVideoFrame | null = null;
+        const decoder = new (globalThis as any).VideoDecoder({
+          output: (frame: WebCodecsVideoFrame) => {
+            if (sessionId !== canvasDecodeSessionIdRef.current) {
+              frame.close();
+              return;
+            }
+            if (lastFrame) {
+              try {
+                (lastFrame as any).close?.();
+              } catch {
+                // ignore
+              }
+            }
+            lastFrame = frame;
+          },
+          error: (err: any) => {
+            void err;
+          }
+        });
+        decoder.configure(cfg);
+
+        for (let i = keyIndex; i <= targetIndex; i++) {
+          const s = samples[i];
+          const timestampUs = Math.max(0, Math.round((s.cts / timescale) * 1_000_000));
+          const durationUs = Math.max(0, Math.round((s.duration / timescale) * 1_000_000));
+          const chunk = new (globalThis as any).EncodedVideoChunk({
+            type: s.is_sync ? 'key' : 'delta',
+            timestamp: timestampUs,
+            duration: durationUs,
+            data: s.data
+          });
+          decoder.decode(chunk);
+        }
+        await decoder.flush();
+        decoder.close();
+
+        if (lastFrame) {
+          drawFrameToCanvas(lastFrame);
+          try {
+            (lastFrame as any).close?.();
+          } catch {
+            // ignore
+          }
+        }
+
+        const actualTime = samples[targetIndex]?.cts ? samples[targetIndex].cts / timescale : t;
+        setCanvasSeekTime(actualTime);
+        canvasSeekTimeRef.current = actualTime;
+      } catch (e) {
+        setError(errorToMessage(e, 'Canvas(WebCodecs) 预览失败'));
+      } finally {
+        setIsCanvasRendering(false);
       }
-      await loadCanvasSegment(path, Math.max(0, t - 0.1), t);
     },
-    [loadCanvasSegment]
+    [drawFrameToCanvas, ensureCanvasPipelineReady, errorToMessage, stopCanvasPlayback, videoInfo?.duration]
   );
 
   // 加载视频信息
@@ -558,14 +551,6 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       setPreviewMode('original');
       setPlayerTab('video');
       setCanvasSeekTime(0);
-      setCanvasBuffer(null);
-      setCanvasFrameIndex(0);
-      canvasImageCacheRef.current.clear();
-      for (const bmp of canvasBitmapCacheRef.current.values()) {
-        bmp.close();
-      }
-      canvasBitmapCacheRef.current.clear();
-      canvasBitmapPendingRef.current.clear();
       setIsCanvasPlaying(false);
       stopCanvasPlayback();
       loadVideoInfo(videoPath);
@@ -596,10 +581,9 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
       return;
     }
     setVideoSrc('');
-    void seekCanvasTo(activePath, canvasSeekTime);
+    void seekCanvasTo(activePath, canvasSeekTimeRef.current);
   }, [
     applyVideoSource,
-    canvasSeekTime,
     playerTab,
     previewMode,
     processedVideoPath,
@@ -617,90 +601,154 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   }, [stopFfplay]);
 
   useEffect(() => {
-    stopCanvasPlayback();
     if (!videoPath) return;
     if (playerTab !== 'canvas') return;
-    if (!isCanvasPlaying) return;
-    const buf0 = canvasBufferRef.current;
-    if (!buf0) {
-      setIsCanvasPlaying(false);
+    if (!isCanvasPlaying) {
+      stopCanvasPlayback();
       return;
     }
 
     canvasActivePathRef.current = previewMode === 'processed' ? (processedVideoPath ?? videoPath) : videoPath;
-    canvasPlayStartPerfRef.current = performance.now();
-    canvasPlayStartTimeRef.current = buf0.startTime + canvasFrameIndexRef.current / buf0.fps;
+    const activePath = canvasActivePathRef.current;
+
+    let cancelled = false;
+    setIsCanvasRendering(true);
     canvasLastUiUpdatePerfRef.current = 0;
-    canvasLastDrawnIndexRef.current = -1;
 
-    const tick = (now: number) => {
-      const buf = canvasBufferRef.current;
-      if (!buf) {
+    const start = async () => {
+      try {
+        const ok = await ensureCanvasPipelineReady(activePath);
+        if (!ok) {
+          setIsCanvasPlaying(false);
+          return;
+        }
+        const cfg = canvasDecoderConfigRef.current;
+        const timescale = canvasMp4TimescaleRef.current;
+        const samples = canvasMp4SamplesRef.current;
+        if (!cfg || !timescale || !samples.length) {
+          setError('Canvas(WebCodecs) 预览未就绪');
+          setIsCanvasPlaying(false);
+          return;
+        }
+
+        const startTime = canvasSeekTimeRef.current;
+        const startTs = Math.round(startTime * timescale);
+        let startIndex = samples.findIndex((s) => s.cts >= startTs);
+        if (startIndex < 0) startIndex = samples.length - 1;
+        let keyIndex = startIndex;
+        while (keyIndex > 0 && !samples[keyIndex].is_sync) keyIndex -= 1;
+        const sessionId = ++canvasDecodeSessionIdRef.current;
+        canvasPlaybackQueueRef.current = [];
+        canvasPlaybackDecodeDoneRef.current = false;
+        canvasPlaybackStartPerfRef.current = null;
+        canvasPlaybackBaseTimestampUsRef.current = null;
+
+        const decoder = new (globalThis as any).VideoDecoder({
+          output: (frame: WebCodecsVideoFrame) => {
+            if (sessionId !== canvasDecodeSessionIdRef.current) {
+              frame.close();
+              return;
+            }
+            const timestampUs = Number(frame.timestamp ?? 0);
+            canvasPlaybackQueueRef.current.push({ frame, timestampUs });
+          },
+          error: (err: any) => {
+            void err;
+          }
+        });
+        decoder.configure(cfg);
+
+        const render = () => {
+          if (cancelled) return;
+          if (sessionId !== canvasDecodeSessionIdRef.current) return;
+          if (!isCanvasPlayingRef.current) return;
+
+          const now = performance.now();
+          const q = canvasPlaybackQueueRef.current;
+          if (q.length && canvasPlaybackStartPerfRef.current === null) {
+            canvasPlaybackStartPerfRef.current = now;
+            canvasPlaybackBaseTimestampUsRef.current = q[0].timestampUs;
+          }
+          const startPerf = canvasPlaybackStartPerfRef.current;
+          const baseTs = canvasPlaybackBaseTimestampUsRef.current;
+
+          if (startPerf !== null && baseTs !== null) {
+            while (q.length) {
+              const item = q[0];
+              const due = startPerf + (item.timestampUs - baseTs) / 1000;
+              if (now + 1 < due) break;
+              q.shift();
+              drawFrameToCanvas(item.frame);
+              try {
+                item.frame.close();
+              } catch {
+                // ignore
+              }
+              if (now - canvasLastUiUpdatePerfRef.current > 120) {
+                canvasLastUiUpdatePerfRef.current = now;
+                const tNow = item.timestampUs / 1_000_000;
+                canvasSeekTimeRef.current = tNow;
+                setCanvasSeekTime(tNow);
+              }
+            }
+          }
+
+          if (canvasPlaybackDecodeDoneRef.current && !canvasPlaybackQueueRef.current.length) {
+            setIsCanvasPlaying(false);
+            return;
+          }
+          canvasPlaybackRafIdRef.current = window.requestAnimationFrame(render);
+        };
+        canvasPlaybackRafIdRef.current = window.requestAnimationFrame(render);
+
+        for (let i = keyIndex; i < samples.length; i++) {
+          if (cancelled) return;
+          if (sessionId !== canvasDecodeSessionIdRef.current) return;
+          while (decoder.decodeQueueSize > 8) {
+            if (cancelled) return;
+            if (sessionId !== canvasDecodeSessionIdRef.current) return;
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 10));
+          }
+          const s = samples[i];
+          const timestampUs = Math.max(0, Math.round((s.cts / timescale) * 1_000_000));
+          const durationUs = Math.max(0, Math.round((s.duration / timescale) * 1_000_000));
+          const chunk = new (globalThis as any).EncodedVideoChunk({
+            type: s.is_sync ? 'key' : 'delta',
+            timestamp: timestampUs,
+            duration: durationUs,
+            data: s.data
+          });
+          decoder.decode(chunk);
+        }
+        await decoder.flush();
+        decoder.close();
+        canvasPlaybackDecodeDoneRef.current = true;
+      } catch (e) {
+        setError(errorToMessage(e, 'Canvas(WebCodecs) 播放失败'));
         setIsCanvasPlaying(false);
-        stopCanvasPlayback();
-        return;
+      } finally {
+        setIsCanvasRendering(false);
       }
-
-      const elapsed = (now - canvasPlayStartPerfRef.current) / 1000;
-      const t = canvasPlayStartTimeRef.current + Math.max(0, elapsed);
-      const idx = Math.max(0, Math.floor((t - buf.startTime) * buf.fps));
-
-      if (idx >= buf.frameUrls.length) {
-        setIsCanvasPlaying(false);
-        stopCanvasPlayback();
-        return;
-      }
-
-      if (idx !== canvasLastDrawnIndexRef.current) {
-        void predecodeFrames(buf.frameUrls, idx, Math.ceil(buf.fps * CANVAS_DECODE_AHEAD_SECONDS));
-        void drawCanvasFrameAtIndex(idx, false);
-      }
-
-      const remaining = buf.frameUrls.length - idx;
-      if (remaining <= Math.ceil(buf.fps) && !canvasInFlightRef.current) {
-        const nextStart = buf.startTime + buf.frameUrls.length / buf.fps;
-        void appendCanvasSegment(canvasActivePathRef.current, nextStart);
-      }
-
-      if (now - canvasLastUiUpdatePerfRef.current > 200) {
-        canvasLastUiUpdatePerfRef.current = now;
-        setCanvasFrameIndex(idx);
-        setCanvasSeekTime(t);
-      } else {
-        canvasFrameIndexRef.current = idx;
-      }
-
-      canvasRafRef.current = window.requestAnimationFrame(tick);
     };
 
-    canvasRafRef.current = window.requestAnimationFrame(tick);
+    void start();
+
     return () => {
+      cancelled = true;
       stopCanvasPlayback();
+      setIsCanvasRendering(false);
     };
   }, [
-    appendCanvasSegment,
-    drawCanvasFrameAtIndex,
+    drawFrameToCanvas,
+    ensureCanvasPipelineReady,
+    errorToMessage,
     isCanvasPlaying,
     playerTab,
-    predecodeFrames,
     previewMode,
     processedVideoPath,
     stopCanvasPlayback,
     videoPath
   ]);
-
-  useEffect(() => {
-    if (!videoPath) return;
-    if (playerTab !== 'canvas') return;
-    if (isCanvasPlaying) return;
-    const buf = canvasBuffer;
-    if (!buf) return;
-    const url = buf.frameUrls[canvasFrameIndex];
-    if (!url) return;
-    void drawCanvasUrl(url).catch((e) => {
-      setError(e instanceof Error ? e.message : '渲染预览帧失败');
-    });
-  }, [canvasBuffer, canvasFrameIndex, drawCanvasUrl, isCanvasPlaying, playerTab, videoPath]);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -779,12 +827,6 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
               onClick={() => setPlayerTab('video')}
             >
               内置
-            </button>
-            <button
-              className={`mode-button ${playerTab === 'canvas' ? 'active' : ''}`}
-              onClick={() => setPlayerTab('canvas')}
-            >
-              Canvas
             </button>
             <button
               className={`mode-button ${playerTab === 'ffplay' ? 'active' : ''}`}
@@ -902,7 +944,7 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
                 type="range"
                 min={0}
                 max={videoInfo?.duration ?? 0}
-                step={0.04}
+                step={CANVAS_SEEK_STEP}
                 value={canvasSeekTime}
                 onChange={(e) => {
                   setIsCanvasPlaying(false);
