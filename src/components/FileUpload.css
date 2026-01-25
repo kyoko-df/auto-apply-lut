@@ -100,6 +100,65 @@
 
 .file-size { font-size: 0.85rem; color: var(--color-fg-subtle); background: color-mix(in oklab, var(--surface-card), #e5e7eb 20%); padding: 2px 8px; border-radius: 6px; }
 
+.lut-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lut-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+}
+
+.lut-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.icon-button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-card);
+  color: var(--color-fg);
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--duration-fast) var(--ease-standard),
+              filter var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard),
+              background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard);
+}
+
+.icon-button:hover:not(:disabled) {
+  filter: brightness(1.03);
+  transform: translateY(-1px);
+}
+
+.icon-button:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .clear-button {
   background: var(--color-danger);
   color: white;
@@ -168,6 +227,8 @@
   .upload-placeholder { gap: 8px; }
   .upload-icon { font-size: 2rem; }
   .file-info { flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; }
+  .lut-item { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .lut-actions { width: 100%; justify-content: flex-end; }
   .clear-button { align-self: flex-end; width: 24px; height: 24px; font-size: 0.8rem; }
 }
 

@@ -4,8 +4,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import './FileUpload.css';
 
 interface FileUploadProps {
-  onVideoSelect: (filePath: string) => void;
-  onLutSelect: (filePath: string) => void;
+  onVideoSelect: (filePath: string | null) => void;
+  onLutSelect: (filePaths: string[]) => void;
   disabled?: boolean;
 }
 
@@ -22,7 +22,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
   disabled = false
 }) => {
   const [videoFile, setVideoFile] = useState<FileInfo | null>(null);
-  const [lutFile, setLutFile] = useState<FileInfo | null>(null);
+  const [lutFiles, setLutFiles] = useState<FileInfo[]>([]);
   const [dragOver, setDragOver] = useState<'video' | 'lut' | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -46,16 +46,24 @@ const FileUpload: React.FC<FileUploadProps> = ({
   }, [onVideoSelect]);
 
   const handleLutInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fileInfo: FileInfo = {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const selectedInfos: FileInfo[] = files.map(file => ({
       name: file.name,
       path: (file as any).path || file.name,
       size: file.size,
       type: file.type
-    };
-    setLutFile(fileInfo);
-    onLutSelect(fileInfo.path);
+    }));
+
+    setLutFiles(prev => {
+      const next = [...prev];
+      for (const info of selectedInfos) {
+        if (!next.some(x => x.path === info.path)) next.push(info);
+      }
+      onLutSelect(next.map(x => x.path));
+      return next;
+    });
     e.target.value = '';
   }, [onLutSelect]);
 
@@ -112,7 +120,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
     try {
       setLoading(true);
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{
           name: 'LUT Files',
           extensions: ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look']
@@ -120,24 +128,33 @@ const FileUpload: React.FC<FileUploadProps> = ({
       });
 
       if (selected) {
-        const filePath = Array.isArray(selected) ? selected[0] : selected;
-        const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
-        try {
-          const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
-          const file: FileInfo = {
-            name: fileName,
-            path: filePath,
-            size: fileInfo.size,
-            type: fileInfo.type
-          };
-          setLutFile(file);
-          onLutSelect(filePath);
-        } catch (error) {
-          console.error('Failed to get file info:', error);
-          const file: FileInfo = { name: fileName, path: filePath };
-          setLutFile(file);
-          onLutSelect(filePath);
-        }
+        const filePaths = Array.isArray(selected) ? selected : [selected];
+        const infos = await Promise.all(
+          filePaths.map(async (filePath) => {
+            const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
+            try {
+              const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
+              return {
+                name: fileName,
+                path: filePath,
+                size: fileInfo.size,
+                type: fileInfo.type
+              } satisfies FileInfo;
+            } catch (error) {
+              console.error('Failed to get file info:', error);
+              return { name: fileName, path: filePath } satisfies FileInfo;
+            }
+          })
+        );
+
+        setLutFiles(prev => {
+          const next = [...prev];
+          for (const info of infos) {
+            if (!next.some(x => x.path === info.path)) next.push(info);
+          }
+          onLutSelect(next.map(x => x.path));
+          return next;
+        });
       } else {
         lutInputRef.current?.click();
       }
@@ -171,10 +188,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
-    const file = files[0];
-    const filePath = (file as any).path || file.name; // Tauri provides file.path
-    
     if (type === 'video') {
+      const file = files[0];
+      const filePath = (file as any).path || file.name;
       const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v'];
       const extension = file.name.split('.').pop()?.toLowerCase();
       
@@ -190,17 +206,26 @@ const FileUpload: React.FC<FileUploadProps> = ({
       }
     } else if (type === 'lut') {
       const lutExtensions = ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look'];
-      const extension = file.name.split('.').pop()?.toLowerCase();
-      
-      if (extension && lutExtensions.includes(extension)) {
-        const fileInfo: FileInfo = {
+      const selectedInfos: FileInfo[] = [];
+      for (const file of files) {
+        const extension = file.name.split('.').pop()?.toLowerCase();
+        if (!extension || !lutExtensions.includes(extension)) continue;
+        selectedInfos.push({
           name: file.name,
-          path: filePath,
+          path: (file as any).path || file.name,
           size: file.size,
           type: file.type
-        };
-        setLutFile(fileInfo);
-        onLutSelect(filePath);
+        });
+      }
+      if (selectedInfos.length > 0) {
+        setLutFiles(prev => {
+          const next = [...prev];
+          for (const info of selectedInfos) {
+            if (!next.some(x => x.path === info.path)) next.push(info);
+          }
+          onLutSelect(next.map(x => x.path));
+          return next;
+        });
       }
     }
   }, [disabled, loading, onVideoSelect, onLutSelect]);
@@ -224,10 +249,26 @@ const FileUpload: React.FC<FileUploadProps> = ({
   // 清除文件
   const clearVideoFile = () => {
     setVideoFile(null);
+    onVideoSelect(null);
   };
 
-  const clearLutFile = () => {
-    setLutFile(null);
+  const removeLutAt = (index: number) => {
+    setLutFiles(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      onLutSelect(next.map(x => x.path));
+      return next;
+    });
+  };
+
+  const moveLut = (from: number, to: number) => {
+    setLutFiles(prev => {
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      onLutSelect(next.map(x => x.path));
+      return next;
+    });
   };
 
   return (
@@ -245,6 +286,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         type="file"
         accept=".cube,.3dl,.lut,.csp,.vlt,.mga,.m3d,.look"
         style={{ display: 'none' }}
+        multiple
         onChange={handleLutInputChange}
       />
 
@@ -309,27 +351,56 @@ const FileUpload: React.FC<FileUploadProps> = ({
           onClick={selectLutFile}
         >
           <div className="upload-content">
-            {lutFile ? (
-              <div className="file-info">
-                <div className="file-icon lut-icon">🎨</div>
-                <div className="file-details">
-                  <div className="file-name">{lutFile.name}</div>
-                  <div className="file-meta">
-                    {lutFile.size && (
-                      <span className="file-size">{formatFileSize(lutFile.size)}</span>
-                    )}
+            {lutFiles.length > 0 ? (
+              <div className="lut-list">
+                {lutFiles.map((lutFile, index) => (
+                  <div className="lut-item" key={lutFile.path}>
+                    <div className="file-icon lut-icon">🎨</div>
+                    <div className="file-details">
+                      <div className="file-name">{lutFile.name}</div>
+                      <div className="file-meta">
+                        {lutFile.size && (
+                          <span className="file-size">{formatFileSize(lutFile.size)}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="lut-actions">
+                      <button
+                        className="icon-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLut(index, index - 1);
+                        }}
+                        disabled={disabled || index === 0}
+                        aria-label="上移"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="icon-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveLut(index, index + 1);
+                        }}
+                        disabled={disabled || index === lutFiles.length - 1}
+                        aria-label="下移"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        className="clear-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeLutAt(index);
+                        }}
+                        disabled={disabled}
+                        aria-label="移除"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <button 
-                  className="clear-button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    clearLutFile();
-                  }}
-                  disabled={disabled}
-                >
-                  ✕
-                </button>
+                ))}
               </div>
             ) : (
               <div className="upload-placeholder">

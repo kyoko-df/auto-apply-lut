@@ -26,6 +26,7 @@ interface ProcessingSettings {
   fps: number | null;
   bitrate: string;
   lut_intensity: number;
+  lut_error_strategy: 'StopOnError' | 'SkipOnError';
   color_space: string;
   hardware_acceleration: boolean;
   two_pass_encoding: boolean;
@@ -35,7 +36,7 @@ interface ProcessingSettings {
 
 function App() {
   const [videoFile, setVideoFile] = useState<string | null>(null);
-  const [lutFile, setLutFile] = useState<string | null>(null);
+  const [lutFiles, setLutFiles] = useState<string[]>([]);
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -48,6 +49,7 @@ function App() {
     fps: null,
     bitrate: 'auto',
     lut_intensity: 100,
+    lut_error_strategy: 'StopOnError',
     color_space: 'rec709',
     hardware_acceleration: true,
     two_pass_encoding: false,
@@ -55,23 +57,23 @@ function App() {
     output_directory: ''
   });
 
-  const handleVideoSelect = useCallback((filePath: string) => {
+  const handleVideoSelect = useCallback((filePath: string | null) => {
     setVideoFile(filePath);
     setProcessedVideoPath(null);
   }, []);
 
-  const handleLutSelect = useCallback((filePath: string) => {
-    setLutFile(filePath);
+  const handleLutSelect = useCallback((filePaths: string[]) => {
+    setLutFiles(filePaths);
   }, []);
 
   const handleClearFiles = useCallback(() => {
     setVideoFile(null);
-    setLutFile(null);
+    setLutFiles([]);
     setProcessedVideoPath(null);
   }, []);
 
   const handleProcessVideo = useCallback(async () => {
-    if (!videoFile || !lutFile) {
+    if (!videoFile || lutFiles.length === 0) {
       console.error('需要选择视频文件和LUT文件');
       return;
     }
@@ -103,14 +105,15 @@ function App() {
       });
 
       // 调用后端处理视频
-      console.log('开始处理视频:', { videoFile, lutFile, settings });
+      console.log('开始处理视频:', { videoFile, lutFiles, settings });
       const result = await invoke('start_video_processing', {
         request: {
           input_path: videoFile,
           output_path: '', // 让后端自动生成输出路径
-          lut_path: lutFile,
+          lut_paths: lutFiles,
           intensity: settings.lut_intensity / 100.0, // 转换为0-1范围
-          hardware_acceleration: settings.hardware_acceleration
+          hardware_acceleration: settings.hardware_acceleration,
+          lut_error_strategy: settings.lut_error_strategy
         }
       });
 
@@ -194,7 +197,7 @@ function App() {
         )
       );
     }
-  }, [videoFile, lutFile, settings]);
+  }, [videoFile, lutFiles, settings]);
 
   const handleCancelTask = useCallback((taskId: string) => {
     setProcessingTasks(prev => 
@@ -257,7 +260,7 @@ function App() {
           <div className="preview-section">
              <VideoPreview
                videoPath={videoFile || undefined}
-               lutPath={lutFile || undefined}
+               lutPaths={lutFiles}
                onProcessingStart={() => console.log('Processing started')}
                onProcessingComplete={(outputPath) => setProcessedVideoPath(outputPath)}
                onProcessingError={(error) => console.error('Processing error:', error)}
@@ -280,7 +283,7 @@ function App() {
             <button
               className="btn-primary"
               onClick={handleProcessVideo}
-              disabled={!videoFile || !lutFile || processingTasks.some(task => task.status === 'processing')}
+              disabled={!videoFile || lutFiles.length === 0 || processingTasks.some(task => task.status === 'processing')}
               style={{ marginLeft: '10px' }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">

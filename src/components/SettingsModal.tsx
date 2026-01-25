@@ -18,6 +18,7 @@ interface ProcessingSettings {
   fps: number | null;
   bitrate: string;
   lut_intensity: number;
+  lut_error_strategy: 'StopOnError' | 'SkipOnError';
   color_space: string;
   hardware_acceleration: boolean;
   two_pass_encoding: boolean;
@@ -70,6 +71,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     fps: null,
     bitrate: 'auto',
     lut_intensity: 100,
+    lut_error_strategy: 'StopOnError',
     color_space: 'rec709',
     hardware_acceleration: false,
     two_pass_encoding: false,
@@ -354,6 +356,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                   <span className="slider-value">{settings.lut_intensity}%</span>
                 </div>
+              </div>
+
+              <div className="setting-group">
+                <label className="setting-label">无效LUT处理</label>
+                <select
+                  className="setting-select"
+                  value={settings.lut_error_strategy}
+                  onChange={(e) => updateSetting('lut_error_strategy', e.target.value)}
+                  disabled={disabled}
+                >
+                  <option value="StopOnError">停止并提示错误</option>
+                  <option value="SkipOnError">跳过无效LUT继续处理</option>
+                </select>
               </div>
             </div>
 

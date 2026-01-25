@@ -28,6 +28,24 @@ pub struct VideoProcessor {
 }
 
 impl VideoProcessor {
+    fn escape_filter_path(path: &Path) -> String {
+        path.to_string_lossy().replace('\'', "\\'")
+    }
+
+    fn build_lut_filter(lut_paths: &[PathBuf]) -> AppResult<String> {
+        if lut_paths.is_empty() {
+            return Err(AppError::InvalidInput("No LUT files provided".to_string()));
+        }
+
+        let mut parts: Vec<String> = Vec::with_capacity(lut_paths.len() + 1);
+        for lut_path in lut_paths {
+            let escaped = Self::escape_filter_path(lut_path.as_path());
+            parts.push(format!("lut3d=file='{}'", escaped));
+        }
+        parts.push("format=yuv422p".to_string());
+        Ok(parts.join(","))
+    }
+
     /// 创建新的视频处理器
     pub fn new(ffmpeg_path: PathBuf) -> Self {
         Self {
@@ -57,179 +75,33 @@ impl VideoProcessor {
         settings: &EncodingSettings,
     ) -> AppResult<ProcessingResult> {
         let task_id = uuid::Uuid::new_v4().to_string();
-        let start_time = Instant::now();
-        
-        // 创建处理任务
-        let task = ProcessingTask {
-            id: task_id.clone(),
-            task_type: TaskType::ApplyLut,
-            input_path: input_path.to_path_buf(),
-            output_path: output_path.to_path_buf(),
-            lut_path: Some(lut_path.to_path_buf()),
-            settings: settings.clone(),
-            start_time,
-            status: TaskStatus::Running,
-        };
-        
-        // 添加到当前任务列表
-        {
-            let mut tasks = self.current_tasks.lock().await;
-            tasks.push(task);
-        }
-        
-        // 发送开始进度
-        self.send_progress(ProcessingProgress {
-            task_id: task_id.clone(),
-            progress: 0.0,
-            stage: ProcessingStage::Starting,
-            message: "开始应用LUT".to_string(),
-            elapsed: Duration::from_secs(0),
-        }).await;
-        
-        // 构建FFmpeg命令
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
-        // 添加format=yuv420p滤镜以确保输出兼容性，防止lut3d滤镜自动升级到444
-        let lut_filter = format!("lut3d=file='{}',format=yuv422p", lut_path.to_string_lossy());
-        cmd.args([
-            "-i", input_path.to_str().unwrap(),
-            "-vf", &lut_filter,
-            "-c:v", &settings.video_codec,
-            "-preset", &settings.preset,
-            "-crf", &settings.crf.to_string(),
-            "-c:a", &settings.audio_codec,
-            "-loglevel", "debug", // 增强日志输出
-            "-progress", "pipe:1", // 将进度输出到stdout
-            "-y", // 覆盖输出文件
-            output_path.to_str().unwrap(),
-        ]);
-        
-        // 添加额外参数
-        for (key, value) in &settings.extra_params {
-            cmd.args([key, value]);
-        }
-        
-        // 创建日志文件，将stderr重定向到文件
-        let mut log_dir = get_app_data_dir()?;
-        log_dir.push("logs");
-        let _ = std::fs::create_dir_all(&log_dir);
-        let log_file_path = log_dir.join(format!("ffmpeg_{}.log", task_id));
-        let log_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_file_path)
-            .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))?;
-
-        // 启动进程：stdout用于进度解析，stderr写入日志文件
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::from(log_file))
-            .spawn()
-            .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
-
-        // 监控进度
-        let task_id_clone = task_id.clone();
-        let progress_sender = self.progress_sender.clone();
-        let start_time_clone = start_time;
-        
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(progress) = Self::parse_ffmpeg_progress(&line) {
-                        if let Some(sender) = &progress_sender {
-                            let _ = sender.send(ProcessingProgress {
-                                task_id: task_id_clone.clone(),
-                                progress,
-                                stage: ProcessingStage::Processing,
-                                message: format!("处理中... {:.1}%", progress * 100.0),
-                                elapsed: start_time_clone.elapsed(),
-                            });
-                        }
-                    }
-                }
-            });
-        }
-        
-        // 等待进程完成
-        let status = child.wait().await
-            .map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?;
-        
-        let elapsed = start_time.elapsed();
-        
-        // 更新任务状态
-        {
-            let mut tasks = self.current_tasks.lock().await;
-            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                task.status = if status.success() {
-                    TaskStatus::Completed
-                } else {
-                    TaskStatus::Failed
-                };
-            }
-        }
-        
-        if status.success() {
-            // 发送完成进度
-            self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 1.0,
-                stage: ProcessingStage::Completed,
-                message: "LUT应用完成".to_string(),
-                elapsed,
-            }).await;
-            
-            Ok(ProcessingResult {
-                task_id,
-                success: true,
-                output_path: Some(output_path.to_path_buf()),
-                error: None,
-                elapsed,
-                file_size: self.get_file_size(output_path).await.unwrap_or(0),
-            })
-        } else {
-            // 发送失败进度
-            self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 0.0,
-                stage: ProcessingStage::Failed,
-                message: "LUT应用失败".to_string(),
-                elapsed,
-            }).await;
-            
-            Ok(ProcessingResult {
-                task_id,
-                success: false,
-                output_path: None,
-                error: Some("FFmpeg encoding failed".to_string()),
-                elapsed,
-                file_size: 0,
-            })
-        }
+        self.apply_luts_with_task_id(
+            input_path,
+            output_path,
+            &[lut_path.to_path_buf()],
+            settings,
+            task_id,
+        )
+        .await
     }
 
-    /// 应用LUT到视频（使用外部提供的 task_id）
-    pub async fn apply_lut_with_task_id(
+    pub async fn apply_luts_with_task_id(
         &self,
         input_path: &Path,
         output_path: &Path,
-        lut_path: &Path,
+        lut_paths: &[PathBuf],
         settings: &EncodingSettings,
         task_id: String,
     ) -> AppResult<ProcessingResult> {
         let start_time = Instant::now();
         let mut cancelled = false;
 
-        // 创建处理任务
         let task = ProcessingTask {
             id: task_id.clone(),
             task_type: TaskType::ApplyLut,
             input_path: input_path.to_path_buf(),
             output_path: output_path.to_path_buf(),
-            lut_path: Some(lut_path.to_path_buf()),
+            lut_paths: lut_paths.to_vec(),
             settings: settings.clone(),
             start_time,
             status: TaskStatus::Running,
@@ -239,29 +111,35 @@ impl VideoProcessor {
             tasks.push(task);
         }
 
-        // 发送开始进度
         self.send_progress(ProcessingProgress {
             task_id: task_id.clone(),
             progress: 0.0,
             stage: ProcessingStage::Starting,
-            message: "开始应用LUT".to_string(),
+            message: format!("开始应用 LUT（{} 个）", lut_paths.len()),
             elapsed: Duration::from_secs(0),
-        }).await;
+        })
+        .await;
 
-        // 构建FFmpeg命令
+        let lut_filter = Self::build_lut_filter(lut_paths)?;
+
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        // 使用安全的滤镜参数格式，避免路径中的空格、中文或特殊字符导致解析失败
-        // 添加format=yuv420p滤镜以确保输出兼容性，防止lut3d滤镜自动升级到444
-        let lut_filter = format!("lut3d=file='{}',format=yuv422p", lut_path.to_string_lossy());
         cmd.args([
-            "-i", input_path.to_str().unwrap(),
-            "-vf", &lut_filter,
-            "-c:v", &settings.video_codec,
-            "-preset", &settings.preset,
-            "-crf", &settings.crf.to_string(),
-            "-c:a", &settings.audio_codec,
-            "-loglevel", "debug",
-            "-progress", "pipe:1",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-vf",
+            &lut_filter,
+            "-c:v",
+            &settings.video_codec,
+            "-preset",
+            &settings.preset,
+            "-crf",
+            &settings.crf.to_string(),
+            "-c:a",
+            &settings.audio_codec,
+            "-loglevel",
+            "debug",
+            "-progress",
+            "pipe:1",
             "-y",
             output_path.to_str().unwrap(),
         ]);
@@ -269,7 +147,6 @@ impl VideoProcessor {
             cmd.args([key, value]);
         }
 
-        // 创建日志文件，将stderr重定向到文件
         let mut log_dir = get_app_data_dir()?;
         log_dir.push("logs");
         let _ = std::fs::create_dir_all(&log_dir);
@@ -281,25 +158,21 @@ impl VideoProcessor {
             .open(&log_file_path)
             .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))?;
 
-        // 启动进程：stdout用于进度解析，stderr写入日志文件
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log_file))
             .spawn()
             .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
 
-        // 注册取消通道
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut map = self.cancel_senders.lock().await;
             map.insert(task_id.clone(), cancel_tx);
         }
 
-        // 监控进度
         let task_id_clone = task_id.clone();
         let progress_sender = self.progress_sender.clone();
         let start_time_clone = start_time;
-        // 进度读取任务句柄（用于在结束/取消时中止）
         let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
@@ -322,25 +195,21 @@ impl VideoProcessor {
             progress_handle = Some(handle);
         }
 
-        // 等待进程完成或接收取消
         let status = tokio::select! {
             res = child.wait() => {
                 res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
             }
             _ = &mut cancel_rx => {
-                // 收到取消信号
                 cancelled = true;
-                let _ = child.kill().await; // 终止子进程
+                let _ = child.kill().await;
                 child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
             }
         };
 
-        // 子进程结束后，确保终止进度读取任务以避免持续轮询
         if let Some(handle) = progress_handle.take() {
             handle.abort();
         }
 
-        // 完成后清理取消映射
         {
             let mut map = self.cancel_senders.lock().await;
             map.remove(&task_id);
@@ -362,15 +231,15 @@ impl VideoProcessor {
         }
 
         if status.success() && !cancelled {
-            // 发送完成进度
             self.send_progress(ProcessingProgress {
                 task_id: task_id.clone(),
                 progress: 1.0,
                 stage: ProcessingStage::Completed,
                 message: "LUT应用完成".to_string(),
                 elapsed,
-            }).await;
-            
+            })
+            .await;
+
             Ok(ProcessingResult {
                 task_id,
                 success: true,
@@ -380,14 +249,14 @@ impl VideoProcessor {
                 file_size: self.get_file_size(output_path).await.unwrap_or(0),
             })
         } else if cancelled {
-            // 发送取消进度（使用 Failed 阶段但消息为已取消）
             self.send_progress(ProcessingProgress {
                 task_id: task_id.clone(),
                 progress: 0.0,
                 stage: ProcessingStage::Failed,
                 message: "LUT处理已取消".to_string(),
                 elapsed,
-            }).await;
+            })
+            .await;
             Ok(ProcessingResult {
                 task_id,
                 success: false,
@@ -397,16 +266,14 @@ impl VideoProcessor {
                 file_size: 0,
             })
         } else {
-            // 失败：读取部分 FFmpeg 日志片段，帮助定位错误
             let mut err_summary = String::new();
             let exit_code = status.code().unwrap_or(-1);
             err_summary.push_str(&format!("FFmpeg 失败，退出码: {}", exit_code));
-            // 尝试读取日志文件末尾片段
             let log_snippet = std::fs::read_to_string(&log_file_path)
                 .map(|content| {
                     let max_chars = 2000usize;
                     if content.len() > max_chars {
-                        content[content.len()-max_chars..].to_string()
+                        content[content.len() - max_chars..].to_string()
                     } else {
                         content
                     }
@@ -415,14 +282,17 @@ impl VideoProcessor {
             err_summary.push_str("\n日志片段：\n");
             err_summary.push_str(&log_snippet);
 
-            // 发送失败进度（包含摘要）
             self.send_progress(ProcessingProgress {
                 task_id: task_id.clone(),
                 progress: 0.0,
                 stage: ProcessingStage::Failed,
-                message: format!("LUT应用失败：{}", err_summary.lines().next().unwrap_or("未知错误")),
+                message: format!(
+                    "LUT应用失败：{}",
+                    err_summary.lines().next().unwrap_or("未知错误")
+                ),
                 elapsed,
-            }).await;
+            })
+            .await;
 
             Ok(ProcessingResult {
                 task_id,
@@ -433,6 +303,25 @@ impl VideoProcessor {
                 file_size: 0,
             })
         }
+    }
+
+    /// 应用LUT到视频（使用外部提供的 task_id）
+    pub async fn apply_lut_with_task_id(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        lut_path: &Path,
+        settings: &EncodingSettings,
+        task_id: String,
+    ) -> AppResult<ProcessingResult> {
+        self.apply_luts_with_task_id(
+            input_path,
+            output_path,
+            &[lut_path.to_path_buf()],
+            settings,
+            task_id,
+        )
+        .await
     }
 
     /// 批量处理视频
@@ -768,7 +657,7 @@ pub struct ProcessingTask {
     pub task_type: TaskType,
     pub input_path: PathBuf,
     pub output_path: PathBuf,
-    pub lut_path: Option<PathBuf>,
+    pub lut_paths: Vec<PathBuf>,
     pub settings: EncodingSettings,
     pub start_time: Instant,
     pub status: TaskStatus,
@@ -900,7 +789,7 @@ mod tests {
             task_type: TaskType::ApplyLut,
             input_path: PathBuf::from("/input/video.mp4"),
             output_path: PathBuf::from("/output/video.mp4"),
-            lut_path: Some(PathBuf::from("/luts/test.cube")),
+            lut_paths: vec![PathBuf::from("/luts/test.cube")],
             settings: create_test_settings(),
             start_time: Instant::now(),
             status: TaskStatus::Pending,
@@ -909,6 +798,19 @@ mod tests {
         assert_eq!(task.id, "test_task");
         assert!(matches!(task.task_type, TaskType::ApplyLut));
         assert!(matches!(task.status, TaskStatus::Pending));
+    }
+
+    #[test]
+    fn test_build_lut_filter_preserves_order() {
+        let filter = VideoProcessor::build_lut_filter(&[
+            PathBuf::from("/luts/a.cube"),
+            PathBuf::from("/luts/b.cube"),
+        ])
+        .unwrap();
+        assert_eq!(
+            filter,
+            "lut3d=file='/luts/a.cube',lut3d=file='/luts/b.cube',format=yuv422p"
+        );
     }
 
     #[test]

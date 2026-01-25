@@ -4,7 +4,7 @@ import './VideoPreview.css';
 
 interface VideoPreviewProps {
   videoPath?: string;
-  lutPath?: string;
+  lutPaths?: string[];
   onProcessingStart?: () => void;
   onProcessingComplete?: (outputPath: string) => void;
   onProcessingError?: (error: string) => void;
@@ -51,12 +51,12 @@ const CANVAS_SEEK_STEP = 0.04;
 
 const VideoPreview: React.FC<VideoPreviewProps> = ({
   videoPath,
-  lutPath,
+  lutPaths,
   onProcessingStart,
   onProcessingComplete,
   onProcessingError
 }) => {
-  void lutPath;
+  void lutPaths;
   void onProcessingStart;
   void onProcessingComplete;
   void onProcessingError;

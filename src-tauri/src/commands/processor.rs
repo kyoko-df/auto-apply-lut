@@ -14,13 +14,51 @@ use tokio::sync::mpsc;
 use tokio::fs;
 use std::sync::Mutex;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LutErrorStrategy {
+    StopOnError,
+    SkipOnError,
+}
+
+impl Default for LutErrorStrategy {
+    fn default() -> Self {
+        Self::StopOnError
+    }
+}
+
+fn apply_lut_error_strategy(
+    strategy: LutErrorStrategy,
+    valid_lut_paths: Vec<String>,
+    invalid_lut_messages: Vec<String>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    match strategy {
+        LutErrorStrategy::StopOnError => {
+            if !invalid_lut_messages.is_empty() {
+                return Err(invalid_lut_messages.join("\n"));
+            }
+            Ok((valid_lut_paths, invalid_lut_messages))
+        }
+        LutErrorStrategy::SkipOnError => {
+            if valid_lut_paths.is_empty() {
+                return Err(invalid_lut_messages.join("\n"));
+            }
+            Ok((valid_lut_paths, invalid_lut_messages))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessRequest {
     pub input_path: String,
     pub output_path: String,
-    pub lut_path: String,
+    #[serde(default)]
+    pub lut_paths: Vec<String>,
+    #[serde(default)]
+    pub lut_path: Option<String>,
     pub intensity: f32,
     pub hardware_acceleration: bool,
+    #[serde(default)]
+    pub lut_error_strategy: LutErrorStrategy,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,16 +77,48 @@ pub async fn start_video_processing(
     lut_manager: State<'_, LutManager>,
 ) -> Result<ProcessResponse, String> {
     logger::log_info(&format!("Starting video processing: {:?}", request));
+
+    let mut lut_paths = request.lut_paths.clone();
+    if lut_paths.is_empty() {
+        if let Some(single) = request.lut_path.clone() {
+            if !single.trim().is_empty() {
+                lut_paths.push(single);
+            }
+        }
+    }
+    lut_paths.retain(|p| !p.trim().is_empty());
+    if lut_paths.is_empty() {
+        return Err("No LUT files provided".to_string());
+    }
     
     // Validate input file (async)
     if fs::metadata(&request.input_path).await.is_err() {
         return Err("Input file does not exist".to_string());
     }
     
-    // Validate LUT file
-    if !lut_manager.is_valid_lut(&request.lut_path).await {
-        return Err("Invalid LUT file".to_string());
+    let mut valid_lut_paths: Vec<String> = Vec::new();
+    let mut invalid_lut_messages: Vec<String> = Vec::new();
+    for lut_path in &lut_paths {
+        match lut_manager.validate_lut(lut_path).await {
+            Ok(result) => {
+                if result.is_valid {
+                    valid_lut_paths.push(lut_path.clone());
+                } else {
+                    let msg = if result.errors.is_empty() {
+                        format!("Invalid LUT file: {}", lut_path)
+                    } else {
+                        format!("Invalid LUT file: {} ({})", lut_path, result.errors.join("; "))
+                    };
+                    invalid_lut_messages.push(msg);
+                }
+            }
+            Err(e) => {
+                invalid_lut_messages.push(format!("Invalid LUT file: {} ({})", lut_path, e));
+            }
+        }
     }
+    let (valid_lut_paths, invalid_lut_messages) =
+        apply_lut_error_strategy(request.lut_error_strategy, valid_lut_paths, invalid_lut_messages)?;
     
     // Create output directory if it doesn't exist (async)
     if let Some(parent) = Path::new(&request.output_path).parent() {
@@ -108,7 +178,7 @@ pub async fn start_video_processing(
     let task_id_clone = task_id.clone();
     let final_output_clone = final_output_path.clone();
     let input_clone = request.input_path.clone();
-    let lut_clone = request.lut_path.clone();
+    let lut_clones = valid_lut_paths.clone();
     let tm = task_manager.inner().clone();
 
     // Extract FFmpeg path from VideoProcessor
@@ -131,11 +201,12 @@ pub async fn start_video_processing(
             }
         });
 
+        let luts: Vec<PathBuf> = lut_clones.iter().map(PathBuf::from).collect();
         match vp
-            .apply_lut_with_task_id(
+            .apply_luts_with_task_id(
                 Path::new(&input_clone),
                 Path::new(&final_output_clone),
-                Path::new(&lut_clone),
+                &luts,
                 &settings,
                 task_id_clone.clone(),
             )
@@ -173,9 +244,53 @@ pub async fn start_video_processing(
     Ok(ProcessResponse {
         task_id,
         status: "started".to_string(),
-        message: "Video processing started".to_string(),
+        message: if invalid_lut_messages.is_empty() {
+            "Video processing started".to_string()
+        } else {
+            format!(
+                "Video processing started ({} LUT skipped)",
+                invalid_lut_messages.len()
+            )
+        },
         output_path: final_output_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lut_error_strategy_stop_on_error() {
+        let res = apply_lut_error_strategy(
+            LutErrorStrategy::StopOnError,
+            vec!["/a.cube".to_string()],
+            vec!["bad".to_string()],
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_lut_error_strategy_skip_on_error_keeps_valid() {
+        let (valid, invalid) = apply_lut_error_strategy(
+            LutErrorStrategy::SkipOnError,
+            vec!["/a.cube".to_string(), "/b.cube".to_string()],
+            vec!["bad".to_string()],
+        )
+        .unwrap();
+        assert_eq!(valid, vec!["/a.cube".to_string(), "/b.cube".to_string()]);
+        assert_eq!(invalid.len(), 1);
+    }
+
+    #[test]
+    fn test_lut_error_strategy_skip_on_error_no_valid_fails() {
+        let res = apply_lut_error_strategy(
+            LutErrorStrategy::SkipOnError,
+            vec![],
+            vec!["bad".to_string()],
+        );
+        assert!(res.is_err());
+    }
 }
 
 #[tauri::command]
