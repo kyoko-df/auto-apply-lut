@@ -35,7 +35,7 @@ interface ProcessingSettings {
 }
 
 function App() {
-  const [videoFile, setVideoFile] = useState<string | null>(null);
+  const [activeVideoFile, setActiveVideoFile] = useState<string | null>(null);
   const [lutFiles, setLutFiles] = useState<string[]>([]);
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
@@ -57,8 +57,18 @@ function App() {
     output_directory: ''
   });
 
-  const handleVideoSelect = useCallback((filePath: string | null) => {
-    setVideoFile(filePath);
+  const handleVideoSelect = useCallback((filePaths: string[]) => {
+    setProcessedVideoPath(null);
+    if (!activeVideoFile && filePaths.length > 0) {
+      setActiveVideoFile(filePaths[0]);
+    }
+    if (filePaths.length === 0) {
+      setActiveVideoFile(null);
+    }
+  }, [activeVideoFile]);
+
+  const handleActiveVideoChange = useCallback((filePath: string | null) => {
+    setActiveVideoFile(filePath);
     setProcessedVideoPath(null);
   }, []);
 
@@ -67,19 +77,19 @@ function App() {
   }, []);
 
   const handleClearFiles = useCallback(() => {
-    setVideoFile(null);
+    setActiveVideoFile(null);
     setLutFiles([]);
     setProcessedVideoPath(null);
   }, []);
 
   const handleProcessVideo = useCallback(async () => {
-    if (!videoFile || lutFiles.length === 0) {
+    if (!activeVideoFile || lutFiles.length === 0) {
       console.error('需要选择视频文件和LUT文件');
       return;
     }
 
     const taskId = `task_${Date.now()}`;
-    const fileName = videoFile.split('/').pop() || videoFile.split('\\').pop() || 'unknown';
+    const fileName = activeVideoFile.split('/').pop() || activeVideoFile.split('\\').pop() || 'unknown';
     const newTask: ProcessingTask = {
       id: taskId,
       name: `处理 ${fileName}`,
@@ -105,10 +115,10 @@ function App() {
       });
 
       // 调用后端处理视频
-      console.log('开始处理视频:', { videoFile, lutFiles, settings });
+      console.log('开始处理视频:', { activeVideoFile, lutFiles, settings });
       const result = await invoke('start_video_processing', {
         request: {
-          input_path: videoFile,
+          input_path: activeVideoFile,
           output_path: '', // 让后端自动生成输出路径
           lut_paths: lutFiles,
           intensity: settings.lut_intensity / 100.0, // 转换为0-1范围
@@ -125,7 +135,7 @@ function App() {
         console.log('开始真实FFmpeg处理，任务ID:', resultWithOutputPath.task_id);
         console.log('预期输出路径:', resultWithOutputPath.output_path);
 
-        let finalOutputPath = resultWithOutputPath.output_path || `${videoFile}_processed.mp4`;
+        let finalOutputPath = resultWithOutputPath.output_path || `${activeVideoFile}_processed.mp4`;
         let completed = false;
 
         // 轮询后端真实任务进度
@@ -197,7 +207,7 @@ function App() {
         )
       );
     }
-  }, [videoFile, lutFiles, settings]);
+  }, [activeVideoFile, lutFiles, settings]);
 
   const handleCancelTask = useCallback((taskId: string) => {
     setProcessingTasks(prev => 
@@ -252,6 +262,7 @@ function App() {
           <div className="upload-section">
             <FileUpload
               onVideoSelect={handleVideoSelect}
+              onActiveVideoChange={handleActiveVideoChange}
               onLutSelect={handleLutSelect}
               disabled={processingTasks.some(task => task.status === 'processing')}
             />
@@ -259,7 +270,7 @@ function App() {
 
           <div className="preview-section">
              <VideoPreview
-               videoPath={videoFile || undefined}
+               videoPath={activeVideoFile || undefined}
                lutPaths={lutFiles}
                onProcessingStart={() => console.log('Processing started')}
                onProcessingComplete={(outputPath) => setProcessedVideoPath(outputPath)}
@@ -283,7 +294,7 @@ function App() {
             <button
               className="btn-primary"
               onClick={handleProcessVideo}
-              disabled={!videoFile || lutFiles.length === 0 || processingTasks.some(task => task.status === 'processing')}
+              disabled={!activeVideoFile || lutFiles.length === 0 || processingTasks.some(task => task.status === 'processing')}
               style={{ marginLeft: '10px' }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">

@@ -1,8 +1,20 @@
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
 /* 根容器：改用留白底色，背景交由 body 控制 */
 .app {
   /* min-height: 100vh; */
   background: transparent;
   padding: 24px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .app-header {
@@ -29,22 +41,28 @@
 .app-main {
   max-width: 1400px;
   margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .app-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
   grid-template-areas:
     "upload preview"
     "settings status";
+  height: 100%;
+  min-height: 0;
 }
 
-.upload-section { grid-area: upload; }
-.preview-section { grid-area: preview; }
-.settings-section { grid-area: settings; }
-.status-section { grid-area: status; }
+.upload-section { grid-area: upload; min-height: 0; }
+.preview-section { grid-area: preview; min-height: 0; overflow: hidden; }
+.settings-section { grid-area: settings; min-height: 0; }
+.status-section { grid-area: status; min-height: 0; overflow: auto; }
 
 /* 响应式设计 */
 @media (max-width: 1200px) {
@@ -55,7 +73,13 @@
       "preview"
       "settings"
       "status";
+    grid-template-rows: auto;
+    height: auto;
   }
+
+  body { overflow: auto; }
+  .app { overflow: auto; height: auto; }
+  .app-main { overflow: visible; }
 }
 
 @media (max-width: 768px) {

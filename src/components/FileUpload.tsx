@@ -4,7 +4,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import './FileUpload.css';
 
 interface FileUploadProps {
-  onVideoSelect: (filePath: string | null) => void;
+  onVideoSelect: (filePaths: string[]) => void;
+  onActiveVideoChange: (filePath: string | null) => void;
   onLutSelect: (filePaths: string[]) => void;
   disabled?: boolean;
 }
@@ -18,10 +19,12 @@ interface FileInfo {
 
 const FileUpload: React.FC<FileUploadProps> = ({
   onVideoSelect,
+  onActiveVideoChange,
   onLutSelect,
   disabled = false
 }) => {
-  const [videoFile, setVideoFile] = useState<FileInfo | null>(null);
+  const [videoFiles, setVideoFiles] = useState<FileInfo[]>([]);
+  const [activeVideoPath, setActiveVideoPath] = useState<string | null>(null);
   const [lutFiles, setLutFiles] = useState<FileInfo[]>([]);
   const [dragOver, setDragOver] = useState<'video' | 'lut' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,19 +34,31 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const lutInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleVideoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fileInfo: FileInfo = {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const selectedInfos: FileInfo[] = files.map(file => ({
       name: file.name,
       path: (file as any).path || file.name,
       size: file.size,
       type: file.type
-    };
-    setVideoFile(fileInfo);
-    onVideoSelect(fileInfo.path);
+    }));
+
+    setVideoFiles(prev => {
+      const next = [...prev];
+      for (const info of selectedInfos) {
+        if (!next.some(x => x.path === info.path)) next.push(info);
+      }
+
+      const nextActive = activeVideoPath ?? (next[0]?.path ?? null);
+      setActiveVideoPath(nextActive);
+      onActiveVideoChange(nextActive);
+      onVideoSelect(next.map(x => x.path));
+      return next;
+    });
     // reset input so selecting the same file again still triggers change
     e.target.value = '';
-  }, [onVideoSelect]);
+  }, [activeVideoPath, onActiveVideoChange, onVideoSelect]);
 
   const handleLutInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -74,7 +89,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
     try {
       setLoading(true);
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{
           name: 'Video Files',
           extensions: ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v']
@@ -82,24 +97,37 @@ const FileUpload: React.FC<FileUploadProps> = ({
       });
 
       if (selected) {
-        const filePath = Array.isArray(selected) ? selected[0] : selected;
-        const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
-        try {
-          const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
-          const file: FileInfo = {
-            name: fileName,
-            path: filePath,
-            size: fileInfo.size,
-            type: fileInfo.type
-          };
-          setVideoFile(file);
-          onVideoSelect(filePath);
-        } catch (error) {
-          console.error('Failed to get file info:', error);
-          const file: FileInfo = { name: fileName, path: filePath };
-          setVideoFile(file);
-          onVideoSelect(filePath);
-        }
+        const filePaths = Array.isArray(selected) ? selected : [selected];
+        const infos = await Promise.all(
+          filePaths.map(async (filePath) => {
+            const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'Unknown';
+            try {
+              const fileInfo = await invoke<{ size: number; type: string }>('get_file_info', { path: filePath });
+              return {
+                name: fileName,
+                path: filePath,
+                size: fileInfo.size,
+                type: fileInfo.type
+              } satisfies FileInfo;
+            } catch (error) {
+              console.error('Failed to get file info:', error);
+              return { name: fileName, path: filePath } satisfies FileInfo;
+            }
+          })
+        );
+
+        setVideoFiles(prev => {
+          const next = [...prev];
+          for (const info of infos) {
+            if (!next.some(x => x.path === info.path)) next.push(info);
+          }
+
+          const nextActive = activeVideoPath ?? (next[0]?.path ?? null);
+          setActiveVideoPath(nextActive);
+          onActiveVideoChange(nextActive);
+          onVideoSelect(next.map(x => x.path));
+          return next;
+        });
       } else {
         // user cancelled or not available, try fallback input
         videoInputRef.current?.click();
@@ -111,7 +139,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [disabled, loading, onVideoSelect]);
+  }, [activeVideoPath, disabled, loading, onActiveVideoChange, onVideoSelect]);
 
   // 选择LUT文件
   const selectLutFile = useCallback(async () => {
@@ -189,20 +217,30 @@ const FileUpload: React.FC<FileUploadProps> = ({
     if (files.length === 0) return;
 
     if (type === 'video') {
-      const file = files[0];
-      const filePath = (file as any).path || file.name;
       const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v'];
-      const extension = file.name.split('.').pop()?.toLowerCase();
-      
-      if (extension && videoExtensions.includes(extension)) {
-        const fileInfo: FileInfo = {
+      const selectedInfos: FileInfo[] = [];
+      for (const file of files) {
+        const extension = file.name.split('.').pop()?.toLowerCase();
+        if (!extension || !videoExtensions.includes(extension)) continue;
+        selectedInfos.push({
           name: file.name,
-          path: filePath,
+          path: (file as any).path || file.name,
           size: file.size,
           type: file.type
-        };
-        setVideoFile(fileInfo);
-        onVideoSelect(filePath);
+        });
+      }
+      if (selectedInfos.length > 0) {
+        setVideoFiles(prev => {
+          const next = [...prev];
+          for (const info of selectedInfos) {
+            if (!next.some(x => x.path === info.path)) next.push(info);
+          }
+          const nextActive = activeVideoPath ?? (next[0]?.path ?? null);
+          setActiveVideoPath(nextActive);
+          onActiveVideoChange(nextActive);
+          onVideoSelect(next.map(x => x.path));
+          return next;
+        });
       }
     } else if (type === 'lut') {
       const lutExtensions = ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look'];
@@ -228,7 +266,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         });
       }
     }
-  }, [disabled, loading, onVideoSelect, onLutSelect]);
+  }, [activeVideoPath, disabled, loading, onActiveVideoChange, onVideoSelect, onLutSelect]);
 
   // 格式化文件大小
   const formatFileSize = (bytes?: number): string => {
@@ -247,9 +285,22 @@ const FileUpload: React.FC<FileUploadProps> = ({
   };
 
   // 清除文件
-  const clearVideoFile = () => {
-    setVideoFile(null);
-    onVideoSelect(null);
+  const removeVideoAt = (index: number) => {
+    setVideoFiles(prev => {
+      const removed = prev[index];
+      const next = prev.filter((_, i) => i !== index);
+      const nextActive =
+        removed?.path && activeVideoPath === removed.path ? (next[0]?.path ?? null) : activeVideoPath;
+      setActiveVideoPath(nextActive);
+      onActiveVideoChange(nextActive);
+      onVideoSelect(next.map(x => x.path));
+      return next;
+    });
+  };
+
+  const selectActiveVideo = (path: string) => {
+    setActiveVideoPath(path);
+    onActiveVideoChange(path);
   };
 
   const removeLutAt = (index: number) => {
@@ -279,6 +330,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         type="file"
         accept=".mp4,.mov,.avi,.mkv,.wmv,.flv,.webm,.m4v"
         style={{ display: 'none' }}
+        multiple
         onChange={handleVideoInputChange}
       />
       <input
@@ -295,7 +347,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         
         {/* 视频文件上传区域 */}
         <div 
-          className={`upload-area ${
+          className={`upload-area video-upload-area ${
             dragOver === 'video' ? 'drag-over' : ''
           } ${disabled ? 'disabled' : ''}`}
           onDragOver={(e) => handleDragOver(e, 'video')}
@@ -304,27 +356,57 @@ const FileUpload: React.FC<FileUploadProps> = ({
           onClick={selectVideoFile}
         >
           <div className="upload-content">
-            {videoFile ? (
-              <div className="file-info">
-                <div className="file-icon video-icon">🎬</div>
-                <div className="file-details">
-                  <div className="file-name">{videoFile.name}</div>
-                  <div className="file-meta">
-                    {videoFile.size && (
-                      <span className="file-size">{formatFileSize(videoFile.size)}</span>
-                    )}
+            {videoFiles.length > 0 ? (
+              <div className="video-list">
+                {videoFiles.map((videoFile, index) => (
+                  <div
+                    className={`video-item ${activeVideoPath === videoFile.path ? 'active' : ''}`}
+                    key={videoFile.path}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectActiveVideo(videoFile.path);
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div className="file-icon video-icon">🎬</div>
+                    <div className="file-details">
+                      <div className="file-name">{videoFile.name}</div>
+                      <div className="file-meta">
+                        {videoFile.size && (
+                          <span className="file-size">{formatFileSize(videoFile.size)}</span>
+                        )}
+                        {activeVideoPath === videoFile.path && (
+                          <span className="badge">预览中</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="video-actions">
+                      <button
+                        className="icon-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectActiveVideo(videoFile.path);
+                        }}
+                        disabled={disabled || activeVideoPath === videoFile.path}
+                        aria-label="设为预览"
+                      >
+                        ▶
+                      </button>
+                      <button
+                        className="clear-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeVideoAt(index);
+                        }}
+                        disabled={disabled}
+                        aria-label="移除"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <button 
-                  className="clear-button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    clearVideoFile();
-                  }}
-                  disabled={disabled}
-                >
-                  ✕
-                </button>
+                ))}
               </div>
             ) : (
               <div className="upload-placeholder">
@@ -342,7 +424,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
 
         {/* LUT 文件上传区域 */}
         <div 
-          className={`upload-area ${
+          className={`upload-area lut-upload-area ${
             dragOver === 'lut' ? 'drag-over' : ''
           } ${disabled ? 'disabled' : ''}`}
           onDragOver={(e) => handleDragOver(e, 'lut')}
