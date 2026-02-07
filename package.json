@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
+    "tauri:build:lite": "tauri build --config src-tauri/tauri.lite.conf.json",
+    "tauri:build:full:win": "tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.full.conf.json",
+    "tauri:build:full:mac": "tauri build --target universal-apple-darwin --config src-tauri/tauri.full.conf.json"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.12",

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "auto-apply-lut-full",
+  "identifier": "com.kyokodf.auto-apply-lut.full",
+  "build": {
+    "beforeBundleCommand": "node scripts/prepare-ffmpeg.mjs"
+  },
+  "bundle": {
+    "resources": ["resources/**"]
+  }
+}
+

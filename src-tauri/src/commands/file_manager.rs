@@ -183,51 +183,36 @@ pub async fn open_folder(path: String) -> Result<String, String> {
 fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, String> {
     let ffplay_name = if cfg!(target_os = "windows") { "ffplay.exe" } else { "ffplay" };
 
-    let mut candidates: Vec<String> = Vec::new();
-
+    // 1) If user configured an ffmpeg path, try to resolve ffplay in the same directory first.
     if let Some(ffmpeg_path) = cfg_ffmpeg_path.filter(|s| !s.trim().is_empty()) {
         let pb = PathBuf::from(&ffmpeg_path);
         if pb.is_absolute() {
-            if pb.is_file() {
-                if let Some(parent) = pb.parent() {
-                    candidates.push(parent.join(ffplay_name).to_string_lossy().to_string());
-                }
-            } else if let Some(parent) = pb.parent() {
-                candidates.push(parent.join(ffplay_name).to_string_lossy().to_string());
+            let ffplay_candidate = if pb.is_file() {
+                pb.parent()
+                    .map(|p| p.join(ffplay_name))
+                    .unwrap_or_else(|| PathBuf::from(ffplay_name))
+            } else {
+                pb.join(ffplay_name)
+            };
+            if ffplay_candidate.exists() {
+                return Ok(ffplay_candidate.to_string_lossy().to_string());
             }
         } else {
-            candidates.push(ffplay_name.to_string());
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        candidates.extend([
-            "C:\\ffmpeg\\bin\\ffplay.exe".to_string(),
-            "C:\\Program Files\\ffmpeg\\bin\\ffplay.exe".to_string(),
-            "ffplay.exe".to_string(),
-        ]);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        candidates.extend([
-            "/opt/homebrew/bin/ffplay".to_string(),
-            "/usr/local/bin/ffplay".to_string(),
-            "/usr/bin/ffplay".to_string(),
-            "ffplay".to_string(),
-        ]);
-    }
-
-    for cand in candidates {
-        let pb = PathBuf::from(&cand);
-        if pb.is_absolute() {
-            if pb.exists() {
-                return Ok(cand);
+            // Relative path means "use PATH". ffplay should also be in PATH.
+            if Command::new(ffplay_name).arg("-version").output().is_ok() {
+                return Ok(ffplay_name.to_string());
             }
-        } else if Command::new(&cand).arg("-version").output().is_ok() {
-            return Ok(cand);
         }
+    }
+
+    // 2) Use shared discovery (bundled resources for Full builds, or system paths for Lite builds).
+    if let Ok(p) = crate::core::ffmpeg::discover_ffplay_path() {
+        return Ok(p.to_string_lossy().to_string());
+    }
+
+    // 3) Final fallback: PATH
+    if Command::new(ffplay_name).arg("-version").output().is_ok() {
+        return Ok(ffplay_name.to_string());
     }
 
     Err("ffplay not found. Please install FFmpeg with ffplay or add it to PATH.".to_string())

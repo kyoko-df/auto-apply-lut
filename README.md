@@ -104,7 +104,9 @@ auto-apply-lut/
 
 - **Node.js**: >= 18.0.0
 - **Rust**: >= 1.70.0
-- **FFmpeg**: >= 4.0.0
+- **FFmpeg**:
+  - **Lite 版**：需要用户自行安装（>= 4.0.0）并加入 `PATH`，或在应用设置中指定 `ffmpeg` 可执行文件路径
+  - **Full 版**：安装包内置 `ffmpeg + ffprobe + ffplay`，无需用户单独安装
 - **操作系统**: Windows 10+, macOS 10.15+, Linux (Ubuntu 20.04+)
 
 ### 安装依赖
@@ -156,6 +158,32 @@ npm run tauri build
 
 # 构建产物位于 src-tauri/target/release/bundle/
 ```
+
+### Full / Lite 两种发行版构建
+
+本项目支持两种构建口味：
+- **Lite（默认）**：不内置 FFmpeg，运行时从系统 `PATH`/常见路径发现，或由用户在设置里指定
+- **Full**：内置 `ffmpeg + ffprobe + ffplay`（用于视频处理/探测/预览）
+
+#### Lite（可选改名）
+
+```bash
+pnpm tauri build --config src-tauri/tauri.lite.conf.json
+```
+
+#### Full（需要准备二进制资源）
+
+将 FFmpeg 二进制放置到 `src-tauri/resources/bin/`（结构见 `src-tauri/resources/bin/README.md`），然后构建：
+
+```bash
+# Windows x64
+pnpm tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.full.conf.json
+
+# macOS universal（arm64 + x86_64）
+pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.full.conf.json
+```
+
+> Full 构建会在打包前运行 `node scripts/prepare-ffmpeg.mjs` 校验二进制是否齐全且可执行。
 
 ### 项目运行状态
 

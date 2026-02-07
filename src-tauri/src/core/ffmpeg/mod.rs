@@ -26,6 +26,10 @@ pub fn discover_ffprobe_path() -> AppResult<PathBuf> {
     FFmpegManager::find_ffprobe_executable()
 }
 
+pub fn discover_ffplay_path() -> AppResult<PathBuf> {
+    FFmpegManager::find_ffplay_executable()
+}
+
 /// FFmpeg管理器
 pub struct FFmpegManager {
     /// FFmpeg可执行文件路径
@@ -84,8 +88,8 @@ impl FFmpegManager {
         // 2) 常见安装路径
         #[cfg(target_os = "windows")]
         let common_paths: &[&str] = &[
-            "C\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
-            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
+            "C:\\ffmpeg\\bin\\ffmpeg.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
             "ffmpeg",
         ];
         #[cfg(not(target_os = "windows"))]
@@ -122,8 +126,8 @@ impl FFmpegManager {
         // 2) 常见安装路径
         #[cfg(target_os = "windows")]
         let common_paths: &[&str] = &[
-            "C\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
-            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
+            "C:\\ffmpeg\\bin\\ffprobe.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe",
             "ffprobe",
         ];
         #[cfg(not(target_os = "windows"))]
@@ -146,6 +150,50 @@ impl FFmpegManager {
         Err(AppError::FFmpeg("FFprobe executable not found".to_string()))
     }
 
+    /// 查找FFplay可执行文件
+    fn find_ffplay_executable() -> AppResult<PathBuf> {
+        // 0) 环境变量优先
+        if let Ok(p) = std::env::var("FFPLAY_PATH") {
+            let pb = PathBuf::from(&p);
+            if pb.exists() || Self::check_command_works(&p) {
+                return Ok(pb);
+            }
+        }
+
+        // 1) 打包的资源目录
+        if let Some(pb) = Self::find_packaged_tool("ffplay") {
+            return Ok(pb);
+        }
+
+        // 2) 常见安装路径
+        #[cfg(target_os = "windows")]
+        let common_paths: &[&str] = &[
+            "C:\\ffmpeg\\bin\\ffplay.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffplay.exe",
+            "ffplay",
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let common_paths: &[&str] = &[
+            "/usr/local/bin/ffplay",
+            "/usr/bin/ffplay",
+            "/opt/homebrew/bin/ffplay",
+            "ffplay",
+        ];
+
+        for p in common_paths {
+            let pb = PathBuf::from(p);
+            if pb.is_absolute() {
+                if pb.exists() {
+                    return Ok(pb);
+                }
+            } else if Self::check_command_works(p) {
+                return Ok(pb);
+            }
+        }
+
+        Err(AppError::FFmpeg("FFplay executable not found".to_string()))
+    }
+
     /// 检查命令在系统上是否可调用（-version 成功退出）
     fn check_command_works(command: &str) -> bool {
         Command::new(command)
@@ -163,8 +211,25 @@ impl FFmpegManager {
 
         #[cfg(target_os = "windows")]
         let candidates = vec![
-            exe_dir.join("resources").join("bin").join("windows").join(format!("{}.exe", tool)),
-            exe_dir.join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir
+                .join("resources")
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
+            // when bundle.resources includes a top-level "resources/" directory
+            exe_dir
+                .join("resources")
+                .join("resources")
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
+            exe_dir
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
             exe_dir.join(format!("{}.exe", tool)),
         ];
 
@@ -173,8 +238,14 @@ impl FFmpegManager {
             // app.app/Contents/MacOS/<exe>
             let resources = exe_dir.join("../../Resources");
             let resources = resources.canonicalize().unwrap_or(resources);
+            let arch = std::env::consts::ARCH;
             vec![
+                // arch-specific first (for universal apps)
+                resources.join("bin").join("macos").join(arch).join(tool),
+                resources.join("resources").join("bin").join("macos").join(arch).join(tool),
+                // legacy / fallback locations
                 resources.join("bin").join("macos").join(tool),
+                resources.join("resources").join("bin").join("macos").join(tool),
                 resources.join(tool),
                 exe_dir.join(tool),
             ]
@@ -183,6 +254,7 @@ impl FFmpegManager {
         #[cfg(target_os = "linux")]
         let candidates = vec![
             exe_dir.join("resources").join("bin").join("linux").join(tool),
+            exe_dir.join("resources").join("resources").join("bin").join("linux").join(tool),
             exe_dir.join("bin").join("linux").join(tool),
             exe_dir.join(tool),
         ];

@@ -59,6 +59,7 @@ interface FfmpegInfo {
   static_linked: boolean;
   library_versions?: Record<string, string> | null;
   binary_version?: string | null;
+  binary_path?: string | null;
 }
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
@@ -95,6 +96,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     { state: 'unknown' | 'ok' | 'missing' | 'error'; message?: string; info?: FfmpegInfo }
   >({ state: 'unknown' });
   const [savingFfmpeg, setSavingFfmpeg] = useState(false);
+
+  const ffmpegInfoMessage = useCallback((info: FfmpegInfo) => {
+    if (info.mode === 'native') return '已链接本地库';
+    const version = info.binary_version?.trim() ? info.binary_version.trim() : 'FFmpeg';
+    const location = info.binary_path?.trim() ? ` | ${info.binary_path.trim()}` : '';
+    return `${version}${location}`;
+  }, []);
 
   // 质量预设选项
   const qualityPresets: QualityPreset[] = [
@@ -193,13 +201,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       // 检测 FFmpeg 可用性
       try {
         const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
-        setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+        setFfmpegStatus({ state: 'ok', info, message: ffmpegInfoMessage(info) });
       } catch (e) {
         setFfmpegStatus({ state: 'missing', message: '未检测到可用的 FFmpeg，可设置自定义路径' });
         setIsExpanded(true); // 引导用户展开设置
       }
     })();
-  }, [loadAvailableCodecs]);
+  }, [loadAvailableCodecs, ffmpegInfoMessage]);
 
   // 设置变化时通知父组件
   useEffect(() => {
@@ -257,7 +265,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       // 保存后立即重新检测
       try {
         const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
-        setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+        setFfmpegStatus({ state: 'ok', info, message: ffmpegInfoMessage(info) });
       } catch (e) {
         setFfmpegStatus({ state: 'error', message: '保存成功，但仍无法检测到 FFmpeg，请确认路径是否正确' });
       }
@@ -272,11 +280,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const testDetectFfmpeg = useCallback(async () => {
     try {
       const info = await safeInvoke<FfmpegInfo>('get_ffmpeg_info');
-      setFfmpegStatus({ state: 'ok', info, message: info.binary_version ?? '已链接本地库' });
+      setFfmpegStatus({ state: 'ok', info, message: ffmpegInfoMessage(info) });
     } catch (e) {
       setFfmpegStatus({ state: 'missing', message: '未检测到可用的 FFmpeg，请设置自定义路径' });
     }
-  }, []);
+  }, [ffmpegInfoMessage]);
 
   const resetToDefaults = useCallback(() => {
     setSettings({ ...DEFAULT_SETTINGS });

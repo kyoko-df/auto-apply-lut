@@ -176,8 +176,8 @@ impl VideoManager {
             "/usr/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
             "/opt/homebrew/bin/ffmpeg",
-            "C\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
-            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffmpeg.exe",
+            "C:\\ffmpeg\\bin\\ffmpeg.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
         ];
 
         for path in &common_paths {
@@ -209,8 +209,8 @@ impl VideoManager {
             "/usr/bin/ffprobe",
             "/usr/local/bin/ffprobe",
             "/opt/homebrew/bin/ffprobe",
-            "C\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
-            "C\\\\Program Files\\\\ffmpeg\\\\bin\\\\ffprobe.exe",
+            "C:\\ffmpeg\\bin\\ffprobe.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe",
         ];
 
         for path in &common_paths {
@@ -242,8 +242,24 @@ impl VideoManager {
 
         #[cfg(target_os = "windows")]
         let candidates = vec![
-            exe_dir.join("resources").join("bin").join("windows").join(format!("{}.exe", tool)),
-            exe_dir.join("bin").join("windows").join(format!("{}.exe", tool)),
+            exe_dir
+                .join("resources")
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
+            exe_dir
+                .join("resources")
+                .join("resources")
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
+            exe_dir
+                .join("bin")
+                .join("windows")
+                .join("x86_64")
+                .join(format!("{}.exe", tool)),
             exe_dir.join(format!("{}.exe", tool)),
         ];
 
@@ -251,8 +267,12 @@ impl VideoManager {
         let candidates = {
             let resources = exe_dir.join("../../Resources");
             let resources = resources.canonicalize().unwrap_or(resources);
+            let arch = std::env::consts::ARCH;
             vec![
+                resources.join("bin").join("macos").join(arch).join(tool),
+                resources.join("resources").join("bin").join("macos").join(arch).join(tool),
                 resources.join("bin").join("macos").join(tool),
+                resources.join("resources").join("bin").join("macos").join(tool),
                 resources.join(tool),
                 exe_dir.join(tool),
             ]
@@ -261,6 +281,7 @@ impl VideoManager {
         #[cfg(target_os = "linux")]
         let candidates = vec![
             exe_dir.join("resources").join("bin").join("linux").join(tool),
+            exe_dir.join("resources").join("resources").join("bin").join("linux").join(tool),
             exe_dir.join("bin").join("linux").join(tool),
             exe_dir.join(tool),
         ];

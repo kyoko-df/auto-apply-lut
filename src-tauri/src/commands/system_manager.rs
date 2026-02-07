@@ -271,6 +271,7 @@ pub struct FfmpegInfo {
     pub static_linked: bool,          // 是否为静态链接（编译期）
     pub library_versions: Option<HashMap<String, String>>, // 本地链接库版本（native 时）
     pub binary_version: Option<String>,                    // 外部可执行版本（external 时）
+    pub binary_path: Option<String>,                       // 外部可执行路径（external 时）
 }
 
 #[tauri::command]
@@ -324,6 +325,7 @@ pub async fn get_ffmpeg_info(
             static_linked: true,
             library_versions: Some(libs),
             binary_version: None,
+            binary_path: None,
         });
     }
 
@@ -331,12 +333,19 @@ pub async fn get_ffmpeg_info(
     #[cfg(not(feature = "ffmpeg_native"))]
     {
         let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
-        let ffmpeg_bin = cfg
+        let ffmpeg_bin = if let Some(p) = cfg
             .get_config()
             .ffmpeg_path
             .clone()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "ffmpeg".to_string());
+        {
+            p
+        } else {
+            crate::core::ffmpeg::discover_ffmpeg_path()
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .to_string()
+        };
 
         let output = std::process::Command::new(&ffmpeg_bin)
             .arg("-version")
@@ -359,6 +368,7 @@ pub async fn get_ffmpeg_info(
             static_linked: false,
             library_versions: None,
             binary_version: Some(first_line),
+            binary_path: Some(ffmpeg_bin),
         })
     }
 }
