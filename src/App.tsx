@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import FileUpload from './components/FileUpload';
 import VideoPreview from './components/VideoPreview';
@@ -56,6 +56,27 @@ function App() {
     preserve_metadata: true,
     output_directory: ''
   });
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('auto-apply-lut:lastLuts:v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const list = parsed.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+      if (list.length > 0) setLutFiles(list);
+    } catch {
+      return;
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('auto-apply-lut:lastLuts:v1', JSON.stringify(lutFiles));
+    } catch {
+      return;
+    }
+  }, [lutFiles]);
 
   const handleVideoSelect = useCallback((filePaths: string[]) => {
     setProcessedVideoPath(null);
@@ -264,6 +285,7 @@ function App() {
               onVideoSelect={handleVideoSelect}
               onActiveVideoChange={handleActiveVideoChange}
               onLutSelect={handleLutSelect}
+              lutPaths={lutFiles}
               disabled={processingTasks.some(task => task.status === 'processing')}
             />
           </div>

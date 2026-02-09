@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import './FileUpload.css';
@@ -7,6 +7,7 @@ interface FileUploadProps {
   onVideoSelect: (filePaths: string[]) => void;
   onActiveVideoChange: (filePath: string | null) => void;
   onLutSelect: (filePaths: string[]) => void;
+  lutPaths?: string[];
   disabled?: boolean;
 }
 
@@ -21,6 +22,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
   onVideoSelect,
   onActiveVideoChange,
   onLutSelect,
+  lutPaths = [],
   disabled = false
 }) => {
   const [videoFiles, setVideoFiles] = useState<FileInfo[]>([]);
@@ -32,6 +34,23 @@ const FileUpload: React.FC<FileUploadProps> = ({
   // Fallback: hidden inputs for browser env
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const lutInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setLutFiles(prev => {
+      const current = prev.map(x => x.path);
+      const sameLength = current.length === lutPaths.length;
+      const sameOrder = sameLength && current.every((p, i) => p === lutPaths[i]);
+      if (sameOrder) return prev;
+
+      const byPath = new Map(prev.map(x => [x.path, x] as const));
+      return lutPaths.map(path => {
+        const existing = byPath.get(path);
+        if (existing) return existing;
+        const name = path.split('/').pop() || path.split('\\').pop() || 'Unknown';
+        return { name, path } satisfies FileInfo;
+      });
+    });
+  }, [lutPaths]);
 
   const handleVideoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
