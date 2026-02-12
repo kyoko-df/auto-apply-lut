@@ -117,3 +117,24 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("启动Tauri应用时发生错误");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_interface_greet() {
+        let text = greet("Codex");
+        assert!(text.contains("Codex"));
+        assert!(text.contains("greeted from Rust"));
+    }
+
+    #[test]
+    fn command_interface_get_app_info() {
+        let response = get_app_info();
+        assert!(response.success);
+        let data = response.data.expect("missing app info data");
+        assert_eq!(data["name"], "Auto Apply LUT");
+        assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+    }
+}

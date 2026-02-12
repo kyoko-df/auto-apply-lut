@@ -6,7 +6,6 @@
     "beforeBundleCommand": "node scripts/prepare-ffmpeg.mjs"
   },
   "bundle": {
-    "resources": ["resources/**"]
+    "resources": ["resources/**/*"]
   }
 }
-

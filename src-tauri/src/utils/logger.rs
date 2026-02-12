@@ -4,6 +4,7 @@ use crate::types::error::{AppError, AppResult};
 use crate::utils::path_utils::get_app_data_dir;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// 日志级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,22 +168,17 @@ impl Logger {
 }
 
 /// 全局日志记录器实例
-static mut GLOBAL_LOGGER: Option<Logger> = None;
-static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+static GLOBAL_LOGGER: OnceLock<Option<Logger>> = OnceLock::new();
 
 /// 初始化全局日志记录器
 pub fn init_logger(level: LogLevel) -> AppResult<()> {
-    LOGGER_INIT.call_once(|| {
-        unsafe {
-            GLOBAL_LOGGER = Logger::new(level).ok();
-        }
-    });
+    GLOBAL_LOGGER.get_or_init(|| Logger::new(level).ok());
     Ok(())
 }
 
 /// 获取全局日志记录器
 fn get_global_logger() -> Option<&'static Logger> {
-    unsafe { GLOBAL_LOGGER.as_ref() }
+    GLOBAL_LOGGER.get().and_then(|logger| logger.as_ref())
 }
 
 /// 记录错误日志

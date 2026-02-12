@@ -10,3 +10,6 @@ pub mod batch_manager;
 
 // 重新导出命令函数
 pub use system_manager::get_available_codecs;
+
+#[cfg(test)]
+mod command_interfaces_tests;
