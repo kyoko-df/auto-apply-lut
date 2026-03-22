@@ -6,40 +6,77 @@ body {
   overflow: hidden;
 }
 
-/* 根容器：改用留白底色，背景交由 body 控制 */
 .app {
-  /* min-height: 100vh; */
-  background: transparent;
   padding: 24px;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  gap: 20px;
 }
 
 .app-header {
-  text-align: center;
-  margin-bottom: 32px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.header-brand h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.3rem);
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--color-fg);
 }
 
-.app-header h1 {
-  margin: 0 0 8px 0;
-  font-size: 2.25rem;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  text-shadow: none;
+.header-brand p {
+  margin: 8px 0 0;
+  font-size: 0.95rem;
+  color: var(--color-fg-subtle);
 }
 
-.app-header p {
-  margin: 0;
-  font-size: 1rem;
+.header-metrics {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.metric-chip {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-card);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  backdrop-filter: blur(16px) saturate(120%);
+  box-shadow: var(--shadow-soft);
+  padding: 6px 12px;
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 76px;
+}
+
+.metric-chip.is-busy {
+  border-color: color-mix(in oklab, var(--color-warning), black 12%);
+}
+
+.metric-label {
+  font-size: 0.7rem;
+  line-height: 1;
   color: var(--color-fg-subtle);
-  font-weight: 400;
+}
+
+.metric-value {
+  margin-top: 4px;
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: var(--color-fg);
 }
 
 .app-main {
-  max-width: 1400px;
+  max-width: 1440px;
   margin: 0 auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -48,106 +85,258 @@ body {
 }
 
 .app-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
-  grid-template-areas:
-    "upload preview"
-    "settings status";
   height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.9fr) auto minmax(0, 1fr);
+  grid-template-areas:
+    "uploadVideo preview"
+    "uploadLut preview"
+    "settings preview"
+    "status status";
+  gap: 16px;
+}
+
+.app-grid > .upload-video-section,
+.app-grid > .upload-lut-section,
+.app-grid > .preview-section,
+.app-grid > .settings-section,
+.app-grid > .status-section {
   min-height: 0;
 }
 
-.upload-section { grid-area: upload; min-height: 0; }
-.preview-section { grid-area: preview; min-height: 0; overflow: hidden; }
-.settings-section { grid-area: settings; min-height: 0; }
-.status-section { grid-area: status; min-height: 0; overflow: auto; }
-
-/* 响应式设计 */
-@media (max-width: 1200px) {
-  .app-grid {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "upload"
-      "preview"
-      "settings"
-      "status";
-    grid-template-rows: auto;
-    height: auto;
-  }
-
-  body { overflow: auto; }
-  .app { overflow: auto; height: auto; }
-  .app-main { overflow: visible; }
+.app-grid > .upload-video-section {
+  grid-area: uploadVideo;
+  overflow: hidden;
 }
 
-@media (max-width: 768px) {
-  .app { padding: 16px; }
-  .app-header { margin-bottom: 24px; }
-  .app-header h1 { font-size: 2rem; }
-  .app-header p { font-size: 0.95rem; }
-  .app-grid { gap: 16px; }
+.app-grid > .upload-lut-section {
+  grid-area: uploadLut;
+  overflow: hidden;
 }
 
-@media (max-width: 480px) {
-  .app { padding: 12px; }
-  .app-header { margin-bottom: 20px; }
-  .app-header h1 { font-size: 1.75rem; }
-  .app-header p { font-size: 0.9rem; }
-  .app-grid { gap: 12px; }
+.app-grid > .preview-section {
+  grid-area: preview;
+  overflow: hidden;
+  padding: 16px;
 }
 
-/* 设置按钮样式 */
-.settings-section {
+.app-grid > .settings-section {
+  grid-area: settings;
   display: flex;
-  justify-content: center;
-  margin: 16px 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+}
+
+.app-grid > .status-section {
+  grid-area: status;
+  overflow: auto;
+  padding: 16px;
+}
+
+.settings-summary h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-fg);
+}
+
+.settings-summary p {
+  margin: 6px 0 0;
+  color: var(--color-fg-subtle);
+  font-size: 0.88rem;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .btn-settings {
-  display: flex;
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-elevated);
+  color: var(--color-primary);
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 12px 20px;
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 10px;
-  color: #007AFF;
-  font-size: 14px;
-  font-weight: 500;
+  padding: 10px 16px;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: transform var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard), filter var(--duration-fast) var(--ease-standard);
 }
 
-.btn-settings:hover {
-  background: rgba(255, 255, 255, 0.9);
+.btn-settings:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  filter: brightness(1.02);
+  box-shadow: var(--shadow-soft);
 }
 
-.btn-settings:active {
+.btn-settings:active:not(:disabled) {
   transform: translateY(0);
-  background: rgba(255, 255, 255, 0.7);
+}
+
+.btn-settings:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary), white 76%);
 }
 
 .btn-settings:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: not-allowed;
-  transform: none;
 }
 
-.btn-settings svg {
-  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+.processed-video-info {
+  margin-top: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in oklab, var(--color-primary), white 55%);
+  background: color-mix(in oklab, var(--surface-card), var(--color-primary) 8%);
+  padding: 14px;
 }
 
-.btn-settings:hover svg {
-  transform: rotate(45deg);
+.processed-video-info h4 {
+  margin: 0;
+  font-size: 0.96rem;
+  color: var(--color-fg);
 }
 
-/* 深色模式支持：背景仍由 body 控制，这里无需额外渐变 */
-@media (prefers-color-scheme: dark) {
-  .app { background: transparent; }
+.processed-video-info p {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
+  color: var(--color-fg-subtle);
+  word-break: break-all;
+}
+
+.processed-video-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.output-action {
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-standard), filter var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.output-action:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.output-action:active {
+  transform: translateY(0);
+}
+
+.output-action:focus-visible {
+  outline: none;
+}
+
+.output-action-primary {
+  background: var(--color-primary);
+}
+
+.output-action-success {
+  background: var(--color-success);
+}
+
+@media (max-width: 1200px) {
+  body {
+    overflow: auto;
+  }
+
+  .app {
+    height: auto;
+    overflow: auto;
+  }
+
+  .app-main {
+    overflow: visible;
+  }
+
+  .app-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas:
+      "uploadVideo"
+      "uploadLut"
+      "preview"
+      "settings"
+      "status";
+    height: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-metrics {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .metric-chip {
+    flex: 1;
+  }
+
+  .app-grid > .settings-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-actions {
+    justify-content: stretch;
+  }
+
+  .settings-actions .btn-settings,
+  .settings-actions .btn-primary {
+    flex: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .app {
+    padding: 12px;
+  }
+
+  .header-brand h1 {
+    font-size: 1.68rem;
+  }
+
+  .header-brand p {
+    font-size: 0.86rem;
+  }
+
+  .app-grid > .upload-video-section,
+  .app-grid > .upload-lut-section,
+  .app-grid > .preview-section,
+  .app-grid > .settings-section,
+  .app-grid > .status-section {
+    padding: 12px;
+  }
 }

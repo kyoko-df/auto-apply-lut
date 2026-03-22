@@ -704,3 +704,135 @@
     background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
   }
 }
+
+/* GPU diagnostics */
+.settings-modal .gpu-diagnostics {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: rgba(0, 122, 255, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-diagnostics {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(10, 132, 255, 0.12);
+  }
+}
+
+.settings-modal .gpu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.settings-modal .btn-small {
+  min-width: 72px;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.settings-modal .gpu-error {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-error {
+    color: #fca5a5;
+  }
+}
+
+.settings-modal .gpu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.settings-modal .gpu-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-item {
+    background: rgba(58, 58, 60, 0.7);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+}
+
+.settings-modal .gpu-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-title {
+    color: #f5f5f7;
+  }
+}
+
+.settings-modal .gpu-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #4b5563;
+  word-break: break-word;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-meta {
+    color: #d1d5db;
+  }
+}
+
+.settings-modal .gpu-summary {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-summary {
+    border-top-color: rgba(255, 255, 255, 0.2);
+  }
+}
+
+.settings-modal .gpu-test-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-modal .gpu-test-result {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-modal .gpu-test-result.success {
+  color: #15803d;
+}
+
+.settings-modal .gpu-test-result.failed {
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .gpu-test-result.success {
+    color: #86efac;
+  }
+
+  .settings-modal .gpu-test-result.failed {
+    color: #fca5a5;
+  }
+}

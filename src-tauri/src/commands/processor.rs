@@ -1,18 +1,21 @@
 use crate::core::lut::LutManager;
 use crate::core::ffmpeg::processor::VideoProcessor;
 use crate::core::ffmpeg::processor::ProcessingProgress;
-use crate::core::ffmpeg::EncodingSettings;
+use crate::core::ffmpeg::{EncodingSettings, Resolution};
 use crate::core::task::{TaskManager, TaskType};
 use crate::types::{TaskProgress, VideoInfo};
 use crate::utils::logger;
 use crate::utils::config::ConfigManager;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use uuid::Uuid;
 use tokio::sync::mpsc;
 use tokio::fs;
 use std::sync::Mutex;
+
+const INTERNAL_TWO_PASS_KEY: &str = "__two_pass__";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LutErrorStrategy {
@@ -24,6 +27,10 @@ impl Default for LutErrorStrategy {
     fn default() -> Self {
         Self::StopOnError
     }
+}
+
+fn default_preserve_metadata() -> bool {
+    true
 }
 
 fn apply_lut_error_strategy(
@@ -47,16 +54,174 @@ fn apply_lut_error_strategy(
     }
 }
 
+fn parse_resolution(value: Option<&str>) -> Result<Option<Resolution>, String> {
+    let raw = value.unwrap_or("").trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("original") {
+        return Ok(None);
+    }
+
+    let (w, h) = raw
+        .split_once('x')
+        .or_else(|| raw.split_once('X'))
+        .ok_or_else(|| format!("Invalid resolution format: {}", raw))?;
+
+    let width = w
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("Invalid resolution width: {}", w))?;
+    let height = h
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("Invalid resolution height: {}", h))?;
+
+    if width == 0 || height == 0 {
+        return Err("Resolution must be positive".to_string());
+    }
+
+    Ok(Some(Resolution { width, height }))
+}
+
+fn normalize_optional(value: Option<&str>) -> Option<String> {
+    value.and_then(|v| {
+        let s = v.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    })
+}
+
+fn apply_quality_preset(
+    preset_name: Option<&str>,
+    settings: &mut EncodingSettings,
+    extra_params: &mut HashMap<String, String>,
+    output_format: Option<&str>,
+) {
+    match preset_name.unwrap_or("").trim() {
+        "high_quality" => {
+            settings.crf = 18;
+            settings.preset = "slow".to_string();
+        }
+        "fast" => {
+            settings.crf = 28;
+            settings.preset = "fast".to_string();
+        }
+        "web_optimized" => {
+            settings.crf = 25;
+            settings.preset = "medium".to_string();
+            if matches!(output_format, Some("mp4") | Some("mov")) {
+                extra_params.insert("-movflags".to_string(), "+faststart".to_string());
+            }
+        }
+        _ => {
+            settings.crf = 23;
+            settings.preset = "medium".to_string();
+        }
+    }
+}
+
+fn apply_color_space(color_space: Option<&str>, extra_params: &mut HashMap<String, String>) {
+    match color_space.unwrap_or("").trim() {
+        "rec2020" => {
+            extra_params.insert("-colorspace".to_string(), "bt2020nc".to_string());
+            extra_params.insert("-color_primaries".to_string(), "bt2020".to_string());
+            extra_params.insert("-color_trc".to_string(), "smpte2084".to_string());
+        }
+        "srgb" => {
+            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
+            extra_params.insert("-color_primaries".to_string(), "bt709".to_string());
+            extra_params.insert("-color_trc".to_string(), "iec61966-2-1".to_string());
+        }
+        "adobe_rgb" => {
+            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
+            extra_params.insert("-color_primaries".to_string(), "bt470bg".to_string());
+            extra_params.insert("-color_trc".to_string(), "gamma22".to_string());
+        }
+        "dci_p3" => {
+            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
+            extra_params.insert("-color_primaries".to_string(), "smpte432".to_string());
+            extra_params.insert("-color_trc".to_string(), "smpte2084".to_string());
+        }
+        _ => {
+            // 默认 rec709
+            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
+            extra_params.insert("-color_primaries".to_string(), "bt709".to_string());
+            extra_params.insert("-color_trc".to_string(), "bt709".to_string());
+        }
+    }
+}
+
+fn build_encoding_settings(request: &ProcessRequest) -> Result<EncodingSettings, String> {
+    let mut settings = EncodingSettings::default();
+    let mut extra_params: HashMap<String, String> = HashMap::new();
+
+    if let Some(video_codec) = normalize_optional(request.video_codec.as_deref()) {
+        settings.video_codec = video_codec;
+    }
+    if let Some(audio_codec) = normalize_optional(request.audio_codec.as_deref()) {
+        settings.audio_codec = audio_codec;
+    }
+
+    apply_quality_preset(
+        request.quality_preset.as_deref(),
+        &mut settings,
+        &mut extra_params,
+        request.output_format.as_deref(),
+    );
+
+    settings.resolution = parse_resolution(request.resolution.as_deref())?;
+    settings.fps = request.fps.filter(|v| *v > 0.0);
+    settings.bitrate = normalize_optional(request.bitrate.as_deref())
+        .filter(|v| !v.eq_ignore_ascii_case("auto"));
+
+    if request.hardware_acceleration {
+        extra_params.insert("-hwaccel".to_string(), "auto".to_string());
+    }
+    if !request.preserve_metadata {
+        extra_params.insert("-map_metadata".to_string(), "-1".to_string());
+    }
+    if request.two_pass_encoding {
+        extra_params.insert(INTERNAL_TWO_PASS_KEY.to_string(), "1".to_string());
+    }
+    apply_color_space(request.color_space.as_deref(), &mut extra_params);
+
+    settings.extra_params = extra_params;
+    Ok(settings)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessRequest {
     pub input_path: String,
     pub output_path: String,
+    #[serde(default)]
+    pub output_directory: Option<String>,
+    #[serde(default)]
+    pub output_format: Option<String>,
     #[serde(default)]
     pub lut_paths: Vec<String>,
     #[serde(default)]
     pub lut_path: Option<String>,
     pub intensity: f32,
     pub hardware_acceleration: bool,
+    #[serde(default)]
+    pub video_codec: Option<String>,
+    #[serde(default)]
+    pub audio_codec: Option<String>,
+    #[serde(default)]
+    pub quality_preset: Option<String>,
+    #[serde(default)]
+    pub resolution: Option<String>,
+    #[serde(default)]
+    pub fps: Option<f64>,
+    #[serde(default)]
+    pub bitrate: Option<String>,
+    #[serde(default)]
+    pub color_space: Option<String>,
+    #[serde(default)]
+    pub two_pass_encoding: bool,
+    #[serde(default = "default_preserve_metadata")]
+    pub preserve_metadata: bool,
     #[serde(default)]
     pub lut_error_strategy: LutErrorStrategy,
 }
@@ -143,12 +308,30 @@ pub async fn start_video_processing(
     // 生成最终输出路径（如未提供）
     let final_output_path = if request.output_path.is_empty() {
         let input_path = Path::new(&request.input_path);
-        let parent = input_path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = request
+            .output_directory
+            .as_deref()
+            .and_then(|p| {
+                let trimmed = p.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(Path::new(trimmed))
+                }
+            })
+            .or_else(|| input_path.parent())
+            .unwrap_or_else(|| Path::new("."));
         let file_stem = input_path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
-        let extension = input_path.extension()
-            .and_then(|s| s.to_str())
+        let extension = request
+            .output_format
+            .as_deref()
+            .and_then(|s| {
+                let e = s.trim().trim_start_matches('.');
+                if e.is_empty() { None } else { Some(e) }
+            })
+            .or_else(|| input_path.extension().and_then(|s| s.to_str()))
             .unwrap_or("mp4");
         parent.join(format!("{}_lut_applied.{}", file_stem, extension)).to_string_lossy().to_string()
     } else {
@@ -183,7 +366,8 @@ pub async fn start_video_processing(
 
     // Extract FFmpeg path from VideoProcessor
     let ffmpeg_path = video_processor.ffmpeg_path().to_path_buf();
-    let settings = EncodingSettings::default();
+    let settings = build_encoding_settings(&request)?;
+    let intensity = request.intensity;
 
     tokio::spawn(async move {
         logger::log_info(&format!("Starting real FFmpeg processing for task: {}", task_id_clone));
@@ -209,6 +393,7 @@ pub async fn start_video_processing(
                 &luts,
                 &settings,
                 task_id_clone.clone(),
+                intensity,
             )
             .await
         {
@@ -308,6 +493,9 @@ pub async fn get_task_progress(
             estimated_remaining: None,
             processing_speed: None,
             status_message: task.description.clone(),
+            status: Some(format!("{:?}", task.status)),
+            error: task.error.clone(),
+            output_path: task.output_path.map(PathBuf::from),
         }),
         Ok(None) => Err("Task not found".to_string()),
         Err(e) => Err(e.to_string()),
@@ -348,6 +536,9 @@ pub async fn get_all_tasks(
                 estimated_remaining: None,
                 processing_speed: None,
                 status_message: task.description.clone(),
+                status: Some(format!("{:?}", task.status)),
+                error: task.error.clone(),
+                output_path: task.output_path.map(PathBuf::from),
             }).collect();
             Ok(result)
         }

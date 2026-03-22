@@ -1,27 +1,30 @@
-.file-upload {
-  width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
-  position: relative;
-}
-
-.upload-section {
+.upload-block {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--surface-elevated);
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
 }
 
-.upload-section h3 {
-  margin: 0 0 16px 0;
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: var(--color-fg-muted);
+.upload-block-header h4 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--color-fg);
+}
+
+.upload-block-header p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-fg-subtle);
 }
 
 .upload-area {
   border: 1px dashed var(--border-soft);
   border-radius: var(--radius-lg);
-  padding: 24px;
+  padding: 18px;
   background: var(--surface-card);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
   backdrop-filter: blur(20px) saturate(120%);
@@ -116,7 +119,7 @@
 }
 
 .video-upload-area {
-  height: clamp(160px, 32vh, 320px);
+  height: clamp(170px, 28vh, 300px);
 }
 
 .video-upload-area .video-list {
@@ -128,7 +131,8 @@
 }
 
 .lut-upload-area {
-  max-height: clamp(160px, 26vh, 280px);
+  min-height: 186px;
+  max-height: clamp(190px, 30vh, 320px);
 }
 
 .lut-upload-area .lut-list {
@@ -279,7 +283,7 @@
 
 /* 响应式设计 */
 @media (max-width: 768px) {
-  .file-upload { padding: 0 16px; }
+  .upload-block { padding: 12px; }
   .upload-area { padding: 20px 16px; min-height: 100px; }
   .upload-icon { font-size: 2.5rem; }
   .primary-text { font-size: 1rem; }
@@ -292,7 +296,7 @@
 }
 
 @media (max-width: 480px) {
-  .upload-section { gap: 16px; }
+  .upload-block { padding: 10px; }
   .upload-area { padding: 16px 12px; min-height: 80px; }
   .upload-placeholder { gap: 8px; }
   .upload-icon { font-size: 2rem; }
@@ -306,7 +310,6 @@
 
 /* 深色模式支持 */
 @media (prefers-color-scheme: dark) {
-  .upload-section h3 { color: var(--color-fg); }
   .upload-area { border-color: var(--border-soft); background: var(--surface-card); }
   .upload-area:hover:not(.disabled) { border-color: color-mix(in oklab, var(--color-primary), white 10%); }
   .upload-area.drag-over { border-color: var(--color-primary); }

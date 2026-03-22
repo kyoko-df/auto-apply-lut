@@ -90,9 +90,14 @@ pub fn run() {
             commands::system_manager::get_ffmpeg_info,
             commands::system_manager::get_ffmpeg_path_config,
             commands::system_manager::set_ffmpeg_path_config,
+            // GPU
+            commands::gpu_manager::get_gpu_info,
+            commands::gpu_manager::check_hardware_acceleration,
+            commands::gpu_manager::test_hardware_acceleration,
             commands::file_manager::get_file_info,
             commands::file_manager::open_file,
             commands::file_manager::open_folder,
+            commands::file_manager::open_file_location,
             commands::file_manager::play_with_ffplay,
             commands::file_manager::stop_ffplay,
             commands::processor::get_video_info,
@@ -105,6 +110,12 @@ pub fn run() {
             commands::processor::get_task_progress,
             commands::processor::cancel_task,
             commands::processor::get_all_tasks,
+            // Batch
+            commands::batch_manager::scan_directory_for_videos,
+            commands::batch_manager::start_batch_processing,
+            commands::batch_manager::get_batch_progress,
+            commands::batch_manager::cancel_batch,
+            commands::batch_manager::generate_batch_from_directory,
         ])
         .setup(|app| {
             info!("应用初始化完成");

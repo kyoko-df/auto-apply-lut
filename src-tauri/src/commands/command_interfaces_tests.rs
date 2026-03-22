@@ -163,6 +163,12 @@ fn command_interfaces_file() {
     .expect_err("open_folder should fail for non-existent folder");
     assert_eq!(err, "Folder does not exist");
 
+    let err = run_async(file_manager::open_file_location(
+        missing_path.to_string_lossy().to_string(),
+    ))
+    .expect_err("open_file_location should fail for non-existent file");
+    assert_eq!(err, "File does not exist");
+
     let deleted = run_async(file_manager::delete_path(
         moved_file.to_string_lossy().to_string(),
     ))
@@ -304,7 +310,8 @@ fn command_interfaces_batch() {
         items: vec![batch_manager::BatchItem {
             input_path: "/not-exists-input.mp4".to_string(),
             output_path: output_dir.join("out.mp4").to_string_lossy().to_string(),
-            lut_path: lut_path.to_string_lossy().to_string(),
+            lut_paths: vec![lut_path.to_string_lossy().to_string()],
+            lut_path: Some(lut_path.to_string_lossy().to_string()),
             intensity: 1.0,
         }],
         hardware_acceleration: false,
@@ -322,16 +329,14 @@ fn command_interfaces_batch() {
     let progress = run_async(batch_manager::get_batch_progress(
         "batch-x".to_string(),
         state_ref(&task_manager),
-    ))
-    .expect("get_batch_progress failed");
-    assert_eq!(progress.status, "Running");
+    ));
+    assert!(progress.is_err());
 
     let cancel_msg = run_async(batch_manager::cancel_batch(
         "batch-x".to_string(),
         state_ref(&task_manager),
-    ))
-    .expect("cancel_batch failed");
-    assert_eq!(cancel_msg, "Batch cancelled successfully");
+    ));
+    assert!(cancel_msg.is_err());
 }
 
 #[test]
@@ -344,10 +349,21 @@ fn command_interfaces_processor() {
         processor::ProcessRequest {
             input_path: "input.mp4".to_string(),
             output_path: "output.mp4".to_string(),
+            output_directory: None,
+            output_format: None,
             lut_paths: vec![],
             lut_path: None,
             intensity: 1.0,
             hardware_acceleration: false,
+            video_codec: None,
+            audio_codec: None,
+            quality_preset: None,
+            resolution: None,
+            fps: None,
+            bitrate: None,
+            color_space: None,
+            two_pass_encoding: false,
+            preserve_metadata: true,
             lut_error_strategy: processor::LutErrorStrategy::StopOnError,
         },
         state_ref(&task_manager),

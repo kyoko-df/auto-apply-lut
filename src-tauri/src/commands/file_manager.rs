@@ -180,6 +180,47 @@ pub async fn open_folder(path: String) -> Result<String, String> {
     Ok("Folder opened successfully".to_string())
 }
 
+/// 在文件管理器中定位文件
+#[tauri::command]
+pub async fn open_file_location(path: String) -> Result<String, String> {
+    logger::log_info(&format!("Opening file location: {}", path));
+
+    let file_path = Path::new(&path);
+    if !file_path.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let select_arg = format!("/select,{}", path.replace('/', "\\"));
+        Command::new("explorer")
+            .arg(select_arg)
+            .spawn()
+            .map_err(|e| format!("Failed to open file location: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file location: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let parent = file_path
+            .parent()
+            .ok_or_else(|| "Cannot resolve file parent directory".to_string())?;
+        Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|e| format!("Failed to open file location: {}", e))?;
+    }
+
+    Ok("File location opened successfully".to_string())
+}
+
 fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, String> {
     let ffplay_name = if cfg!(target_os = "windows") { "ffplay.exe" } else { "ffplay" };
 

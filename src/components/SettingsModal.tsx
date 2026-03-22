@@ -39,6 +39,22 @@ interface QualityPreset {
   preset: string;
 }
 
+interface GpuInfo {
+  name: string;
+  vendor: string;
+  memory_total?: number | null;
+  memory_used?: number | null;
+  temperature?: number | null;
+  utilization?: number | null;
+  supports_hardware_acceleration: boolean;
+}
+
+interface HardwareAccelerationInfo {
+  available: boolean;
+  supported_codecs: string[];
+  recommended_settings: string[];
+}
+
 // 运行时检测是否处于 Tauri 环境
 const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 
@@ -85,6 +101,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     audio: CodecInfo[];
   }>({ video: [], audio: [] });
   const [loading, setLoading] = useState(false);
+  const [gpuLoading, setGpuLoading] = useState(false);
+  const [gpuError, setGpuError] = useState<string | null>(null);
+  const [gpuInfos, setGpuInfos] = useState<GpuInfo[]>([]);
+  const [hwAccelInfo, setHwAccelInfo] = useState<HardwareAccelerationInfo | null>(null);
+  const [codecTestLoading, setCodecTestLoading] = useState(false);
+  const [codecTestResult, setCodecTestResult] = useState<boolean | null>(null);
 
   // 质量预设选项
   const qualityPresets: QualityPreset[] = [
@@ -169,6 +191,62 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, []);
 
+  const formatMemory = useCallback((bytes?: number | null): string => {
+    if (!bytes || bytes <= 0) return '未知';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(1)} GB`;
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MB`;
+  }, []);
+
+  const loadGpuDiagnostics = useCallback(async () => {
+    try {
+      setGpuLoading(true);
+      setGpuError(null);
+
+      const [gpus, hw] = await Promise.all([
+        safeInvoke<GpuInfo[]>('get_gpu_info'),
+        safeInvoke<HardwareAccelerationInfo>('check_hardware_acceleration')
+      ]);
+
+      setGpuInfos(Array.isArray(gpus) ? gpus : []);
+      setHwAccelInfo(hw);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message === 'tauri_unavailable') {
+        setGpuError('当前环境不支持实时 GPU 诊断（浏览器预览模式）');
+      } else {
+        setGpuError('GPU 诊断失败，请检查 FFmpeg 和显卡驱动');
+      }
+      setGpuInfos([]);
+      setHwAccelInfo(null);
+    } finally {
+      setGpuLoading(false);
+    }
+  }, []);
+
+  const testCurrentCodec = useCallback(async () => {
+    try {
+      setCodecTestLoading(true);
+      setCodecTestResult(null);
+      setGpuError(null);
+      const ok = await safeInvoke<boolean>('test_hardware_acceleration', {
+        codec: settings.video_codec
+      });
+      setCodecTestResult(!!ok);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message === 'tauri_unavailable') {
+        setGpuError('当前环境不支持编码器测试（浏览器预览模式）');
+      } else {
+        setGpuError(`编码器测试失败：${settings.video_codec}`);
+      }
+      setCodecTestResult(false);
+    } finally {
+      setCodecTestLoading(false);
+    }
+  }, [settings.video_codec]);
+
   // 更新设置
   const updateSetting = useCallback((key: keyof ProcessingSettings, value: any) => {
     const newSettings = { ...settings, [key]: value };
@@ -186,8 +264,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadAvailableCodecs();
+      loadGpuDiagnostics();
+      setCodecTestResult(null);
     }
-  }, [isOpen, loadAvailableCodecs]);
+  }, [isOpen, loadAvailableCodecs, loadGpuDiagnostics]);
 
   // ESC键关闭弹窗
   useEffect(() => {
@@ -410,6 +490,74 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                   <span className="checkbox-text">保留元数据</span>
                 </label>
+              </div>
+
+              <div className="setting-group gpu-diagnostics">
+                <div className="gpu-header">
+                  <span className="setting-label">GPU 诊断</span>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={loadGpuDiagnostics}
+                    disabled={disabled || gpuLoading || codecTestLoading}
+                    type="button"
+                  >
+                    {gpuLoading ? '检测中...' : '刷新'}
+                  </button>
+                </div>
+
+                {gpuError && <div className="gpu-error">{gpuError}</div>}
+
+                {!gpuLoading && gpuInfos.length > 0 && (
+                  <div className="gpu-list">
+                    {gpuInfos.map((gpu, index) => (
+                      <div className="gpu-item" key={`${gpu.name}-${index}`}>
+                        <div className="gpu-title">{gpu.name}</div>
+                        <div className="gpu-meta">
+                          厂商: {gpu.vendor || '未知'} · 显存: {formatMemory(gpu.memory_total)}
+                        </div>
+                        <div className="gpu-meta">
+                          加速支持: {gpu.supports_hardware_acceleration ? '支持' : '不支持'}
+                          {typeof gpu.utilization === 'number' ? ` · 占用: ${gpu.utilization.toFixed(0)}%` : ''}
+                          {typeof gpu.temperature === 'number' ? ` · 温度: ${gpu.temperature.toFixed(0)}°C` : ''}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {hwAccelInfo && (
+                  <div className="gpu-summary">
+                    <div className="gpu-meta">
+                      硬件加速: {hwAccelInfo.available ? '可用' : '不可用'}
+                    </div>
+                    {hwAccelInfo.supported_codecs.length > 0 && (
+                      <div className="gpu-meta">
+                        支持能力: {hwAccelInfo.supported_codecs.join(', ')}
+                      </div>
+                    )}
+                    {hwAccelInfo.recommended_settings.length > 0 && (
+                      <div className="gpu-meta">
+                        推荐参数: {hwAccelInfo.recommended_settings.slice(0, 3).join(' | ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="gpu-test-row">
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={testCurrentCodec}
+                    disabled={disabled || codecTestLoading || gpuLoading}
+                    type="button"
+                  >
+                    {codecTestLoading ? '测试中...' : `测试编码器: ${settings.video_codec}`}
+                  </button>
+                  {codecTestResult !== null && (
+                    <span className={`gpu-test-result ${codecTestResult ? 'success' : 'failed'}`}>
+                      {codecTestResult ? '可用于硬件加速' : '不建议用于硬件加速'}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>

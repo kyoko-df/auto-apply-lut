@@ -62,8 +62,7 @@
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
+  display: block;
   min-width: 320px;
   min-height: 100vh;
   color: var(--color-fg);
@@ -71,11 +70,12 @@ body {
 }
 
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
   width: 100%;
+  height: 100%;
 }
 
 /* Components tokens (Apple aesthetic) */

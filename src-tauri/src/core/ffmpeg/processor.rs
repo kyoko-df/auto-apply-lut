@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use crate::utils::path_utils::get_app_data_dir;
+use crate::utils::logger;
+
+const INTERNAL_TWO_PASS_KEY: &str = "__two_pass__";
 
 /// 视频处理器
 pub struct VideoProcessor {
@@ -32,18 +35,97 @@ impl VideoProcessor {
         path.to_string_lossy().replace('\'', "\\'")
     }
 
-    fn build_lut_filter(lut_paths: &[PathBuf]) -> AppResult<String> {
+    fn build_lut_filter(lut_paths: &[PathBuf], intensity: f32) -> AppResult<String> {
         if lut_paths.is_empty() {
             return Err(AppError::InvalidInput("No LUT files provided".to_string()));
         }
 
-        let mut parts: Vec<String> = Vec::with_capacity(lut_paths.len() + 1);
+        let mut lut_chain: Vec<String> = Vec::with_capacity(lut_paths.len());
         for lut_path in lut_paths {
             let escaped = Self::escape_filter_path(lut_path.as_path());
-            parts.push(format!("lut3d=file='{}'", escaped));
+            lut_chain.push(format!("lut3d=file='{}'", escaped));
         }
-        parts.push("format=yuv422p".to_string());
-        Ok(parts.join(","))
+
+        let clamped = intensity.clamp(0.0, 1.0);
+        if clamped >= 1.0 {
+            lut_chain.push("format=yuv422p".to_string());
+            Ok(lut_chain.join(","))
+        } else {
+            // Use split + lut3d + mix to blend original with LUT-applied at the given intensity
+            let lut_part = lut_chain.join(",");
+            Ok(format!(
+                "split[orig][lut];[lut]{},format=yuv422p[lutted];[orig]format=yuv422p[origfmt];[origfmt][lutted]mix=weights={:.4} {:.4}",
+                lut_part,
+                1.0 - clamped,
+                clamped
+            ))
+        }
+    }
+
+    fn add_encoding_args(cmd: &mut AsyncCommand, settings: &EncodingSettings) {
+        cmd.args(["-c:v", &settings.video_codec]);
+        cmd.args(["-c:a", &settings.audio_codec]);
+        cmd.args(["-preset", &settings.preset]);
+
+        if let Some(bitrate) = &settings.bitrate {
+            cmd.args(["-b:v", bitrate]);
+        } else {
+            cmd.args(["-crf", &settings.crf.to_string()]);
+        }
+
+        if let Some(resolution) = &settings.resolution {
+            cmd.args(["-s", &format!("{}x{}", resolution.width, resolution.height)]);
+        }
+
+        if let Some(fps) = settings.fps {
+            cmd.args(["-r", &fps.to_string()]);
+        }
+
+        for (key, value) in &settings.extra_params {
+            if key.starts_with("__") {
+                continue;
+            }
+            cmd.args([key, value]);
+        }
+    }
+
+    fn is_truthy(value: &str) -> bool {
+        matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    }
+
+    async fn probe_duration_seconds(ffmpeg_path: &Path, input_path: &Path) -> Option<f64> {
+        let ffprobe_name = if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" };
+        let ffprobe_path = ffmpeg_path
+            .parent()
+            .map(|p| p.join(ffprobe_name))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| PathBuf::from(ffprobe_name));
+
+        let output = AsyncCommand::new(ffprobe_path)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                input_path.to_str().unwrap_or_default(),
+            ])
+            .output()
+            .await
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let duration = stdout.trim().parse::<f64>().ok()?;
+        if duration.is_finite() && duration > 0.0 {
+            Some(duration)
+        } else {
+            None
+        }
     }
 
     /// 创建新的视频处理器
@@ -81,6 +163,7 @@ impl VideoProcessor {
             &[lut_path.to_path_buf()],
             settings,
             task_id,
+            1.0,
         )
         .await
     }
@@ -92,6 +175,7 @@ impl VideoProcessor {
         lut_paths: &[PathBuf],
         settings: &EncodingSettings,
         task_id: String,
+        intensity: f32,
     ) -> AppResult<ProcessingResult> {
         let start_time = Instant::now();
         let mut cancelled = false;
@@ -120,49 +204,30 @@ impl VideoProcessor {
         })
         .await;
 
-        let lut_filter = Self::build_lut_filter(lut_paths)?;
-
-        let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-        cmd.args([
-            "-i",
-            input_path.to_str().unwrap(),
-            "-vf",
-            &lut_filter,
-            "-c:v",
-            &settings.video_codec,
-            "-preset",
-            &settings.preset,
-            "-crf",
-            &settings.crf.to_string(),
-            "-c:a",
-            &settings.audio_codec,
-            "-loglevel",
-            "debug",
-            "-progress",
-            "pipe:1",
-            "-y",
-            output_path.to_str().unwrap(),
-        ]);
-        for (key, value) in &settings.extra_params {
-            cmd.args([key, value]);
-        }
+        let lut_filter = Self::build_lut_filter(lut_paths, intensity)?;
+        let total_duration_sec = Self::probe_duration_seconds(&self.ffmpeg_path, input_path).await;
+        let two_pass_requested = settings
+            .extra_params
+            .get(INTERNAL_TWO_PASS_KEY)
+            .map(|v| Self::is_truthy(v))
+            .unwrap_or(false);
+        let use_two_pass = two_pass_requested
+            && settings.bitrate.is_some()
+            && settings.video_codec != "copy";
 
         let mut log_dir = get_app_data_dir()?;
         log_dir.push("logs");
         let _ = std::fs::create_dir_all(&log_dir);
         let log_file_path = log_dir.join(format!("ffmpeg_{}.log", task_id));
-        let log_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_file_path)
-            .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))?;
-
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::from(log_file))
-            .spawn()
-            .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
+        let open_log_file = |append: bool| -> AppResult<std::fs::File> {
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(append)
+                .truncate(!append)
+                .open(&log_file_path)
+                .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))
+        };
 
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         {
@@ -170,45 +235,214 @@ impl VideoProcessor {
             map.insert(task_id.clone(), cancel_tx);
         }
 
-        let task_id_clone = task_id.clone();
-        let progress_sender = self.progress_sender.clone();
-        let start_time_clone = start_time;
-        let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let handle = tokio::spawn(async move {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(progress) = Self::parse_ffmpeg_progress(&line) {
-                        if let Some(sender) = &progress_sender {
-                            let _ = sender.send(ProcessingProgress {
-                                task_id: task_id_clone.clone(),
-                                progress,
-                                stage: ProcessingStage::Processing,
-                                message: format!("处理中... {:.1}%", progress * 100.0),
-                                elapsed: start_time_clone.elapsed(),
-                            });
+        if two_pass_requested && !use_two_pass {
+            logger::log_warn(
+                "two_pass_encoding requested but ignored (requires bitrate and non-copy video codec)",
+            );
+        }
+
+        let status = if use_two_pass {
+            self.send_progress(ProcessingProgress {
+                task_id: task_id.clone(),
+                progress: 0.02,
+                stage: ProcessingStage::Processing,
+                message: "双通道编码：第一遍分析中...".to_string(),
+                elapsed: start_time.elapsed(),
+            })
+            .await;
+
+            let passlog_file = log_dir.join(format!("ffmpeg_passlog_{}", task_id));
+            let passlog_str = passlog_file.to_string_lossy().to_string();
+            let null_sink = if cfg!(target_os = "windows") {
+                "NUL"
+            } else {
+                "/dev/null"
+            };
+
+            let mut pass1_cmd = AsyncCommand::new(&self.ffmpeg_path);
+            pass1_cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
+            Self::add_encoding_args(&mut pass1_cmd, settings);
+            pass1_cmd.args([
+                "-pass",
+                "1",
+                "-passlogfile",
+                &passlog_str,
+                "-an",
+                "-f",
+                "null",
+                "-y",
+                null_sink,
+            ]);
+            let pass1_log = open_log_file(false)?;
+            let mut pass1_child = pass1_cmd
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(pass1_log))
+                .spawn()
+                .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg pass 1: {}", e)))?;
+
+            let pass1_status = tokio::select! {
+                res = pass1_child.wait() => {
+                    res.map_err(|e| AppError::FFmpeg(format!("FFmpeg pass 1 failed: {}", e)))?
+                }
+                _ = &mut cancel_rx => {
+                    cancelled = true;
+                    let _ = pass1_child.kill().await;
+                    pass1_child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
+                }
+            };
+
+            let status = if cancelled || !pass1_status.success() {
+                pass1_status
+            } else if cancel_rx.try_recv().is_ok() {
+                // Cancel arrived between pass 1 completing and pass 2 starting
+                cancelled = true;
+                pass1_status
+            } else {
+                self.send_progress(ProcessingProgress {
+                    task_id: task_id.clone(),
+                    progress: 0.1,
+                    stage: ProcessingStage::Processing,
+                    message: "双通道编码：第二遍处理中...".to_string(),
+                    elapsed: start_time.elapsed(),
+                })
+                .await;
+
+                let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
+                cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
+                Self::add_encoding_args(&mut cmd, settings);
+                cmd.args([
+                    "-pass",
+                    "2",
+                    "-passlogfile",
+                    &passlog_str,
+                    "-loglevel",
+                    "debug",
+                    "-progress",
+                    "pipe:1",
+                    "-y",
+                    output_path.to_str().unwrap(),
+                ]);
+
+                let log_file = open_log_file(true)?;
+                let mut child = cmd
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::from(log_file))
+                    .spawn()
+                    .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg pass 2: {}", e)))?;
+
+                let task_id_clone = task_id.clone();
+                let progress_sender = self.progress_sender.clone();
+                let start_time_clone = start_time;
+                let duration_for_progress = total_duration_sec;
+                let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
+                if let Some(stdout) = child.stdout.take() {
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    let handle = tokio::spawn(async move {
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            if let Some(progress) =
+                                Self::parse_ffmpeg_progress(&line, duration_for_progress)
+                            {
+                                if let Some(sender) = &progress_sender {
+                                    let _ = sender.send(ProcessingProgress {
+                                        task_id: task_id_clone.clone(),
+                                        progress,
+                                        stage: ProcessingStage::Processing,
+                                        message: format!("处理中... {:.1}%", progress * 100.0),
+                                        elapsed: start_time_clone.elapsed(),
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    progress_handle = Some(handle);
+                }
+
+                let status = tokio::select! {
+                    res = child.wait() => {
+                        res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
+                    }
+                    _ = &mut cancel_rx => {
+                        cancelled = true;
+                        let _ = child.kill().await;
+                        child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
+                    }
+                };
+
+                if let Some(handle) = progress_handle.take() {
+                    handle.abort();
+                }
+                status
+            };
+
+            let _ = std::fs::remove_file(passlog_file.clone());
+            let _ = std::fs::remove_file(passlog_file.with_extension("log"));
+            let _ = std::fs::remove_file(passlog_file.with_extension("mbtree"));
+            status
+        } else {
+            let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
+            cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
+            Self::add_encoding_args(&mut cmd, settings);
+            cmd.args([
+                "-loglevel",
+                "debug",
+                "-progress",
+                "pipe:1",
+                "-y",
+                output_path.to_str().unwrap(),
+            ]);
+
+            let log_file = open_log_file(false)?;
+            let mut child = cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::from(log_file))
+                .spawn()
+                .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
+
+            let task_id_clone = task_id.clone();
+            let progress_sender = self.progress_sender.clone();
+            let start_time_clone = start_time;
+            let duration_for_progress = total_duration_sec;
+            let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
+            if let Some(stdout) = child.stdout.take() {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                let handle = tokio::spawn(async move {
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(progress) =
+                            Self::parse_ffmpeg_progress(&line, duration_for_progress)
+                        {
+                            if let Some(sender) = &progress_sender {
+                                let _ = sender.send(ProcessingProgress {
+                                    task_id: task_id_clone.clone(),
+                                    progress,
+                                    stage: ProcessingStage::Processing,
+                                    message: format!("处理中... {:.1}%", progress * 100.0),
+                                    elapsed: start_time_clone.elapsed(),
+                                });
+                            }
                         }
                     }
+                });
+                progress_handle = Some(handle);
+            }
+
+            let status = tokio::select! {
+                res = child.wait() => {
+                    res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
                 }
-            });
-            progress_handle = Some(handle);
-        }
+                _ = &mut cancel_rx => {
+                    cancelled = true;
+                    let _ = child.kill().await;
+                    child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
+                }
+            };
 
-        let status = tokio::select! {
-            res = child.wait() => {
-                res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
+            if let Some(handle) = progress_handle.take() {
+                handle.abort();
             }
-            _ = &mut cancel_rx => {
-                cancelled = true;
-                let _ = child.kill().await;
-                child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
-            }
+            status
         };
-
-        if let Some(handle) = progress_handle.take() {
-            handle.abort();
-        }
 
         {
             let mut map = self.cancel_senders.lock().await;
@@ -320,6 +554,7 @@ impl VideoProcessor {
             &[lut_path.to_path_buf()],
             settings,
             task_id,
+            1.0,
         )
         .await
     }
@@ -411,9 +646,11 @@ impl VideoProcessor {
             cmd.args(["-r", &fps.to_string()]);
         }
         
-        // 添加额外参数
+        // 添加额外参数（跳过内部标记键）
         for (key, value) in &settings.extra_params {
-            cmd.args([key, value]);
+            if !key.starts_with("__") {
+                cmd.args([key, value]);
+            }
         }
         
         cmd.args(["-y", output_path.to_str().unwrap()]);
@@ -605,24 +842,52 @@ impl VideoProcessor {
     }
 
     /// 解析FFmpeg进度输出
-    fn parse_ffmpeg_progress(line: &str) -> Option<f64> {
-        // FFmpeg进度输出格式：out_time_ms=123456
-        if line.starts_with("out_time_ms=") {
-            // 这里需要根据总时长计算进度百分比
-            // 简化实现，返回固定进度
-            Some(0.5)
-        } else if line.contains("time=") {
-            // 解析时间格式：time=00:00:05.00
-            if let Some(time_part) = line.split("time=").nth(1) {
-                if let Some(time_str) = time_part.split_whitespace().next() {
-                    // 简化的时间解析
-                    return Some(0.5);
-                }
+    fn parse_ffmpeg_progress(line: &str, total_duration_sec: Option<f64>) -> Option<f64> {
+        let total = total_duration_sec.filter(|v| *v > 0.0)?;
+
+        // Prefer out_time= (HH:MM:SS.ms) as the authoritative source
+        if let Some(time_str) = line.strip_prefix("out_time=") {
+            let seconds = Self::parse_ffmpeg_time_to_seconds(time_str.trim())?;
+            if seconds >= 0.0 {
+                return Some((seconds / total).clamp(0.0, 0.99));
             }
-            None
-        } else {
-            None
         }
+
+        // Fallback: out_time_ms (note: FFmpeg labels this "ms" but older builds
+        // output microseconds; newer builds output milliseconds. We try both
+        // heuristics: if the value yields > 10x total duration when treated as
+        // milliseconds, assume microseconds instead.)
+        if let Some(ms_str) = line.strip_prefix("out_time_ms=") {
+            let raw = ms_str.trim().parse::<f64>().ok()?;
+            let seconds_as_ms = raw / 1_000.0;
+            let seconds_as_us = raw / 1_000_000.0;
+            let seconds = if seconds_as_ms > total * 10.0 {
+                seconds_as_us
+            } else {
+                seconds_as_ms
+            };
+            if seconds >= 0.0 {
+                return Some((seconds / total).clamp(0.0, 0.99));
+            }
+        }
+
+        // Fallback: inline "time=HH:MM:SS.ms" in verbose FFmpeg output
+        if let Some(time_part) = line.split("time=").nth(1) {
+            if let Some(time_str) = time_part.split_whitespace().next() {
+                let seconds = Self::parse_ffmpeg_time_to_seconds(time_str.trim())?;
+                return Some((seconds / total).clamp(0.0, 0.99));
+            }
+        }
+
+        None
+    }
+
+    fn parse_ffmpeg_time_to_seconds(time_str: &str) -> Option<f64> {
+        let mut parts = time_str.trim().split(':');
+        let h = parts.next()?.parse::<f64>().ok()?;
+        let m = parts.next()?.parse::<f64>().ok()?;
+        let s = parts.next()?.parse::<f64>().ok()?;
+        Some(h * 3600.0 + m * 60.0 + s)
     }
 
     /// 发送进度更新
@@ -805,12 +1070,20 @@ mod tests {
         let filter = VideoProcessor::build_lut_filter(&[
             PathBuf::from("/luts/a.cube"),
             PathBuf::from("/luts/b.cube"),
-        ])
+        ], 1.0)
         .unwrap();
         assert_eq!(
             filter,
             "lut3d=file='/luts/a.cube',lut3d=file='/luts/b.cube',format=yuv422p"
         );
+
+        // Test partial intensity produces a mix filter
+        let filter_half = VideoProcessor::build_lut_filter(&[
+            PathBuf::from("/luts/a.cube"),
+        ], 0.5)
+        .unwrap();
+        assert!(filter_half.contains("mix="));
+        assert!(filter_half.contains("split"));
     }
 
     #[test]
@@ -912,16 +1185,31 @@ mod tests {
 
     #[test]
     fn test_ffmpeg_progress_parsing() {
-        let line1 = "out_time_ms=123456";
-        let progress1 = VideoProcessor::parse_ffmpeg_progress(line1);
+        // out_time= is the preferred source (HH:MM:SS.ms)
+        let line_time = "out_time=00:00:05.000000";
+        let progress_time = VideoProcessor::parse_ffmpeg_progress(line_time, Some(20.0));
+        assert!(progress_time.is_some());
+        assert!((progress_time.unwrap() - 0.25).abs() < 0.001);
+
+        // out_time_ms with large value (microseconds heuristic: 5000000 as ms = 5000s >> 20*10)
+        let line1 = "out_time_ms=5000000";
+        let progress1 = VideoProcessor::parse_ffmpeg_progress(line1, Some(20.0));
         assert!(progress1.is_some());
+        assert!((progress1.unwrap() - 0.25).abs() < 0.001);
+
+        // out_time_ms with true millisecond value (5000 ms = 5s, 5s/20s = 0.25)
+        let line_ms = "out_time_ms=5000";
+        let progress_ms = VideoProcessor::parse_ffmpeg_progress(line_ms, Some(20.0));
+        assert!(progress_ms.is_some());
+        assert!((progress_ms.unwrap() - 0.25).abs() < 0.001);
         
-        let line2 = "frame=  123 fps= 25 q=28.0 size=    1024kB time=00:00:05.00 bitrate=1677.7kbits/s";
-        let progress2 = VideoProcessor::parse_ffmpeg_progress(line2);
+        let line2 = "frame=  123 fps= 25 q=28.0 size=    1024kB time=00:00:10.00 bitrate=1677.7kbits/s";
+        let progress2 = VideoProcessor::parse_ffmpeg_progress(line2, Some(20.0));
         assert!(progress2.is_some());
+        assert!((progress2.unwrap() - 0.5).abs() < 0.001);
         
         let line3 = "invalid line";
-        let progress3 = VideoProcessor::parse_ffmpeg_progress(line3);
+        let progress3 = VideoProcessor::parse_ffmpeg_progress(line3, Some(20.0));
         assert!(progress3.is_none());
     }
 }

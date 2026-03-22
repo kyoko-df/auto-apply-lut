@@ -177,6 +177,12 @@ pub struct TaskProgress {
     pub processing_speed: Option<f32>,
     /// 状态消息
     pub status_message: Option<String>,
+    /// 任务状态
+    pub status: Option<String>,
+    /// 错误信息
+    pub error: Option<String>,
+    /// 输出文件路径
+    pub output_path: Option<PathBuf>,
 }
 
 impl Default for TaskPriority {

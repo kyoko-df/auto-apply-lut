@@ -342,8 +342,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
   };
 
   return (
-    <div className="file-upload">
-      {/* Hidden inputs for browser fallback */}
+    <>
       <input
         ref={videoInputRef}
         type="file"
@@ -361,163 +360,171 @@ const FileUpload: React.FC<FileUploadProps> = ({
         onChange={handleLutInputChange}
       />
 
-      <div className="upload-section">
-        <h3>选择文件</h3>
-        
-        {/* 视频文件上传区域 */}
-        <div 
-          className={`upload-area video-upload-area ${
-            dragOver === 'video' ? 'drag-over' : ''
-          } ${disabled ? 'disabled' : ''}`}
-          onDragOver={(e) => handleDragOver(e, 'video')}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, 'video')}
-          onClick={selectVideoFile}
-        >
-          <div className="upload-content">
-            {videoFiles.length > 0 ? (
-              <div className="video-list">
-                {videoFiles.map((videoFile, index) => (
-                  <div
-                    className={`video-item ${activeVideoPath === videoFile.path ? 'active' : ''}`}
-                    key={videoFile.path}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      selectActiveVideo(videoFile.path);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <div className="file-icon video-icon">🎬</div>
-                    <div className="file-details">
-                      <div className="file-name">{videoFile.name}</div>
-                      <div className="file-meta">
-                        {videoFile.size && (
-                          <span className="file-size">{formatFileSize(videoFile.size)}</span>
-                        )}
-                        {activeVideoPath === videoFile.path && (
-                          <span className="badge">预览中</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="video-actions">
-                      <button
-                        className="icon-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          selectActiveVideo(videoFile.path);
-                        }}
-                        disabled={disabled || activeVideoPath === videoFile.path}
-                        aria-label="设为预览"
-                      >
-                        ▶
-                      </button>
-                      <button
-                        className="clear-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeVideoAt(index);
-                        }}
-                        disabled={disabled}
-                        aria-label="移除"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="upload-placeholder">
-                <div className="upload-icon">📹</div>
-                <div className="upload-text">
-                  <div className="primary-text">选择视频文件</div>
-                  <div className="secondary-text">
-                    支持 MP4, MOV, AVI, MKV 等格式
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+      <section className="upload-block upload-video-section">
+          <header className="upload-block-header">
+            <h4>视频文件</h4>
+            <p>选择一个或多个视频并指定预览目标</p>
+          </header>
 
-        {/* LUT 文件上传区域 */}
-        <div 
-          className={`upload-area lut-upload-area ${
-            dragOver === 'lut' ? 'drag-over' : ''
-          } ${disabled ? 'disabled' : ''}`}
-          onDragOver={(e) => handleDragOver(e, 'lut')}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, 'lut')}
-          onClick={selectLutFile}
-        >
-          <div className="upload-content">
-            {lutFiles.length > 0 ? (
-              <div className="lut-list">
-                {lutFiles.map((lutFile, index) => (
-                  <div className="lut-item" key={lutFile.path}>
-                    <div className="file-icon lut-icon">🎨</div>
-                    <div className="file-details">
-                      <div className="file-name">{lutFile.name}</div>
-                      <div className="file-meta">
-                        {lutFile.size && (
-                          <span className="file-size">{formatFileSize(lutFile.size)}</span>
-                        )}
+          <div 
+            className={`upload-area video-upload-area ${
+              dragOver === 'video' ? 'drag-over' : ''
+            } ${disabled ? 'disabled' : ''}`}
+            onDragOver={(e) => handleDragOver(e, 'video')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, 'video')}
+            onClick={selectVideoFile}
+          >
+            <div className="upload-content">
+              {videoFiles.length > 0 ? (
+                <div className="video-list">
+                  {videoFiles.map((videoFile, index) => (
+                    <div
+                      className={`video-item ${activeVideoPath === videoFile.path ? 'active' : ''}`}
+                      key={videoFile.path}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectActiveVideo(videoFile.path);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <div className="file-icon video-icon">🎬</div>
+                      <div className="file-details">
+                        <div className="file-name">{videoFile.name}</div>
+                        <div className="file-meta">
+                          {videoFile.size && (
+                            <span className="file-size">{formatFileSize(videoFile.size)}</span>
+                          )}
+                          {activeVideoPath === videoFile.path && (
+                            <span className="badge">预览中</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="video-actions">
+                        <button
+                          className="icon-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectActiveVideo(videoFile.path);
+                          }}
+                          disabled={disabled || activeVideoPath === videoFile.path}
+                          aria-label="设为预览"
+                        >
+                          ▶
+                        </button>
+                        <button
+                          className="clear-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeVideoAt(index);
+                          }}
+                          disabled={disabled}
+                          aria-label="移除"
+                        >
+                          ✕
+                        </button>
                       </div>
                     </div>
-                    <div className="lut-actions">
-                      <button
-                        className="icon-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLut(index, index - 1);
-                        }}
-                        disabled={disabled || index === 0}
-                        aria-label="上移"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        className="icon-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          moveLut(index, index + 1);
-                        }}
-                        disabled={disabled || index === lutFiles.length - 1}
-                        aria-label="下移"
-                      >
-                        ↓
-                      </button>
-                      <button
-                        className="clear-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeLutAt(index);
-                        }}
-                        disabled={disabled}
-                        aria-label="移除"
-                      >
-                        ✕
-                      </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="upload-placeholder">
+                  <div className="upload-icon">📹</div>
+                  <div className="upload-text">
+                    <div className="primary-text">选择视频文件</div>
+                    <div className="secondary-text">
+                      支持 MP4, MOV, AVI, MKV 等格式
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="upload-placeholder">
-                <div className="upload-icon">📁</div>
-                <div className="upload-text">
-                  <div className="primary-text">选择LUT文件</div>
-                  <div className="secondary-text">
-                    支持 .cube, .3dl, .lut 等格式
+                </div>
+              )}
+            </div>
+          </div>
+      </section>
+
+      <section className="upload-block upload-lut-section">
+          <header className="upload-block-header">
+            <h4>LUT 文件</h4>
+            <p>选择 LUT 文件并拖动调整应用顺序</p>
+          </header>
+
+          <div 
+            className={`upload-area lut-upload-area ${
+              dragOver === 'lut' ? 'drag-over' : ''
+            } ${disabled ? 'disabled' : ''}`}
+            onDragOver={(e) => handleDragOver(e, 'lut')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, 'lut')}
+            onClick={selectLutFile}
+          >
+            <div className="upload-content">
+              {lutFiles.length > 0 ? (
+                <div className="lut-list">
+                  {lutFiles.map((lutFile, index) => (
+                    <div className="lut-item" key={lutFile.path}>
+                      <div className="file-icon lut-icon">🎨</div>
+                      <div className="file-details">
+                        <div className="file-name">{lutFile.name}</div>
+                        <div className="file-meta">
+                          {lutFile.size && (
+                            <span className="file-size">{formatFileSize(lutFile.size)}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="lut-actions">
+                        <button
+                          className="icon-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveLut(index, index - 1);
+                          }}
+                          disabled={disabled || index === 0}
+                          aria-label="上移"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          className="icon-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveLut(index, index + 1);
+                          }}
+                          disabled={disabled || index === lutFiles.length - 1}
+                          aria-label="下移"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          className="clear-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeLutAt(index);
+                          }}
+                          disabled={disabled}
+                          aria-label="移除"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="upload-placeholder">
+                  <div className="upload-icon">📁</div>
+                  <div className="upload-text">
+                    <div className="primary-text">选择LUT文件</div>
+                    <div className="secondary-text">
+                      支持 .cube, .3dl, .lut 等格式
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      </div>
-    </div>
+      </section>
+    </>
   );
 };
 
