@@ -131,7 +131,7 @@
 }
 
 .lut-upload-area {
-  min-height: 186px;
+  min-height: 100px;
   max-height: clamp(190px, 30vh, 320px);
 }
 
