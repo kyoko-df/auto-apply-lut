@@ -38,6 +38,29 @@ interface ProcessingSettings {
   output_directory: string;
 }
 
+interface PersistedAppSettings {
+  default_output_dir: string;
+  ffmpeg_path: string;
+  max_concurrent_tasks: number;
+  cache_size_mb: number;
+  hardware_acceleration: boolean;
+  log_level: string;
+  ui_theme: string;
+  language: string;
+  output_format: string;
+  video_codec: string;
+  audio_codec: string;
+  quality_preset: string;
+  resolution: string;
+  fps: number | null;
+  bitrate: string;
+  lut_intensity: number;
+  lut_error_strategy: 'StopOnError' | 'SkipOnError' | string;
+  color_space: string;
+  two_pass_encoding: boolean;
+  preserve_metadata: boolean;
+}
+
 interface StartProcessResponse {
   task_id: string;
   output_path?: string;
@@ -87,6 +110,67 @@ interface BatchItemProgressResponse {
   error?: string;
 }
 
+const DEFAULT_APP_SETTINGS: PersistedAppSettings = {
+  default_output_dir: '',
+  ffmpeg_path: '',
+  max_concurrent_tasks: 4,
+  cache_size_mb: 1024,
+  hardware_acceleration: false,
+  log_level: 'info',
+  ui_theme: 'light',
+  language: 'zh-CN',
+  output_format: 'mp4',
+  video_codec: 'libx264',
+  audio_codec: 'aac',
+  quality_preset: 'balanced',
+  resolution: 'original',
+  fps: null,
+  bitrate: 'auto',
+  lut_intensity: 100,
+  lut_error_strategy: 'StopOnError',
+  color_space: 'rec709',
+  two_pass_encoding: false,
+  preserve_metadata: true
+};
+
+const mapAppSettingsToProcessingSettings = (settings: PersistedAppSettings): ProcessingSettings => ({
+  output_format: settings.output_format || DEFAULT_APP_SETTINGS.output_format,
+  video_codec: settings.video_codec || DEFAULT_APP_SETTINGS.video_codec,
+  audio_codec: settings.audio_codec || DEFAULT_APP_SETTINGS.audio_codec,
+  quality_preset: settings.quality_preset || DEFAULT_APP_SETTINGS.quality_preset,
+  resolution: settings.resolution || DEFAULT_APP_SETTINGS.resolution,
+  fps: settings.fps,
+  bitrate: settings.bitrate || DEFAULT_APP_SETTINGS.bitrate,
+  lut_intensity: typeof settings.lut_intensity === 'number' ? settings.lut_intensity : DEFAULT_APP_SETTINGS.lut_intensity,
+  lut_error_strategy: settings.lut_error_strategy === 'SkipOnError' ? 'SkipOnError' : 'StopOnError',
+  color_space: settings.color_space || DEFAULT_APP_SETTINGS.color_space,
+  hardware_acceleration: settings.hardware_acceleration,
+  two_pass_encoding: settings.two_pass_encoding,
+  preserve_metadata: settings.preserve_metadata,
+  output_directory: settings.default_output_dir || ''
+});
+
+const mapProcessingSettingsToAppSettings = (
+  settings: ProcessingSettings,
+  baseSettings: PersistedAppSettings
+): PersistedAppSettings => ({
+  ...baseSettings,
+  default_output_dir: settings.output_directory,
+  hardware_acceleration: settings.hardware_acceleration,
+  output_format: settings.output_format,
+  video_codec: settings.video_codec,
+  audio_codec: settings.audio_codec,
+  quality_preset: settings.quality_preset,
+  resolution: settings.resolution,
+  fps: settings.fps,
+  bitrate: settings.bitrate,
+  lut_intensity: settings.lut_intensity,
+  lut_error_strategy: settings.lut_error_strategy,
+  color_space: settings.color_space,
+  two_pass_encoding: settings.two_pass_encoding,
+  preserve_metadata: settings.preserve_metadata
+});
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const getFileName = (path: string): string => {
@@ -125,29 +209,39 @@ function App() {
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settings, setSettings] = useState<ProcessingSettings>({
-    output_format: 'mp4',
-    video_codec: 'libx264',
-    audio_codec: 'aac',
-    quality_preset: 'balanced',
-    resolution: 'original',
-    fps: null,
-    bitrate: 'auto',
-    lut_intensity: 100,
-    lut_error_strategy: 'StopOnError',
-    color_space: 'rec709',
-    hardware_acceleration: false,
-    two_pass_encoding: false,
-    preserve_metadata: true,
-    output_directory: ''
-  });
+  const [, setPersistedAppSettings] = useState<PersistedAppSettings>(DEFAULT_APP_SETTINGS);
+  const [settings, setSettings] = useState<ProcessingSettings>(() => mapAppSettingsToProcessingSettings(DEFAULT_APP_SETTINGS));
 
   const processingTasksRef = useRef<ProcessingTask[]>([]);
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
+  const persistedAppSettingsRef = useRef<PersistedAppSettings>(DEFAULT_APP_SETTINGS);
 
   useEffect(() => {
     processingTasksRef.current = processingTasks;
   }, [processingTasks]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadSettings = async () => {
+      try {
+        const loaded = await invoke<PersistedAppSettings>('get_app_settings');
+        if (!active) return;
+        const mergedSettings = { ...DEFAULT_APP_SETTINGS, ...loaded };
+        persistedAppSettingsRef.current = mergedSettings;
+        setPersistedAppSettings(mergedSettings);
+        setSettings(mapAppSettingsToProcessingSettings(mergedSettings));
+      } catch (error) {
+        console.error('加载设置失败:', error);
+      }
+    };
+
+    void loadSettings();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -705,6 +799,16 @@ function App() {
 
   const handleSettingsChange = useCallback((newSettings: ProcessingSettings) => {
     setSettings(newSettings);
+    const nextPersistedSettings = mapProcessingSettingsToAppSettings(
+      newSettings,
+      persistedAppSettingsRef.current
+    );
+    persistedAppSettingsRef.current = nextPersistedSettings;
+    setPersistedAppSettings(nextPersistedSettings);
+
+    void invoke('update_app_settings', { settings: nextPersistedSettings }).catch(error => {
+      console.error('保存设置失败:', error);
+    });
   }, []);
 
   const handleOpenProcessedFile = useCallback(async () => {
@@ -858,6 +962,7 @@ function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
+        settings={settings}
         onClose={() => setIsSettingsOpen(false)}
         onSettingsChange={handleSettingsChange}
         disabled={hasProcessingTask}

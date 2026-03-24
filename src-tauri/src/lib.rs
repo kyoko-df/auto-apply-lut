@@ -86,6 +86,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
+            commands::system_manager::get_app_settings,
+            commands::system_manager::update_app_settings,
             commands::system_manager::get_available_codecs,
             commands::system_manager::get_ffmpeg_info,
             commands::system_manager::get_ffmpeg_path_config,

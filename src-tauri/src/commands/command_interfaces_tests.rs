@@ -214,13 +214,61 @@ fn command_interfaces_system() {
         let settings = run_async(system_manager::get_app_settings(state_ref(&config_manager)))
             .expect("get_app_settings failed");
         assert!(!settings.log_level.is_empty());
+        assert_eq!(settings.output_format, "mp4");
+        assert_eq!(settings.video_codec, "libx264");
+        assert_eq!(settings.audio_codec, "aac");
 
+        let updated_settings = system_manager::AppSettings {
+            default_output_dir: "/tmp/output".to_string(),
+            ffmpeg_path: "/tmp/ffmpeg".to_string(),
+            max_concurrent_tasks: 3,
+            cache_size_mb: 2048,
+            hardware_acceleration: true,
+            log_level: "debug".to_string(),
+            ui_theme: "dark".to_string(),
+            language: "en-US".to_string(),
+            output_format: "mov".to_string(),
+            video_codec: "hevc_videotoolbox".to_string(),
+            audio_codec: "opus".to_string(),
+            quality_preset: "high_quality".to_string(),
+            resolution: "4k".to_string(),
+            fps: Some(29.97),
+            bitrate: "18M".to_string(),
+            lut_intensity: 82.5,
+            lut_error_strategy: "SkipOnError".to_string(),
+            color_space: "rec2020".to_string(),
+            two_pass_encoding: true,
+            preserve_metadata: false,
+        };
         let updated = run_async(system_manager::update_app_settings(
-            settings,
+            updated_settings,
             state_ref(&config_manager),
         ))
         .expect("update_app_settings failed");
         assert_eq!(updated, "Settings updated successfully");
+
+        let persisted = run_async(system_manager::get_app_settings(state_ref(&config_manager)))
+            .expect("get_app_settings after update failed");
+        assert_eq!(persisted.default_output_dir, "/tmp/output");
+        assert_eq!(persisted.ffmpeg_path, "/tmp/ffmpeg");
+        assert_eq!(persisted.max_concurrent_tasks, 3);
+        assert_eq!(persisted.cache_size_mb, 2048);
+        assert!(persisted.hardware_acceleration);
+        assert_eq!(persisted.log_level, "debug");
+        assert_eq!(persisted.ui_theme, "dark");
+        assert_eq!(persisted.language, "en-US");
+        assert_eq!(persisted.output_format, "mov");
+        assert_eq!(persisted.video_codec, "hevc_videotoolbox");
+        assert_eq!(persisted.audio_codec, "opus");
+        assert_eq!(persisted.quality_preset, "high_quality");
+        assert_eq!(persisted.resolution, "4k");
+        assert_eq!(persisted.fps, Some(29.97));
+        assert_eq!(persisted.bitrate, "18M");
+        assert_eq!(persisted.lut_intensity, 82.5);
+        assert_eq!(persisted.lut_error_strategy, "SkipOnError");
+        assert_eq!(persisted.color_space, "rec2020");
+        assert!(persisted.two_pass_encoding);
+        assert!(!persisted.preserve_metadata);
 
         let log_dir = get_app_data_dir().expect("get_app_data_dir failed").join("logs");
         std::fs::create_dir_all(&log_dir).expect("failed to create logs dir");

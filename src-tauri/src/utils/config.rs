@@ -7,6 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     /// 默认输出目录
     pub default_output_dir: Option<String>,
@@ -28,6 +29,30 @@ pub struct AppConfig {
     pub theme: String,
     /// 语言设置
     pub language: String,
+    /// 输出格式
+    pub output_format: String,
+    /// 视频编码器
+    pub video_codec: String,
+    /// 音频编码器
+    pub audio_codec: String,
+    /// 质量预设
+    pub quality_preset: String,
+    /// 分辨率
+    pub resolution: String,
+    /// 帧率
+    pub fps: Option<f64>,
+    /// 码率
+    pub bitrate: String,
+    /// LUT 强度
+    pub lut_intensity: f32,
+    /// LUT 错误处理策略
+    pub lut_error_strategy: String,
+    /// 色彩空间
+    pub color_space: String,
+    /// 是否启用双通编码
+    pub two_pass_encoding: bool,
+    /// 是否保留元数据
+    pub preserve_metadata: bool,
 }
 
 impl Default for AppConfig {
@@ -37,12 +62,24 @@ impl Default for AppConfig {
             ffmpeg_path: None,
             max_concurrent_tasks: 4,
             cache_size_limit: 1024, // 1GB
-            enable_hardware_acceleration: true,
+            enable_hardware_acceleration: false,
             log_level: "info".to_string(),
             recent_lut_files: Vec::new(),
             recent_video_files: Vec::new(),
             theme: "light".to_string(),
             language: "zh-CN".to_string(),
+            output_format: "mp4".to_string(),
+            video_codec: "libx264".to_string(),
+            audio_codec: "aac".to_string(),
+            quality_preset: "balanced".to_string(),
+            resolution: "original".to_string(),
+            fps: None,
+            bitrate: "auto".to_string(),
+            lut_intensity: 100.0,
+            lut_error_strategy: "StopOnError".to_string(),
+            color_space: "rec709".to_string(),
+            two_pass_encoding: false,
+            preserve_metadata: true,
         }
     }
 }

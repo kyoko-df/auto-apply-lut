@@ -49,6 +49,18 @@ pub struct AppSettings {
     pub log_level: String,
     pub ui_theme: String,
     pub language: String,
+    pub output_format: String,
+    pub video_codec: String,
+    pub audio_codec: String,
+    pub quality_preset: String,
+    pub resolution: String,
+    pub fps: Option<f64>,
+    pub bitrate: String,
+    pub lut_intensity: f32,
+    pub lut_error_strategy: String,
+    pub color_space: String,
+    pub two_pass_encoding: bool,
+    pub preserve_metadata: bool,
 }
 
 #[tauri::command]
@@ -104,15 +116,62 @@ pub async fn get_app_settings(
         log_level: config.log_level.clone(),
         ui_theme: config.theme.clone(),
         language: config.language.clone(),
+        output_format: config.output_format.clone(),
+        video_codec: config.video_codec.clone(),
+        audio_codec: config.audio_codec.clone(),
+        quality_preset: config.quality_preset.clone(),
+        resolution: config.resolution.clone(),
+        fps: config.fps,
+        bitrate: config.bitrate.clone(),
+        lut_intensity: config.lut_intensity,
+        lut_error_strategy: config.lut_error_strategy.clone(),
+        color_space: config.color_space.clone(),
+        two_pass_encoding: config.two_pass_encoding,
+        preserve_metadata: config.preserve_metadata,
     })
 }
 
 #[tauri::command]
 pub async fn update_app_settings(
     settings: AppSettings,
-    _config_manager: State<'_, Mutex<ConfigManager>>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<String, String> {
-    // 简化实现，暂时只返回成功
+    let mut cfg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+
+    cfg.update_config(|config| {
+        config.default_output_dir = if settings.default_output_dir.trim().is_empty() {
+            None
+        } else {
+            Some(settings.default_output_dir.clone())
+        };
+        config.ffmpeg_path = if settings.ffmpeg_path.trim().is_empty() {
+            None
+        } else {
+            Some(settings.ffmpeg_path.clone())
+        };
+        config.max_concurrent_tasks = settings.max_concurrent_tasks;
+        config.cache_size_limit = settings.cache_size_mb as u64;
+        config.enable_hardware_acceleration = settings.hardware_acceleration;
+        config.log_level = settings.log_level.clone();
+        config.theme = settings.ui_theme.clone();
+        config.language = settings.language.clone();
+        config.output_format = settings.output_format.clone();
+        config.video_codec = settings.video_codec.clone();
+        config.audio_codec = settings.audio_codec.clone();
+        config.quality_preset = settings.quality_preset.clone();
+        config.resolution = settings.resolution.clone();
+        config.fps = settings.fps;
+        config.bitrate = settings.bitrate.clone();
+        config.lut_intensity = settings.lut_intensity;
+        config.lut_error_strategy = settings.lut_error_strategy.clone();
+        config.color_space = settings.color_space.clone();
+        config.two_pass_encoding = settings.two_pass_encoding;
+        config.preserve_metadata = settings.preserve_metadata;
+    })
+    .map_err(|e| format!("Failed to update settings: {}", e))?;
+
     logger::log_info("App settings update requested");
     Ok("Settings updated successfully".to_string())
 }

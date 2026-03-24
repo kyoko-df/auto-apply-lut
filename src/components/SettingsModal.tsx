@@ -4,6 +4,7 @@ import './SettingsModal.css';
 
 interface SettingsModalProps {
   isOpen: boolean;
+  settings: ProcessingSettings;
   onClose: () => void;
   onSettingsChange: (settings: ProcessingSettings) => void;
   disabled?: boolean;
@@ -74,6 +75,7 @@ async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
 
 const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
+  settings: initialSettings,
   onClose,
   onSettingsChange,
   disabled = false
@@ -95,7 +97,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     output_directory: ''
   };
 
-  const [settings, setSettings] = useState<ProcessingSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<ProcessingSettings>(initialSettings);
   const [availableCodecs, setAvailableCodecs] = useState<{
     video: CodecInfo[];
     audio: CodecInfo[];
@@ -259,6 +261,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     setSettings(DEFAULT_SETTINGS);
     onSettingsChange(DEFAULT_SETTINGS);
   }, [onSettingsChange]);
+
+  useEffect(() => {
+    setSettings(initialSettings);
+  }, [initialSettings]);
 
   // 组件挂载时加载编解码器
   useEffect(() => {
