@@ -21,6 +21,27 @@
   color: var(--color-fg-subtle);
 }
 
+.upload-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.upload-toolbar-button {
+  width: auto;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.upload-scan-summary {
+  font-size: 0.82rem;
+  color: var(--color-fg-subtle);
+}
+
 .upload-area {
   border: 1px dashed var(--border-soft);
   border-radius: var(--radius-lg);
@@ -284,6 +305,7 @@
 /* 响应式设计 */
 @media (max-width: 768px) {
   .upload-block { padding: 12px; }
+  .upload-toolbar { gap: 8px; }
   .upload-area { padding: 20px 16px; min-height: 100px; }
   .upload-icon { font-size: 2.5rem; }
   .primary-text { font-size: 1rem; }
@@ -297,6 +319,8 @@
 
 @media (max-width: 480px) {
   .upload-block { padding: 10px; }
+  .upload-toolbar { flex-direction: column; align-items: flex-start; }
+  .upload-toolbar-button { width: 100%; justify-content: center; }
   .upload-area { padding: 16px 12px; min-height: 80px; }
   .upload-placeholder { gap: 8px; }
   .upload-icon { font-size: 2rem; }
