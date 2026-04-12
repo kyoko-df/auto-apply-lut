@@ -1,5 +1,6 @@
 use super::{batch_manager, file_manager, gpu_manager, lut_manager, processor, system_manager};
 use crate::core::ffmpeg::processor::VideoProcessor;
+use crate::core::gpu::GpuManager;
 use crate::core::lut::LutManager;
 use crate::core::task::{TaskManager, TaskType};
 use crate::utils::config::ConfigManager;
@@ -66,15 +67,19 @@ fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
 
 #[test]
 fn command_interfaces_gpu() {
-    let gpus = run_async(gpu_manager::get_gpu_info()).expect("get_gpu_info failed");
+    let gpu_manager_state = GpuManager::new();
+
+    let gpus = run_async(gpu_manager::get_gpu_info(state_ref(&gpu_manager_state)))
+        .expect("get_gpu_info failed");
     assert!(!gpus.is_empty());
 
-    let hw = run_async(gpu_manager::check_hardware_acceleration())
+    let hw = run_async(gpu_manager::check_hardware_acceleration(state_ref(&gpu_manager_state)))
         .expect("check_hardware_acceleration failed");
     assert_eq!(hw.available, !hw.supported_codecs.is_empty());
 
     let result = run_async(gpu_manager::test_hardware_acceleration(
         "definitely_invalid_codec".to_string(),
+        state_ref(&gpu_manager_state),
     ));
     match result {
         Ok(success) => assert!(!success),

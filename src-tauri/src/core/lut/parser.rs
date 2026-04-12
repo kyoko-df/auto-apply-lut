@@ -580,16 +580,16 @@ pub struct MgaParser;
 
 #[async_trait]
 impl LutParser for MgaParser {
-    async fn parse(_path: &Path) -> AppResult<LutData> {
-        Err(AppError::Validation("MGA format parsing not implemented yet".to_string()))
+    async fn parse(path: &Path) -> AppResult<LutData> {
+        parse_textual_3d_lut(path, LutFormat::Mga).await
     }
     
-    async fn write(_lut_data: &LutData, _path: &Path) -> AppResult<()> {
-        Err(AppError::Validation("MGA format writing not implemented yet".to_string()))
+    async fn write(lut_data: &LutData, path: &Path) -> AppResult<()> {
+        write_textual_3d_lut(lut_data, path, "MGA 1.0", "GRID_SIZE").await
     }
     
-    async fn parse_header(_path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
-        Err(AppError::Validation("MGA format header parsing not implemented yet".to_string()))
+    async fn parse_header(path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
+        parse_textual_3d_header(path, LutFormat::Mga).await
     }
 }
 
@@ -598,16 +598,16 @@ pub struct M3dParser;
 
 #[async_trait]
 impl LutParser for M3dParser {
-    async fn parse(_path: &Path) -> AppResult<LutData> {
-        Err(AppError::Validation("M3D format parsing not implemented yet".to_string()))
+    async fn parse(path: &Path) -> AppResult<LutData> {
+        parse_textual_3d_lut(path, LutFormat::M3d).await
     }
     
-    async fn write(_lut_data: &LutData, _path: &Path) -> AppResult<()> {
-        Err(AppError::Validation("M3D format writing not implemented yet".to_string()))
+    async fn write(lut_data: &LutData, path: &Path) -> AppResult<()> {
+        write_textual_3d_lut(lut_data, path, "M3D", "LUT_3D_SIZE").await
     }
     
-    async fn parse_header(_path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
-        Err(AppError::Validation("M3D format header parsing not implemented yet".to_string()))
+    async fn parse_header(path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
+        parse_textual_3d_header(path, LutFormat::M3d).await
     }
 }
 
@@ -616,16 +616,216 @@ pub struct LookParser;
 
 #[async_trait]
 impl LutParser for LookParser {
-    async fn parse(_path: &Path) -> AppResult<LutData> {
-        Err(AppError::Validation("LOOK format parsing not implemented yet".to_string()))
+    async fn parse(path: &Path) -> AppResult<LutData> {
+        parse_textual_3d_lut(path, LutFormat::Look).await
     }
     
-    async fn write(_lut_data: &LutData, _path: &Path) -> AppResult<()> {
-        Err(AppError::Validation("LOOK format writing not implemented yet".to_string()))
+    async fn write(lut_data: &LutData, path: &Path) -> AppResult<()> {
+        write_textual_3d_lut(lut_data, path, "LOOK", "SIZE").await
     }
     
-    async fn parse_header(_path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
-        Err(AppError::Validation("LOOK format header parsing not implemented yet".to_string()))
+    async fn parse_header(path: &Path) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
+        parse_textual_3d_header(path, LutFormat::Look).await
+    }
+}
+
+async fn parse_textual_3d_lut(path: &Path, format: LutFormat) -> AppResult<LutData> {
+    let content = fs::read_to_string(path).await
+        .map_err(|e| AppError::Io(format!("Failed to read {:?} file: {}", format, e)))?;
+    parse_textual_3d_content(&content, format)
+}
+
+async fn parse_textual_3d_header(
+    path: &Path,
+    format: LutFormat,
+) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
+    let lut_data = parse_textual_3d_lut(path, format).await?;
+    Ok((
+        lut_data.lut_type,
+        lut_data.size as u32,
+        lut_data.title.clone(),
+        lut_data.description.clone(),
+    ))
+}
+
+async fn write_textual_3d_lut(
+    lut_data: &LutData,
+    path: &Path,
+    header: &str,
+    size_label: &str,
+) -> AppResult<()> {
+    let mut content = String::new();
+    content.push_str(header);
+    content.push('\n');
+    if let Some(title) = &lut_data.title {
+        content.push_str(&format!("TITLE \"{}\"\n", title));
+    }
+    if let Some(description) = &lut_data.description {
+        content.push_str(&format!("DESCRIPTION \"{}\"\n", description));
+    }
+    content.push_str(&format!("{} {}\n", size_label, lut_data.size));
+    content.push_str(&format!(
+        "DOMAIN_MIN {} {} {}\n",
+        lut_data.domain_min[0],
+        lut_data.domain_min[1],
+        lut_data.domain_min[2]
+    ));
+    content.push_str(&format!(
+        "DOMAIN_MAX {} {} {}\n\n",
+        lut_data.domain_max[0],
+        lut_data.domain_max[1],
+        lut_data.domain_max[2]
+    ));
+
+    if let Some(ref data_3d) = lut_data.data_3d {
+        for r in 0..lut_data.size {
+            for g in 0..lut_data.size {
+                for b in 0..lut_data.size {
+                    let point = data_3d[r][g][b];
+                    content.push_str(&format!("{:.6} {:.6} {:.6}\n", point[0], point[1], point[2]));
+                }
+            }
+        }
+    }
+
+    fs::write(path, content).await
+        .map_err(|e| AppError::Io(format!("Failed to write {:?} file: {}", lut_data.format, e)))
+}
+
+fn parse_textual_3d_content(content: &str, format: LutFormat) -> AppResult<LutData> {
+    let mut size = 0usize;
+    let mut title = None;
+    let mut description = None;
+    let mut domain_min = [0.0f32; 3];
+    let mut domain_max = [1.0f32; 3];
+    let mut data = Vec::new();
+    let mut metadata = HashMap::new();
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("//") || line.starts_with(';') {
+            continue;
+        }
+
+        if let Some((key, value)) = parse_textual_header_line(line) {
+            match key.as_str() {
+                "TITLE" | "NAME" => {
+                    title = Some(unquote_text(value).to_string());
+                    continue;
+                }
+                "DESCRIPTION" | "DESC" => {
+                    description = Some(unquote_text(value).to_string());
+                    continue;
+                }
+                "LUT_3D_SIZE" | "SIZE" | "GRID_SIZE" => {
+                    size = value.parse::<usize>()
+                        .map_err(|_| AppError::Validation(format!("Invalid LUT size in {:?} file", format)))?;
+                    continue;
+                }
+                "DOMAIN_MIN" => {
+                    domain_min = parse_rgb_triplet(value)
+                        .ok_or_else(|| AppError::Validation(format!("Invalid DOMAIN_MIN in {:?} file", format)))?;
+                    continue;
+                }
+                "DOMAIN_MAX" => {
+                    domain_max = parse_rgb_triplet(value)
+                        .ok_or_else(|| AppError::Validation(format!("Invalid DOMAIN_MAX in {:?} file", format)))?;
+                    continue;
+                }
+                "M3D" | "LOOK" | "MGA" => {
+                    if !value.is_empty() {
+                        metadata.insert(key.to_lowercase(), value.to_string());
+                    }
+                    continue;
+                }
+                _ => {
+                    metadata.insert(key.to_lowercase(), unquote_text(value).to_string());
+                    continue;
+                }
+            }
+        }
+
+        let color = parse_rgb_triplet(line)
+            .ok_or_else(|| AppError::Validation(format!("Invalid color row in {:?} file", format)))?;
+        data.push(color);
+    }
+
+    if size == 0 {
+        return Err(AppError::Validation(format!("{:?} file missing LUT size", format)));
+    }
+
+    let expected_size = size.pow(3);
+    if data.len() != expected_size {
+        return Err(AppError::Validation(format!(
+            "Expected {} data points, found {}",
+            expected_size,
+            data.len()
+        )));
+    }
+
+    let mut data_3d = vec![vec![vec![[0.0, 0.0, 0.0]; size]; size]; size];
+    for (index, color) in data.iter().enumerate() {
+        let r = index / (size * size);
+        let g = (index / size) % size;
+        let b = index % size;
+        data_3d[r][g][b] = *color;
+    }
+
+    Ok(LutData {
+        lut_type: LutType::ThreeDimensional,
+        format,
+        title,
+        description,
+        domain_min,
+        domain_max,
+        size,
+        data_3d: Some(data_3d),
+        data_1d: None,
+        metadata,
+    })
+}
+
+fn parse_textual_header_line(line: &str) -> Option<(String, &str)> {
+    if let Some((key, value)) = line.split_once('=') {
+        let key = key.trim();
+        if is_textual_header_key(key) {
+            return Some((key.to_uppercase(), value.trim()));
+        }
+    }
+
+    let mut parts = line.splitn(2, char::is_whitespace);
+    let key = parts.next()?.trim();
+    let value = parts.next().unwrap_or("").trim();
+    if is_textual_header_key(key) {
+        Some((key.to_uppercase(), value))
+    } else {
+        None
+    }
+}
+
+fn is_textual_header_key(key: &str) -> bool {
+    let key = key.trim();
+    !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn parse_rgb_triplet(value: &str) -> Option<[f32; 3]> {
+    let values: Vec<f32> = value.split_whitespace()
+        .filter_map(|part| part.parse::<f32>().ok())
+        .collect();
+    if values.len() >= 3 {
+        Some([values[0], values[1], values[2]])
+    } else {
+        None
+    }
+}
+
+fn unquote_text(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
     }
 }
 
@@ -768,5 +968,95 @@ DOMAIN_MAX 1.0 1.0 1.0
         let content = fs::read_to_string(&cube_file).await.unwrap();
         assert!(content.contains("TITLE Test Output"));
         assert!(content.contains("LUT_3D_SIZE 2"));
+    }
+
+    #[tokio::test]
+    async fn test_mga_parser() {
+        let temp_dir = tempdir().unwrap();
+        let mga_file = temp_dir.path().join("test.mga");
+
+        let content = r#"MGA 1.0
+TITLE "Test MGA"
+GRID_SIZE 2
+DESCRIPTION "MGA sample"
+
+0.0 0.0 0.0
+0.0 0.0 1.0
+0.0 1.0 0.0
+0.0 1.0 1.0
+1.0 0.0 0.0
+1.0 0.0 1.0
+1.0 1.0 0.0
+1.0 1.0 1.0
+"#;
+
+        let mut file = File::create(&mga_file).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
+        let lut_data = MgaParser::parse(&mga_file).await.unwrap();
+        assert_eq!(lut_data.format, LutFormat::Mga);
+        assert_eq!(lut_data.size, 2);
+        assert_eq!(lut_data.title, Some("Test MGA".to_string()));
+        assert_eq!(lut_data.description, Some("MGA sample".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_m3d_parser() {
+        let temp_dir = tempdir().unwrap();
+        let m3d_file = temp_dir.path().join("test.m3d");
+
+        let content = r#"M3D
+TITLE "Test M3D"
+LUT_3D_SIZE 2
+DOMAIN_MIN 0.0 0.0 0.0
+DOMAIN_MAX 1.0 1.0 1.0
+
+0.0 0.0 0.0
+0.0 0.0 1.0
+0.0 1.0 0.0
+0.0 1.0 1.0
+1.0 0.0 0.0
+1.0 0.0 1.0
+1.0 1.0 0.0
+1.0 1.0 1.0
+"#;
+
+        let mut file = File::create(&m3d_file).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
+        let lut_data = M3dParser::parse(&m3d_file).await.unwrap();
+        assert_eq!(lut_data.format, LutFormat::M3d);
+        assert_eq!(lut_data.size, 2);
+        assert_eq!(lut_data.title, Some("Test M3D".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_look_parser() {
+        let temp_dir = tempdir().unwrap();
+        let look_file = temp_dir.path().join("test.look");
+
+        let content = r#"LOOK
+NAME "Test LOOK"
+DESCRIPTION "LOOK sample"
+SIZE 2
+
+0.0 0.0 0.0
+0.0 0.0 1.0
+0.0 1.0 0.0
+0.0 1.0 1.0
+1.0 0.0 0.0
+1.0 0.0 1.0
+1.0 1.0 0.0
+1.0 1.0 1.0
+"#;
+
+        let mut file = File::create(&look_file).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
+        let lut_data = LookParser::parse(&look_file).await.unwrap();
+        assert_eq!(lut_data.format, LutFormat::Look);
+        assert_eq!(lut_data.size, 2);
+        assert_eq!(lut_data.title, Some("Test LOOK".to_string()));
+        assert_eq!(lut_data.description, Some("LOOK sample".to_string()));
     }
 }

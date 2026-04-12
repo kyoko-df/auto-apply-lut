@@ -12,6 +12,7 @@ pub mod utils;
 // Re-export commonly used types
 pub use data::{LutData, LutData1D, LutStatistics};
 pub use utils::{LutUtils, LutFileInfo};
+use self::parser::{LookParser, LutParser, M3dParser, MgaParser};
 
 use crate::types::{AppResult, LutInfo, LutType, LutFormat, LutValidationResult, LutSizeInfo};
 use std::path::Path;
@@ -34,6 +35,9 @@ impl LutManager {
                 LutFormat::ThreeDL,
                 LutFormat::Lut,
                 LutFormat::Csp,
+                LutFormat::M3d,
+                LutFormat::Look,
+                LutFormat::Mga,
             ],
         }
     }
@@ -111,27 +115,26 @@ impl LutManager {
             });
         }
 
-        // 读取文件内容
-        let content = fs::read_to_string(path).await
-            .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?;
-
-        // 根据格式验证
         match format {
-            LutFormat::Cube => self.validate_cube_lut(&content).await,
-            LutFormat::ThreeDL => self.validate_3dl_lut(&content).await,
-            LutFormat::Lut => self.validate_lut_format(&content).await,
-            LutFormat::Csp => self.validate_csp_lut(&content).await,
-            LutFormat::M3d | LutFormat::Look | LutFormat::Vlt | LutFormat::Mga => {
-                // 这些格式暂时不支持，返回未实现错误
-                Ok(LutValidationResult {
-                    is_valid: false,
-                    lut_type: LutType::Unknown,
-                    format,
-                    errors: vec![format!("LUT format {:?} is not yet implemented", format)],
-                    warnings: vec![],
-                    size_info: None,
-                })
-            },
+            LutFormat::Cube => self.validate_cube_lut(&fs::read_to_string(path).await
+                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
+            LutFormat::ThreeDL => self.validate_3dl_lut(&fs::read_to_string(path).await
+                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
+            LutFormat::Lut => self.validate_lut_format(&fs::read_to_string(path).await
+                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
+            LutFormat::Csp => self.validate_csp_lut(&fs::read_to_string(path).await
+                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
+            LutFormat::M3d => Self::validate_parsed_lut(M3dParser::parse(path).await?),
+            LutFormat::Look => Self::validate_parsed_lut(LookParser::parse(path).await?),
+            LutFormat::Mga => Self::validate_parsed_lut(MgaParser::parse(path).await?),
+            LutFormat::Vlt => Ok(LutValidationResult {
+                is_valid: false,
+                lut_type: LutType::Unknown,
+                format,
+                errors: vec![format!("LUT format {:?} is not yet implemented", format)],
+                warnings: vec![],
+                size_info: None,
+            }),
             LutFormat::Unknown => Ok(LutValidationResult {
                 is_valid: false,
                 lut_type: LutType::Unknown,
@@ -154,6 +157,26 @@ impl LutManager {
     /// 获取支持的LUT格式
     pub fn get_supported_formats(&self) -> &[LutFormat] {
         &self.supported_formats
+    }
+
+    fn validate_parsed_lut(lut_data: crate::core::lut::data::LutData) -> AppResult<LutValidationResult> {
+        let size_info = Some(LutSizeInfo {
+            grid_size: Some(lut_data.size as u32),
+            input_range: Some((
+                lut_data.domain_min[0].min(lut_data.domain_min[1]).min(lut_data.domain_min[2]),
+                lut_data.domain_max[0].max(lut_data.domain_max[1]).max(lut_data.domain_max[2]),
+            )),
+            output_range: Some((0.0, 1.0)),
+        });
+
+        Ok(LutValidationResult {
+            is_valid: true,
+            lut_type: lut_data.lut_type,
+            format: lut_data.format,
+            errors: vec![],
+            warnings: vec![],
+            size_info,
+        })
     }
 
     /// 检查格式是否支持
@@ -408,5 +431,53 @@ impl LutManager {
 impl Default for LutManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn supports_and_validates_extended_text_lut_formats() {
+        let temp_dir = tempdir().expect("tempdir");
+        let manager = LutManager::new();
+
+        let look_file = temp_dir.path().join("sample.look");
+        let mga_file = temp_dir.path().join("sample.mga");
+        let m3d_file = temp_dir.path().join("sample.m3d");
+
+        let content = r#"TITLE "Extended"
+LUT_3D_SIZE 2
+
+0.0 0.0 0.0
+0.0 0.0 1.0
+0.0 1.0 0.0
+0.0 1.0 1.0
+1.0 0.0 0.0
+1.0 0.0 1.0
+1.0 1.0 0.0
+1.0 1.0 1.0
+"#;
+
+        tokio::fs::write(&look_file, format!("LOOK\n{}", content))
+            .await
+            .expect("write look");
+        tokio::fs::write(&mga_file, format!("MGA 1.0\n{}", content.replace("LUT_3D_SIZE", "GRID_SIZE")))
+            .await
+            .expect("write mga");
+        tokio::fs::write(&m3d_file, format!("M3D\n{}", content))
+            .await
+            .expect("write m3d");
+
+        let formats = manager.get_supported_formats();
+        assert!(formats.contains(&LutFormat::Look));
+        assert!(formats.contains(&LutFormat::Mga));
+        assert!(formats.contains(&LutFormat::M3d));
+
+        assert!(manager.validate_lut(&look_file).await.expect("validate look").is_valid);
+        assert!(manager.validate_lut(&mga_file).await.expect("validate mga").is_valid);
+        assert!(manager.validate_lut(&m3d_file).await.expect("validate m3d").is_valid);
     }
 }

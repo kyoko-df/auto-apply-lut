@@ -52,6 +52,7 @@ pub fn run() {
 
     // 初始化核心服务
     let lut_manager = core::lut::LutManager::new();
+    let gpu_manager = core::gpu::GpuManager::new();
     let task_manager = core::task::TaskManager::default();
     // 全局配置管理器需提前初始化，以便读取 ffmpeg 路径
     let config_manager = utils::config::ConfigManager::new().expect("初始化配置管理器失败");
@@ -79,6 +80,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(lut_manager)
+        .manage(gpu_manager)
         .manage(task_manager)
         .manage(video_processor)
         .manage(Mutex::new(config_manager))
