@@ -1,10 +1,10 @@
 //! 文件工具模块
 //! 提供文件操作的辅助功能
 
-use crate::types::{AppResult, AppError};
-use std::path::{Path, PathBuf};
+use crate::types::{AppError, AppResult};
 use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 
 /// 确保目录存在
 pub fn ensure_dir_exists(path: &Path) -> AppResult<()> {
@@ -37,9 +37,13 @@ pub fn copy_file(src: &Path, dst: &Path) -> AppResult<()> {
     if let Some(parent) = dst.parent() {
         ensure_dir_exists(parent)?;
     }
-    
-    fs::copy(src, dst)
-        .map_err(|e| AppError::Io(format!("Failed to copy file from {:?} to {:?}: {}", src, dst, e)))?;
+
+    fs::copy(src, dst).map_err(|e| {
+        AppError::Io(format!(
+            "Failed to copy file from {:?} to {:?}: {}",
+            src, dst, e
+        ))
+    })?;
     Ok(())
 }
 
@@ -48,9 +52,13 @@ pub fn move_file(src: &Path, dst: &Path) -> AppResult<()> {
     if let Some(parent) = dst.parent() {
         ensure_dir_exists(parent)?;
     }
-    
-    fs::rename(src, dst)
-        .map_err(|e| AppError::Io(format!("Failed to move file from {:?} to {:?}: {}", src, dst, e)))?;
+
+    fs::rename(src, dst).map_err(|e| {
+        AppError::Io(format!(
+            "Failed to move file from {:?} to {:?}: {}",
+            src, dst, e
+        ))
+    })?;
     Ok(())
 }
 
@@ -89,11 +97,11 @@ pub fn get_file_stem(path: &Path) -> Option<String> {
 /// 列出目录中的文件
 pub fn list_files(dir: &Path, recursive: bool) -> AppResult<Vec<PathBuf>> {
     let mut files = Vec::new();
-    
+
     if !dir.is_dir() {
         return Err(AppError::Io(format!("{:?} is not a directory", dir)));
     }
-    
+
     list_files_recursive(dir, recursive, &mut files)?;
     Ok(files)
 }
@@ -101,30 +109,30 @@ pub fn list_files(dir: &Path, recursive: bool) -> AppResult<Vec<PathBuf>> {
 fn list_files_recursive(dir: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> AppResult<()> {
     let entries = fs::read_dir(dir)
         .map_err(|e| AppError::Io(format!("Failed to read directory {:?}: {}", dir, e)))?;
-    
+
     for entry in entries {
-        let entry = entry
-            .map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
+        let entry =
+            entry.map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
         let path = entry.path();
-        
+
         if path.is_file() {
             files.push(path);
         } else if path.is_dir() && recursive {
             list_files_recursive(&path, recursive, files)?;
         }
     }
-    
+
     Ok(())
 }
 
 /// 计算目录大小
 pub fn calculate_dir_size(dir: &Path) -> AppResult<u64> {
     let mut total_size = 0;
-    
+
     if !dir.is_dir() {
         return Err(AppError::Io(format!("{:?} is not a directory", dir)));
     }
-    
+
     calculate_dir_size_recursive(dir, &mut total_size)?;
     Ok(total_size)
 }
@@ -132,12 +140,12 @@ pub fn calculate_dir_size(dir: &Path) -> AppResult<u64> {
 fn calculate_dir_size_recursive(dir: &Path, total_size: &mut u64) -> AppResult<()> {
     let entries = fs::read_dir(dir)
         .map_err(|e| AppError::Io(format!("Failed to read directory {:?}: {}", dir, e)))?;
-    
+
     for entry in entries {
-        let entry = entry
-            .map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
+        let entry =
+            entry.map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
         let path = entry.path();
-        
+
         if path.is_file() {
             let size = get_file_size(&path)?;
             *total_size += size;
@@ -145,6 +153,6 @@ fn calculate_dir_size_recursive(dir: &Path, total_size: &mut u64) -> AppResult<(
             calculate_dir_size_recursive(&path, total_size)?;
         }
     }
-    
+
     Ok(())
 }

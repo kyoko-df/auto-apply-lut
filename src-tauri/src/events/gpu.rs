@@ -76,19 +76,19 @@ impl GpuEvent {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-    
+
     /// 设置GPU状态
     pub fn with_status(mut self, status: GpuStatus) -> Self {
         self.status = Some(status);
         self
     }
-    
+
     /// 设置GPU信息
     pub fn with_gpu_info(mut self, gpu_info: GpuInfo) -> Self {
         self.gpu_info = Some(gpu_info);
         self
     }
-    
+
     /// 设置使用率
     pub fn with_usage(mut self, usage_percent: f64, memory_usage_percent: f64) -> Self {
         self.usage_percent = Some(usage_percent);

@@ -88,11 +88,11 @@ impl VideoMetadata {
         if let Some(streams) = json.get("streams").and_then(|v| v.as_array()) {
             for stream in streams {
                 let codec_type = stream.get("codec_type").and_then(|v| v.as_str());
-                
+
                 match codec_type {
                     Some("video") => {
                         let video_stream = Self::parse_video_stream(stream)?;
-                        
+
                         // 如果这是第一个视频流，更新主要元数据
                         if metadata.video_streams.is_empty() {
                             metadata.width = Some(video_stream.width);
@@ -101,7 +101,7 @@ impl VideoMetadata {
                             metadata.codec = Some(video_stream.codec.clone());
                             metadata.pixel_format = video_stream.pixel_format.clone();
                         }
-                        
+
                         metadata.video_streams.push(video_stream);
                     }
                     Some("audio") => {
@@ -118,28 +118,28 @@ impl VideoMetadata {
 
     /// 解析视频流
     fn parse_video_stream(stream: &Value) -> AppResult<VideoStreamInfo> {
-        let codec = stream.get("codec_name")
+        let codec = stream
+            .get("codec_name")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let width = stream.get("width")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        let width = stream.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-        let height = stream.get("height")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        let height = stream.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-        let frame_rate = stream.get("r_frame_rate")
+        let frame_rate = stream
+            .get("r_frame_rate")
             .and_then(|v| v.as_str())
             .and_then(|s| Self::parse_fraction(s));
 
-        let bitrate = stream.get("bit_rate")
+        let bitrate = stream
+            .get("bit_rate")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok());
 
-        let pixel_format = stream.get("pix_fmt")
+        let pixel_format = stream
+            .get("pix_fmt")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -155,20 +155,24 @@ impl VideoMetadata {
 
     /// 解析音频流
     fn parse_audio_stream(stream: &Value) -> AppResult<AudioStreamInfo> {
-        let codec = stream.get("codec_name")
+        let codec = stream
+            .get("codec_name")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let sample_rate = stream.get("sample_rate")
+        let sample_rate = stream
+            .get("sample_rate")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok());
 
-        let channels = stream.get("channels")
+        let channels = stream
+            .get("channels")
             .and_then(|v| v.as_u64())
             .map(|c| c as u32);
 
-        let bitrate = stream.get("bit_rate")
+        let bitrate = stream
+            .get("bit_rate")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok());
 
@@ -184,7 +188,9 @@ impl VideoMetadata {
     fn parse_fraction(fraction_str: &str) -> Option<f64> {
         let parts: Vec<&str> = fraction_str.split('/').collect();
         if parts.len() == 2 {
-            if let (Ok(numerator), Ok(denominator)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+            if let (Ok(numerator), Ok(denominator)) =
+                (parts[0].parse::<f64>(), parts[1].parse::<f64>())
+            {
                 if denominator != 0.0 {
                     return Some(numerator / denominator);
                 }

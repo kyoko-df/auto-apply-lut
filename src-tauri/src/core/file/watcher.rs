@@ -1,15 +1,15 @@
 //! 文件监控器模块
 //! 提供文件系统变化监控功能
 
-use crate::types::{AppResult, AppError};
 use crate::core::file::FileManager;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use notify::{Watcher, RecursiveMode, Event, EventKind, Result as NotifyResult};
+use crate::types::{AppError, AppResult};
+use notify::{Event, EventKind, RecursiveMode, Result as NotifyResult, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, RwLock};
 
 /// 文件变化事件类型
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,9 +168,9 @@ impl FileWatcher {
                 RecursiveMode::NonRecursive
             };
 
-            watcher
-                .watch(path, mode)
-                .map_err(|e| AppError::Io(format!("Failed to watch path {}: {}", path.display(), e)))?;
+            watcher.watch(path, mode).map_err(|e| {
+                AppError::Io(format!("Failed to watch path {}: {}", path.display(), e))
+            })?;
         }
 
         Ok(())
@@ -181,9 +181,9 @@ impl FileWatcher {
         let path = path.as_ref();
 
         if let Some(ref mut watcher) = self.watcher {
-            watcher
-                .unwatch(path)
-                .map_err(|e| AppError::Io(format!("Failed to unwatch path {}: {}", path.display(), e)))?;
+            watcher.unwatch(path).map_err(|e| {
+                AppError::Io(format!("Failed to unwatch path {}: {}", path.display(), e))
+            })?;
         }
 
         // 从监控路径列表中移除
@@ -197,10 +197,10 @@ impl FileWatcher {
     pub async fn stop_watching(&mut self) {
         self.watcher = None;
         self.event_sender = None;
-        
+
         let mut watched_paths = self.watched_paths.write().await;
         watched_paths.clear();
-        
+
         let mut debounce_cache = self.debounce_cache.write().await;
         debounce_cache.clear();
     }
@@ -322,7 +322,7 @@ impl FileWatcher {
     pub async fn cleanup_debounce_cache(&self) {
         let now = Instant::now();
         let debounce_duration = Duration::from_millis(self.options.debounce_ms * 2);
-        
+
         let mut cache = self.debounce_cache.write().await;
         cache.retain(|_, last_time| now.duration_since(*last_time) < debounce_duration);
     }
@@ -331,7 +331,7 @@ impl FileWatcher {
     pub async fn get_watch_stats(&self) -> WatchStats {
         let watched_paths = self.watched_paths.read().await;
         let debounce_cache = self.debounce_cache.read().await;
-        
+
         WatchStats {
             watched_paths_count: watched_paths.len(),
             is_active: self.is_watching(),
@@ -369,7 +369,7 @@ mod tests {
     async fn test_file_watcher_creation() {
         let options = WatchOptions::default();
         let watcher = FileWatcher::new(options);
-        
+
         assert!(!watcher.is_watching());
         assert_eq!(watcher.get_watched_paths().await.len(), 0);
     }
@@ -379,19 +379,19 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let options = WatchOptions::default();
         let mut watcher = FileWatcher::new(options);
-        
+
         let mut rx = watcher
             .start_watching(vec![temp_dir.path().to_path_buf()])
             .await
             .unwrap();
-        
+
         assert!(watcher.is_watching());
         assert_eq!(watcher.get_watched_paths().await.len(), 1);
-        
+
         // 创建测试文件
         let test_file = temp_dir.path().join("test.mp4");
         File::create(&test_file).unwrap();
-        
+
         // 等待事件
         tokio::select! {
             event = rx.recv() => {
@@ -405,7 +405,7 @@ mod tests {
                 // 超时，可能是系统不支持文件监控
             }
         }
-        
+
         watcher.stop_watching().await;
         assert!(!watcher.is_watching());
     }
@@ -418,20 +418,20 @@ mod tests {
             ..Default::default()
         };
         let mut watcher = FileWatcher::new(options);
-        
+
         let mut rx = watcher
             .start_watching(vec![temp_dir.path().to_path_buf()])
             .await
             .unwrap();
-        
+
         // 创建LUT文件（应该被过滤掉）
         let lut_file = temp_dir.path().join("test.cube");
         File::create(&lut_file).unwrap();
-        
+
         // 创建视频文件（应该被检测到）
         let video_file = temp_dir.path().join("test.mp4");
         File::create(&video_file).unwrap();
-        
+
         // 等待事件
         tokio::select! {
             event = rx.recv() => {
@@ -444,7 +444,7 @@ mod tests {
                 // 超时
             }
         }
-        
+
         watcher.stop_watching().await;
     }
 
@@ -454,10 +454,19 @@ mod tests {
             ignore_patterns: vec!["*.tmp".to_string(), ".*".to_string()],
             ..Default::default()
         };
-        
-        assert!(FileWatcher::should_ignore_file(Path::new("test.tmp"), &options));
-        assert!(FileWatcher::should_ignore_file(Path::new(".hidden"), &options));
-        assert!(!FileWatcher::should_ignore_file(Path::new("test.mp4"), &options));
+
+        assert!(FileWatcher::should_ignore_file(
+            Path::new("test.tmp"),
+            &options
+        ));
+        assert!(FileWatcher::should_ignore_file(
+            Path::new(".hidden"),
+            &options
+        ));
+        assert!(!FileWatcher::should_ignore_file(
+            Path::new("test.mp4"),
+            &options
+        ));
     }
 
     #[tokio::test]
@@ -467,18 +476,21 @@ mod tests {
             ..Default::default()
         };
         let watcher = FileWatcher::new(options);
-        
+
         // 添加一些缓存条目
         {
             let mut cache = watcher.debounce_cache.write().await;
             cache.insert(PathBuf::from("test1"), Instant::now());
-            cache.insert(PathBuf::from("test2"), Instant::now() - Duration::from_millis(300));
+            cache.insert(
+                PathBuf::from("test2"),
+                Instant::now() - Duration::from_millis(300),
+            );
         }
-        
+
         assert_eq!(watcher.debounce_cache.read().await.len(), 2);
-        
+
         watcher.cleanup_debounce_cache().await;
-        
+
         // 旧的条目应该被清理
         assert!(watcher.debounce_cache.read().await.len() <= 1);
     }

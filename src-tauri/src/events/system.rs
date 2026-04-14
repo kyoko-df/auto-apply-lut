@@ -41,7 +41,7 @@ impl SystemEvent {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-    
+
     /// 设置附加数据
     pub fn with_data(mut self, data: serde_json::Value) -> Self {
         self.data = Some(data);
@@ -58,18 +58,12 @@ pub fn emit_system<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: SystemEv
 
 /// 发送应用启动事件
 pub fn emit_app_started<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let event = SystemEvent::new(
-        SystemEventType::AppStarted,
-        "应用已启动".to_string(),
-    );
+    let event = SystemEvent::new(SystemEventType::AppStarted, "应用已启动".to_string());
     emit_system(app, event);
 }
 
 /// 发送应用关闭事件
 pub fn emit_app_shutdown<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let event = SystemEvent::new(
-        SystemEventType::AppShutdown,
-        "应用正在关闭".to_string(),
-    );
+    let event = SystemEvent::new(SystemEventType::AppShutdown, "应用正在关闭".to_string());
     emit_system(app, event);
 }

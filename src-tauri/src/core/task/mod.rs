@@ -82,50 +82,50 @@ impl Task {
             completed_at: None,
         }
     }
-    
+
     /// 设置描述
     pub fn with_description(mut self, description: String) -> Self {
         self.description = Some(description);
         self
     }
-    
+
     /// 设置输入路径
     pub fn with_input_path(mut self, input_path: String) -> Self {
         self.input_path = Some(input_path);
         self
     }
-    
+
     /// 设置输出路径
     pub fn with_output_path(mut self, output_path: String) -> Self {
         self.output_path = Some(output_path);
         self
     }
-    
+
     /// 开始任务
     pub fn start(&mut self) {
         self.status = TaskStatus::Running;
         self.started_at = Some(chrono::Utc::now().timestamp());
     }
-    
+
     /// 更新进度
     pub fn update_progress(&mut self, progress: f64) {
         self.progress = progress.clamp(0.0, 100.0);
     }
-    
+
     /// 完成任务
     pub fn complete(&mut self) {
         self.status = TaskStatus::Completed;
         self.progress = 100.0;
         self.completed_at = Some(chrono::Utc::now().timestamp());
     }
-    
+
     /// 失败任务
     pub fn fail(&mut self, error: String) {
         self.status = TaskStatus::Failed;
         self.error = Some(error);
         self.completed_at = Some(chrono::Utc::now().timestamp());
     }
-    
+
     /// 取消任务
     pub fn cancel(&mut self) {
         self.status = TaskStatus::Cancelled;
@@ -176,72 +176,80 @@ impl TaskManager {
         };
         (manager, rx)
     }
-    
+
     /// 创建任务
     pub fn create_task(&self, task_type: TaskType, name: String) -> AppResult<String> {
         let task = Task::new(task_type, name);
         let task_id = task.id.clone();
-        
+
         {
-            let mut tasks = self.tasks.lock().map_err(|e| {
-                AppError::Internal(format!("Failed to lock tasks: {}", e))
-            })?;
+            let mut tasks = self
+                .tasks
+                .lock()
+                .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
             tasks.insert(task_id.clone(), task.clone());
         }
-        
+
         let _ = self.tx.send(TaskEvent::Created(task));
         Ok(task_id)
     }
-    
+
     /// 获取任务
     pub fn get_task(&self, task_id: &str) -> AppResult<Option<Task>> {
-        let tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
+        let tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
         Ok(tasks.get(task_id).cloned())
     }
-    
+
     /// 获取所有任务
     pub fn get_all_tasks(&self) -> AppResult<Vec<Task>> {
-        let tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
+        let tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
         Ok(tasks.values().cloned().collect())
     }
-    
+
     /// 开始任务
     pub fn start_task(&self, task_id: &str) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         if let Some(task) = tasks.get_mut(task_id) {
             task.start();
             let _ = self.tx.send(TaskEvent::Started(task_id.to_string()));
         }
-        
+
         Ok(())
     }
-    
+
     /// 更新任务进度
     pub fn update_progress(&self, task_id: &str, progress: f64) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         if let Some(task) = tasks.get_mut(task_id) {
             task.update_progress(progress);
-            let _ = self.tx.send(TaskEvent::ProgressUpdated(task_id.to_string(), progress));
+            let _ = self
+                .tx
+                .send(TaskEvent::ProgressUpdated(task_id.to_string(), progress));
         }
-        
+
         Ok(())
     }
 
     /// 更新任务描述（用于实时状态消息）
     pub fn update_description(&self, task_id: &str, description: String) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
 
         if let Some(task) = tasks.get_mut(task_id) {
             task.description = Some(description);
@@ -249,26 +257,28 @@ impl TaskManager {
 
         Ok(())
     }
-    
+
     /// 完成任务
     pub fn complete_task(&self, task_id: &str) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         if let Some(task) = tasks.get_mut(task_id) {
             task.complete();
             let _ = self.tx.send(TaskEvent::Completed(task_id.to_string()));
         }
-        
+
         Ok(())
     }
 
     /// 设置任务输出路径
     pub fn set_output_path(&self, task_id: &str, output_path: String) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
 
         if let Some(task) = tasks.get_mut(task_id) {
             task.output_path = Some(output_path);
@@ -276,41 +286,44 @@ impl TaskManager {
 
         Ok(())
     }
-    
+
     /// 失败任务
     pub fn fail_task(&self, task_id: &str, error: String) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         if let Some(task) = tasks.get_mut(task_id) {
             task.fail(error.clone());
             let _ = self.tx.send(TaskEvent::Failed(task_id.to_string(), error));
         }
-        
+
         Ok(())
     }
-    
+
     /// 取消任务
     pub fn cancel_task(&self, task_id: &str) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         if let Some(task) = tasks.get_mut(task_id) {
             task.cancel();
             let _ = self.tx.send(TaskEvent::Cancelled(task_id.to_string()));
         }
-        
+
         Ok(())
     }
-    
+
     /// 删除任务
     pub fn remove_task(&self, task_id: &str) -> AppResult<()> {
-        let mut tasks = self.tasks.lock().map_err(|e| {
-            AppError::Internal(format!("Failed to lock tasks: {}", e))
-        })?;
-        
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|e| AppError::Internal(format!("Failed to lock tasks: {}", e)))?;
+
         tasks.remove(task_id);
         Ok(())
     }

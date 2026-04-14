@@ -1,28 +1,23 @@
 //! Auto Apply LUT - 视频LUT批量处理应用
-//! 
+//!
 //! 基于Tauri框架的桌面应用程序，用于批量为视频文件应用LUT色彩校正。
 
-use tauri::Manager;
-use tracing::{info, error};
-use tracing_subscriber;
 use std::sync::Mutex;
+use tracing::info;
+use tracing_subscriber;
 
 // 模块导入
 pub mod commands;
 pub mod core;
+pub mod database;
+pub mod events;
 pub mod types;
 pub mod utils;
-pub mod events;
-pub mod database;
 
-use commands::*;
+use crate::core::task::TaskEvent;
+use crate::database::runtime::{default_database_path, upsert_task_snapshot};
+use crate::database::DatabaseManager;
 use types::ApiResponse;
-
-/// 应用程序状态
-#[derive(Default)]
-pub struct AppState {
-    pub db: Option<database::DatabaseManager>,
-}
 
 pub struct FfplayState(pub Mutex<Option<std::process::Child>>);
 
@@ -47,13 +42,16 @@ fn get_app_info() -> ApiResponse<serde_json::Value> {
 pub fn run() {
     // 初始化日志
     tracing_subscriber::fmt::init();
-    
+
     info!("启动 Auto Apply LUT 应用");
 
     // 初始化核心服务
     let lut_manager = core::lut::LutManager::new();
     let gpu_manager = core::gpu::GpuManager::new();
-    let task_manager = core::task::TaskManager::default();
+    let (task_manager, mut task_events) = core::task::TaskManager::new();
+    let db_manager = DatabaseManager::new(default_database_path().expect("初始化数据库路径失败"))
+        .expect("初始化数据库失败");
+    db_manager.initialize().expect("运行数据库迁移失败");
     // 全局配置管理器需提前初始化，以便读取 ffmpeg 路径
     let config_manager = utils::config::ConfigManager::new().expect("初始化配置管理器失败");
     // 初始化 VideoProcessor 使用配置或自动发现的 ffmpeg 路径
@@ -74,14 +72,16 @@ pub fn run() {
         }
     };
     let video_processor = core::ffmpeg::processor::VideoProcessor::new(ffmpeg_path);
+    let task_manager_for_events = task_manager.clone();
+    let db_for_events = db_manager.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
         .manage(lut_manager)
         .manage(gpu_manager)
         .manage(task_manager)
+        .manage(db_manager)
         .manage(video_processor)
         .manage(Mutex::new(config_manager))
         .manage(FfplayState(Mutex::new(None)))
@@ -109,6 +109,11 @@ pub fn run() {
             commands::lut_manager::validate_lut_file,
             commands::lut_manager::get_lut_info,
             commands::lut_manager::get_supported_lut_formats,
+            commands::lut_manager::remember_lut_files,
+            commands::lut_manager::list_lut_library,
+            commands::lut_manager::import_lut_directory,
+            commands::lut_manager::remove_lut_from_library,
+            commands::lut_manager::generate_lut_preview,
             // Task
             commands::processor::start_video_processing,
             commands::processor::get_task_progress,
@@ -121,12 +126,37 @@ pub fn run() {
             commands::batch_manager::cancel_batch,
             commands::batch_manager::generate_batch_from_directory,
         ])
-        .setup(|app| {
+        .setup(move |_app| {
             info!("应用初始化完成");
-            
-            // 这里可以添加应用启动时的初始化逻辑
-            // 比如数据库初始化、配置加载等
-            
+
+            let task_manager = task_manager_for_events.clone();
+            let db = db_for_events.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = task_events.recv().await {
+                    let maybe_task = match event {
+                        TaskEvent::Created(task) => Some(task),
+                        TaskEvent::Started(task_id)
+                        | TaskEvent::ProgressUpdated(task_id, _)
+                        | TaskEvent::Completed(task_id)
+                        | TaskEvent::Failed(task_id, _)
+                        | TaskEvent::Cancelled(task_id) => match task_manager.get_task(&task_id) {
+                            Ok(Some(task)) => Some(task),
+                            Ok(None) => None,
+                            Err(error) => {
+                                tracing::warn!("读取任务快照失败 {}: {}", task_id, error);
+                                None
+                            }
+                        },
+                    };
+
+                    if let Some(task) = maybe_task {
+                        if let Err(error) = upsert_task_snapshot(&db, &task) {
+                            tracing::warn!("持久化任务 {} 失败: {}", task.id, error);
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())

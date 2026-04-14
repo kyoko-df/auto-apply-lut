@@ -248,7 +248,10 @@ fn recommended_settings_for(hwaccels: &[String], platform: &str) -> Vec<String> 
             }
         }
         "windows" => {
-            if hwaccels.iter().any(|value| value == "d3d11va" || value == "nvdec") {
+            if hwaccels
+                .iter()
+                .any(|value| value == "d3d11va" || value == "nvdec")
+            {
                 settings.push("-c:v h264_nvenc".to_string());
                 settings.push("-c:v hevc_nvenc".to_string());
             }
@@ -261,7 +264,10 @@ fn recommended_settings_for(hwaccels: &[String], platform: &str) -> Vec<String> 
                 settings.push("-hwaccel vaapi".to_string());
                 settings.push("-c:v h264_vaapi".to_string());
             }
-            if hwaccels.iter().any(|value| value == "nvdec" || value == "cuda") {
+            if hwaccels
+                .iter()
+                .any(|value| value == "nvdec" || value == "cuda")
+            {
                 settings.push("-c:v h264_nvenc".to_string());
                 settings.push("-c:v hevc_nvenc".to_string());
             }
@@ -274,7 +280,8 @@ fn recommended_settings_for(hwaccels: &[String], platform: &str) -> Vec<String> 
 fn build_gpu_info(name: &str, vendor: Option<String>, memory_total: Option<u64>) -> GpuInfo {
     GpuInfo {
         name: name.to_string(),
-        vendor: vendor.unwrap_or_else(|| infer_vendor(name).unwrap_or_else(|| "Unknown".to_string())),
+        vendor: vendor
+            .unwrap_or_else(|| infer_vendor(name).unwrap_or_else(|| "Unknown".to_string())),
         memory_total,
         memory_used: None,
         temperature: None,
@@ -285,13 +292,27 @@ fn build_gpu_info(name: &str, vendor: Option<String>, memory_total: Option<u64>)
 
 fn infer_vendor(name: &str) -> Option<String> {
     let name_lower = name.to_lowercase();
-    if name_lower.contains("nvidia") || name_lower.contains("geforce") || name_lower.contains("quadro") {
+    if name_lower.contains("nvidia")
+        || name_lower.contains("geforce")
+        || name_lower.contains("quadro")
+    {
         Some("NVIDIA".to_string())
-    } else if name_lower.contains("amd") || name_lower.contains("radeon") || name_lower.contains("firepro") {
+    } else if name_lower.contains("amd")
+        || name_lower.contains("radeon")
+        || name_lower.contains("firepro")
+    {
         Some("AMD".to_string())
-    } else if name_lower.contains("intel") || name_lower.contains("iris") || name_lower.contains("uhd") {
+    } else if name_lower.contains("intel")
+        || name_lower.contains("iris")
+        || name_lower.contains("uhd")
+    {
         Some("Intel".to_string())
-    } else if name_lower.contains("apple") || name_lower.contains("m1") || name_lower.contains("m2") || name_lower.contains("m3") || name_lower.contains("m4") {
+    } else if name_lower.contains("apple")
+        || name_lower.contains("m1")
+        || name_lower.contains("m2")
+        || name_lower.contains("m3")
+        || name_lower.contains("m4")
+    {
         Some("Apple".to_string())
     } else {
         None
@@ -333,7 +354,8 @@ mod tests {
 
     #[test]
     fn parses_ffmpeg_hwaccels_and_recommendations() {
-        let hwaccels = parse_ffmpeg_hwaccels("Hardware acceleration methods:\nvaapi\ncuda\nvideotoolbox\n");
+        let hwaccels =
+            parse_ffmpeg_hwaccels("Hardware acceleration methods:\nvaapi\ncuda\nvideotoolbox\n");
         assert_eq!(hwaccels, vec!["vaapi", "cuda", "videotoolbox"]);
 
         let linux = recommended_settings_for(&hwaccels, "linux");

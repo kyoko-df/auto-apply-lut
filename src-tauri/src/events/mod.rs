@@ -3,11 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
-pub mod progress;
-pub mod error;
-pub mod system;
-pub mod gpu;
 pub mod batch;
+pub mod error;
+pub mod gpu;
+pub mod progress;
+pub mod system;
 
 /// 事件类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,10 +26,7 @@ pub enum AppEvent {
         details: Option<String>,
     },
     /// 任务完成事件
-    TaskCompleted {
-        task_id: String,
-        result: String,
-    },
+    TaskCompleted { task_id: String, result: String },
     /// 系统状态事件
     SystemStatus {
         cpu_usage: f64,

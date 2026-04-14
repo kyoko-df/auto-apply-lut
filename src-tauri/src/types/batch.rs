@@ -1,10 +1,10 @@
+use super::lut::LutApplyOptions;
+use super::task::{TaskInfo, TaskResult, TaskStatus};
+use super::video::VideoProcessOptions;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use super::task::{TaskInfo, TaskStatus, TaskResult};
-use super::video::VideoProcessOptions;
-use super::lut::LutApplyOptions;
 
 /// 批处理任务
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,10 +93,7 @@ pub enum InputSource {
         max_depth: Option<usize>,
     },
     /// 文件模式匹配
-    Pattern {
-        pattern: String,
-        base_dir: PathBuf,
-    },
+    Pattern { pattern: String, base_dir: PathBuf },
 }
 
 /// 并发配置

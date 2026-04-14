@@ -32,7 +32,7 @@ impl ProgressEvent {
             current_step_index: None,
         }
     }
-    
+
     /// 设置步骤信息
     pub fn with_steps(mut self, current_step: String, current_index: u32, total: u32) -> Self {
         self.current_step = Some(current_step);

@@ -1,13 +1,13 @@
 //! FFmpeg滤镜模块
 //! 提供视频滤镜和效果处理功能
 
-use crate::types::{AppResult, AppError};
 use crate::core::ffmpeg::{EncodingSettings, Resolution};
-use std::path::{Path, PathBuf};
+use crate::types::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::process::Command as AsyncCommand;
-use serde::{Serialize, Deserialize};
 use std::fmt;
+use std::path::{Path, PathBuf};
+use tokio::process::Command as AsyncCommand;
 
 /// 视频滤镜管理器
 pub struct FilterManager {
@@ -24,7 +24,7 @@ impl FilterManager {
             ffmpeg_path,
             predefined_filters: HashMap::new(),
         };
-        
+
         // 初始化预定义滤镜
         manager.init_predefined_filters();
         manager
@@ -33,82 +33,95 @@ impl FilterManager {
     /// 初始化预定义滤镜
     fn init_predefined_filters(&mut self) {
         // LUT滤镜
-        self.predefined_filters.insert("lut3d".to_string(), FilterChain {
-            name: "3D LUT".to_string(),
-            description: "应用3D LUT颜色查找表".to_string(),
-            filters: vec![
-                Filter::Lut3d {
+        self.predefined_filters.insert(
+            "lut3d".to_string(),
+            FilterChain {
+                name: "3D LUT".to_string(),
+                description: "应用3D LUT颜色查找表".to_string(),
+                filters: vec![Filter::Lut3d {
                     file: "".to_string(),
                     interp: LutInterpolation::Trilinear,
-                }
-            ],
-        });
-        
+                }],
+            },
+        );
+
         // 色彩校正滤镜
-        self.predefined_filters.insert("color_correction".to_string(), FilterChain {
-            name: "色彩校正".to_string(),
-            description: "基本色彩校正".to_string(),
-            filters: vec![
-                Filter::ColorBalance {
-                    rs: 0.0, gs: 0.0, bs: 0.0,
-                    rm: 0.0, gm: 0.0, bm: 0.0,
-                    rh: 0.0, gh: 0.0, bh: 0.0,
-                    pl: false,
-                },
-                Filter::Curves {
-                    preset: CurvePreset::None,
-                    master: None,
-                    red: None,
-                    green: None,
-                    blue: None,
-                }
-            ],
-        });
-        
+        self.predefined_filters.insert(
+            "color_correction".to_string(),
+            FilterChain {
+                name: "色彩校正".to_string(),
+                description: "基本色彩校正".to_string(),
+                filters: vec![
+                    Filter::ColorBalance {
+                        rs: 0.0,
+                        gs: 0.0,
+                        bs: 0.0,
+                        rm: 0.0,
+                        gm: 0.0,
+                        bm: 0.0,
+                        rh: 0.0,
+                        gh: 0.0,
+                        bh: 0.0,
+                        pl: false,
+                    },
+                    Filter::Curves {
+                        preset: CurvePreset::None,
+                        master: None,
+                        red: None,
+                        green: None,
+                        blue: None,
+                    },
+                ],
+            },
+        );
+
         // 锐化滤镜
-        self.predefined_filters.insert("sharpen".to_string(), FilterChain {
-            name: "锐化".to_string(),
-            description: "增强图像锐度".to_string(),
-            filters: vec![
-                Filter::UnsharpMask {
+        self.predefined_filters.insert(
+            "sharpen".to_string(),
+            FilterChain {
+                name: "锐化".to_string(),
+                description: "增强图像锐度".to_string(),
+                filters: vec![Filter::UnsharpMask {
                     luma_msize_x: 5,
                     luma_msize_y: 5,
                     luma_amount: 1.0,
                     chroma_msize_x: 5,
                     chroma_msize_y: 5,
                     chroma_amount: 0.0,
-                }
-            ],
-        });
-        
+                }],
+            },
+        );
+
         // 降噪滤镜
-        self.predefined_filters.insert("denoise".to_string(), FilterChain {
-            name: "降噪".to_string(),
-            description: "减少视频噪点".to_string(),
-            filters: vec![
-                Filter::Hqdn3d {
+        self.predefined_filters.insert(
+            "denoise".to_string(),
+            FilterChain {
+                name: "降噪".to_string(),
+                description: "减少视频噪点".to_string(),
+                filters: vec![Filter::Hqdn3d {
                     luma_spatial: 4.0,
                     chroma_spatial: 3.0,
                     luma_tmp: 6.0,
                     chroma_tmp: 4.5,
-                }
-            ],
-        });
-        
+                }],
+            },
+        );
+
         // 稳定化滤镜
-        self.predefined_filters.insert("stabilize".to_string(), FilterChain {
-            name: "稳定化".to_string(),
-            description: "视频防抖".to_string(),
-            filters: vec![
-                Filter::Vidstab {
+        self.predefined_filters.insert(
+            "stabilize".to_string(),
+            FilterChain {
+                name: "稳定化".to_string(),
+                description: "视频防抖".to_string(),
+                filters: vec![Filter::Vidstab {
                     shakiness: 5,
                     accuracy: 15,
                     stepsize: 6,
                     mincontrast: 0.3,
                     tripod: false,
-                }
-            ],
-        });
+                }],
+            },
+        );
     }
 
     /// 应用滤镜链
@@ -120,29 +133,34 @@ impl FilterManager {
         settings: Option<EncodingSettings>,
     ) -> AppResult<()> {
         let filter_string = self.build_filter_string(&filter_chain.filters)?;
-        
+
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-i", input_path.to_str().unwrap()]);
-        
+
         // 添加滤镜
         cmd.args(["-vf", &filter_string]);
-        
+
         // 添加编码设置
         if let Some(settings) = settings {
             self.add_encoding_args(&mut cmd, &settings);
         }
-        
+
         // 输出文件
         cmd.args(["-y", output_path.to_str().unwrap()]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to apply filters: {}", e)))?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(AppError::FFmpeg(format!("Filter application failed: {}", error_msg)));
+            return Err(AppError::FFmpeg(format!(
+                "Filter application failed: {}",
+                error_msg
+            )));
         }
-        
+
         Ok(())
     }
 
@@ -159,8 +177,9 @@ impl FilterManager {
             description: "Single filter application".to_string(),
             filters: vec![filter.clone()],
         };
-        
-        self.apply_filter_chain(input_path, output_path, &filter_chain, settings).await
+
+        self.apply_filter_chain(input_path, output_path, &filter_chain, settings)
+            .await
     }
 
     /// 应用LUT滤镜
@@ -175,8 +194,9 @@ impl FilterManager {
             file: lut_path.to_string_lossy().to_string(),
             interp: LutInterpolation::Trilinear,
         };
-        
-        self.apply_filter(input_path, output_path, &filter, settings).await
+
+        self.apply_filter(input_path, output_path, &filter, settings)
+            .await
     }
 
     /// 批量应用滤镜
@@ -187,35 +207,41 @@ impl FilterManager {
     ) -> AppResult<Vec<FilterResult>> {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
         let mut handles = Vec::new();
-        
+
         for task in tasks {
             let semaphore = semaphore.clone();
             let manager = self.clone_for_task();
-            
+
             let handle = tokio::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
-                
-                let result = manager.apply_filter_chain(
-                    &task.input_path,
-                    &task.output_path,
-                    &task.filter_chain,
-                    task.settings,
-                ).await;
-                
+
+                let result = manager
+                    .apply_filter_chain(
+                        &task.input_path,
+                        &task.output_path,
+                        &task.filter_chain,
+                        task.settings,
+                    )
+                    .await;
+
                 let success = result.is_ok();
                 let error = result.err().map(|e| e.to_string());
-                
+
                 FilterResult {
                     task_id: task.id,
                     success,
                     error,
-                    output_path: if success { Some(task.output_path) } else { None },
+                    output_path: if success {
+                        Some(task.output_path)
+                    } else {
+                        None
+                    },
                 }
             });
-            
+
             handles.push(handle);
         }
-        
+
         let mut results = Vec::new();
         for handle in handles {
             match handle.await {
@@ -230,16 +256,15 @@ impl FilterManager {
                 }
             }
         }
-        
+
         Ok(results)
     }
 
     /// 构建滤镜字符串
     fn build_filter_string(&self, filters: &[Filter]) -> AppResult<String> {
-        let filter_strings: Result<Vec<String>, AppError> = filters.iter()
-            .map(|f| f.to_ffmpeg_string())
-            .collect();
-        
+        let filter_strings: Result<Vec<String>, AppError> =
+            filters.iter().map(|f| f.to_ffmpeg_string()).collect();
+
         Ok(filter_strings?.join(","))
     }
 
@@ -248,21 +273,21 @@ impl FilterManager {
         cmd.args(["-c:v", &settings.video_codec]);
         cmd.args(["-c:a", &settings.audio_codec]);
         cmd.args(["-preset", &settings.preset]);
-        
+
         if let Some(bitrate) = &settings.bitrate {
             cmd.args(["-b:v", bitrate]);
         } else {
             cmd.args(["-crf", &settings.crf.to_string()]);
         }
-        
+
         if let Some(resolution) = &settings.resolution {
             cmd.args(["-s", &format!("{}x{}", resolution.width, resolution.height)]);
         }
-        
+
         if let Some(fps) = settings.fps {
             cmd.args(["-r", &fps.to_string()]);
         }
-        
+
         for (key, value) in &settings.extra_params {
             cmd.args([key, value]);
         }
@@ -326,14 +351,18 @@ impl FilterManager {
     pub async fn get_filter_info(&self) -> AppResult<Vec<FilterInfo>> {
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-filters"]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to get filter info: {}", e)))?;
-        
+
         if !output.status.success() {
-            return Err(AppError::FFmpeg("Failed to get filter information".to_string()));
+            return Err(AppError::FFmpeg(
+                "Failed to get filter information".to_string(),
+            ));
         }
-        
+
         let output_str = String::from_utf8_lossy(&output.stdout);
         self.parse_filter_info(&output_str)
     }
@@ -341,18 +370,19 @@ impl FilterManager {
     /// 解析滤镜信息
     fn parse_filter_info(&self, output: &str) -> AppResult<Vec<FilterInfo>> {
         let mut filters = Vec::new();
-        
-        for line in output.lines().skip(8) { // 跳过头部信息
+
+        for line in output.lines().skip(8) {
+            // 跳过头部信息
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 {
                 let flags = parts[0];
                 let name = parts[1];
                 let description = parts[2..].join(" ");
-                
+
                 filters.push(FilterInfo {
                     name: name.to_string(),
                     description,
@@ -362,7 +392,7 @@ impl FilterManager {
                 });
             }
         }
-        
+
         Ok(filters)
     }
 }
@@ -396,9 +426,15 @@ pub enum Filter {
     },
     /// 色彩平衡
     ColorBalance {
-        rs: f64, gs: f64, bs: f64, // 阴影
-        rm: f64, gm: f64, bm: f64, // 中间调
-        rh: f64, gh: f64, bh: f64, // 高光
+        rs: f64,
+        gs: f64,
+        bs: f64, // 阴影
+        rm: f64,
+        gm: f64,
+        bm: f64, // 中间调
+        rh: f64,
+        gh: f64,
+        bh: f64,  // 高光
         pl: bool, // 保持亮度
     },
     /// 曲线调整
@@ -441,10 +477,7 @@ pub enum Filter {
         gamma: f64,
     },
     /// 色调/饱和度
-    Hue {
-        hue: f64,
-        saturation: f64,
-    },
+    Hue { hue: f64, saturation: f64 },
 }
 
 impl Filter {
@@ -457,22 +490,53 @@ impl Filter {
             Filter::Lut1d { file, interp } => {
                 Ok(format!("lut=file={}:interp={}", file, interp.to_string()))
             }
-            Filter::Scale { width, height, algorithm } => {
-                Ok(format!("scale={}:{}:flags={}", width, height, algorithm.to_string()))
-            }
-            Filter::ColorBalance { rs, gs, bs, rm, gm, bm, rh, gh, bh, pl } => {
-                Ok(format!(
-                    "colorbalance=rs={}:gs={}:bs={}:rm={}:gm={}:bm={}:rh={}:gh={}:bh={}:pl={}",
-                    rs, gs, bs, rm, gm, bm, rh, gh, bh, if *pl { "true" } else { "false" }
-                ))
-            }
-            Filter::Curves { preset, master, red, green, blue } => {
+            Filter::Scale {
+                width,
+                height,
+                algorithm,
+            } => Ok(format!(
+                "scale={}:{}:flags={}",
+                width,
+                height,
+                algorithm.to_string()
+            )),
+            Filter::ColorBalance {
+                rs,
+                gs,
+                bs,
+                rm,
+                gm,
+                bm,
+                rh,
+                gh,
+                bh,
+                pl,
+            } => Ok(format!(
+                "colorbalance=rs={}:gs={}:bs={}:rm={}:gm={}:bm={}:rh={}:gh={}:bh={}:pl={}",
+                rs,
+                gs,
+                bs,
+                rm,
+                gm,
+                bm,
+                rh,
+                gh,
+                bh,
+                if *pl { "true" } else { "false" }
+            )),
+            Filter::Curves {
+                preset,
+                master,
+                red,
+                green,
+                blue,
+            } => {
                 let mut params = Vec::new();
-                
+
                 if *preset != CurvePreset::None {
                     params.push(format!("preset={}", preset.to_string()));
                 }
-                
+
                 if let Some(m) = master {
                     params.push(format!("master={}", m));
                 }
@@ -485,38 +549,58 @@ impl Filter {
                 if let Some(b) = blue {
                     params.push(format!("blue={}", b));
                 }
-                
+
                 Ok(format!("curves={}", params.join(":")))
             }
-            Filter::UnsharpMask { luma_msize_x, luma_msize_y, luma_amount, chroma_msize_x, chroma_msize_y, chroma_amount } => {
-                Ok(format!(
-                    "unsharp={}:{}:{}:{}:{}:{}",
-                    luma_msize_x, luma_msize_y, luma_amount,
-                    chroma_msize_x, chroma_msize_y, chroma_amount
-                ))
-            }
-            Filter::Hqdn3d { luma_spatial, chroma_spatial, luma_tmp, chroma_tmp } => {
-                Ok(format!(
-                    "hqdn3d={}:{}:{}:{}",
-                    luma_spatial, chroma_spatial, luma_tmp, chroma_tmp
-                ))
-            }
-            Filter::Vidstab { shakiness, accuracy, stepsize, mincontrast, tripod } => {
-                Ok(format!(
-                    "vidstabdetect=shakiness={}:accuracy={}:stepsize={}:mincontrast={}:tripod={}",
-                    shakiness, accuracy, stepsize, mincontrast,
-                    if *tripod { "1" } else { "0" }
-                ))
-            }
-            Filter::Eq { contrast, brightness, saturation, gamma } => {
-                Ok(format!(
-                    "eq=contrast={}:brightness={}:saturation={}:gamma={}",
-                    contrast, brightness, saturation, gamma
-                ))
-            }
-            Filter::Hue { hue, saturation } => {
-                Ok(format!("hue=h={}:s={}", hue, saturation))
-            }
+            Filter::UnsharpMask {
+                luma_msize_x,
+                luma_msize_y,
+                luma_amount,
+                chroma_msize_x,
+                chroma_msize_y,
+                chroma_amount,
+            } => Ok(format!(
+                "unsharp={}:{}:{}:{}:{}:{}",
+                luma_msize_x,
+                luma_msize_y,
+                luma_amount,
+                chroma_msize_x,
+                chroma_msize_y,
+                chroma_amount
+            )),
+            Filter::Hqdn3d {
+                luma_spatial,
+                chroma_spatial,
+                luma_tmp,
+                chroma_tmp,
+            } => Ok(format!(
+                "hqdn3d={}:{}:{}:{}",
+                luma_spatial, chroma_spatial, luma_tmp, chroma_tmp
+            )),
+            Filter::Vidstab {
+                shakiness,
+                accuracy,
+                stepsize,
+                mincontrast,
+                tripod,
+            } => Ok(format!(
+                "vidstabdetect=shakiness={}:accuracy={}:stepsize={}:mincontrast={}:tripod={}",
+                shakiness,
+                accuracy,
+                stepsize,
+                mincontrast,
+                if *tripod { "1" } else { "0" }
+            )),
+            Filter::Eq {
+                contrast,
+                brightness,
+                saturation,
+                gamma,
+            } => Ok(format!(
+                "eq=contrast={}:brightness={}:saturation={}:gamma={}",
+                contrast, brightness, saturation, gamma
+            )),
+            Filter::Hue { hue, saturation } => Ok(format!("hue=h={}:s={}", hue, saturation)),
         }
     }
 }
@@ -646,15 +730,13 @@ mod tests {
         let chain = FilterChain {
             name: "Test Chain".to_string(),
             description: "Test description".to_string(),
-            filters: vec![
-                Filter::Scale {
-                    width: 1920,
-                    height: 1080,
-                    algorithm: ScaleAlgorithm::Bicubic,
-                }
-            ],
+            filters: vec![Filter::Scale {
+                width: 1920,
+                height: 1080,
+                algorithm: ScaleAlgorithm::Bicubic,
+            }],
         };
-        
+
         assert_eq!(chain.name, "Test Chain");
         assert_eq!(chain.filters.len(), 1);
     }
@@ -687,7 +769,7 @@ mod tests {
             height: 1080,
             algorithm: ScaleAlgorithm::Bicubic,
         };
-        
+
         let result = filter.to_ffmpeg_string().unwrap();
         assert_eq!(result, "scale=1920:1080:flags=bicubic");
     }
@@ -698,7 +780,7 @@ mod tests {
             file: "/path/to/lut.cube".to_string(),
             interp: LutInterpolation::Trilinear,
         };
-        
+
         let result = filter.to_ffmpeg_string().unwrap();
         assert_eq!(result, "lut3d=file=/path/to/lut.cube:interp=trilinear");
     }
@@ -706,12 +788,18 @@ mod tests {
     #[test]
     fn test_color_balance_filter_string() {
         let filter = Filter::ColorBalance {
-            rs: 0.1, gs: 0.0, bs: -0.1,
-            rm: 0.05, gm: 0.0, bm: 0.0,
-            rh: 0.0, gh: 0.0, bh: 0.0,
+            rs: 0.1,
+            gs: 0.0,
+            bs: -0.1,
+            rm: 0.05,
+            gm: 0.0,
+            bm: 0.0,
+            rh: 0.0,
+            gh: 0.0,
+            bh: 0.0,
             pl: true,
         };
-        
+
         let result = filter.to_ffmpeg_string().unwrap();
         assert!(result.contains("colorbalance"));
         assert!(result.contains("rs=0.1"));
@@ -728,7 +816,7 @@ mod tests {
             chroma_msize_y: 5,
             chroma_amount: 0.0,
         };
-        
+
         let result = filter.to_ffmpeg_string().unwrap();
         assert_eq!(result, "unsharp=5:5:1:5:5:0");
     }
@@ -746,7 +834,7 @@ mod tests {
             },
             settings: None,
         };
-        
+
         assert_eq!(task.id, "test_task");
     }
 
@@ -758,7 +846,7 @@ mod tests {
             error: None,
             output_path: Some(PathBuf::from("/output/video.mp4")),
         };
-        
+
         assert!(result.success);
         assert!(result.error.is_none());
         assert!(result.output_path.is_some());
@@ -773,7 +861,7 @@ mod tests {
             supports_slice_threading: true,
             supports_command: false,
         };
-        
+
         assert_eq!(info.name, "scale");
         assert!(info.supports_timeline);
         assert!(info.supports_slice_threading);
@@ -783,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn test_filter_manager_creation() {
         let manager = FilterManager::new(PathBuf::from("/usr/bin/ffmpeg"));
-        
+
         // 检查预定义滤镜是否已加载
         assert!(manager.get_predefined_filter("lut3d").is_some());
         assert!(manager.get_predefined_filter("color_correction").is_some());
@@ -795,24 +883,22 @@ mod tests {
     #[test]
     fn test_custom_filter_management() {
         let mut manager = FilterManager::new(PathBuf::from("/usr/bin/ffmpeg"));
-        
+
         let custom_chain = FilterChain {
             name: "Custom Filter".to_string(),
             description: "Custom description".to_string(),
-            filters: vec![
-                Filter::Eq {
-                    contrast: 1.2,
-                    brightness: 0.1,
-                    saturation: 1.1,
-                    gamma: 1.0,
-                }
-            ],
+            filters: vec![Filter::Eq {
+                contrast: 1.2,
+                brightness: 0.1,
+                saturation: 1.1,
+                gamma: 1.0,
+            }],
         };
-        
+
         // 添加自定义滤镜
         manager.add_custom_filter("custom".to_string(), custom_chain.clone());
         assert!(manager.get_predefined_filter("custom").is_some());
-        
+
         // 移除滤镜
         let removed = manager.remove_filter("custom");
         assert!(removed.is_some());

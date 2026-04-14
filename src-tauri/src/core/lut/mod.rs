@@ -1,23 +1,23 @@
 //! LUT处理核心模块
 //! 提供LUT文件的解析、验证和应用功能
 
+pub mod cache;
+pub mod converter;
+pub mod data;
 pub mod parser;
 pub mod processor;
-pub mod converter;
-pub mod validator;
-pub mod cache;
-pub mod data;
 pub mod utils;
+pub mod validator;
 
 // Re-export commonly used types
-pub use data::{LutData, LutData1D, LutStatistics};
-pub use utils::{LutUtils, LutFileInfo};
 use self::parser::{LookParser, LutParser, M3dParser, MgaParser};
+pub use data::{LutData, LutData1D, LutStatistics};
+pub use utils::{LutFileInfo, LutUtils};
 
-use crate::types::{AppResult, LutInfo, LutType, LutFormat, LutValidationResult, LutSizeInfo};
+use crate::types::{AppResult, LutFormat, LutInfo, LutSizeInfo, LutType, LutValidationResult};
+use chrono::{DateTime, Utc};
 use std::path::Path;
 use tokio::fs;
-use chrono::{DateTime, Utc};
 
 /// LUT管理器
 #[derive(Debug)]
@@ -45,39 +45,45 @@ impl LutManager {
     /// 获取LUT文件信息
     pub async fn get_lut_info<P: AsRef<Path>>(&self, path: P) -> AppResult<LutInfo> {
         let path = path.as_ref();
-        
+
         // 检查文件是否存在 (async)
         if fs::metadata(path).await.is_err() {
-            return Err(crate::types::AppError::FileSystem(
-                format!("LUT file not found: {}", path.display())
-            ));
+            return Err(crate::types::AppError::FileSystem(format!(
+                "LUT file not found: {}",
+                path.display()
+            )));
         }
 
         // 获取文件基本信息
-        let metadata = fs::metadata(path).await
+        let metadata = fs::metadata(path)
+            .await
             .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?;
-        
+
         let size = metadata.len();
-        let created_at = metadata.created()
+        let created_at = metadata
+            .created()
             .map(|t| DateTime::<Utc>::from(t))
             .unwrap_or_else(|_| Utc::now());
-        let modified_at = metadata.modified()
+        let modified_at = metadata
+            .modified()
             .map(|t| DateTime::<Utc>::from(t))
             .unwrap_or_else(|_| Utc::now());
 
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let format = path.extension()
+        let format = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .map(LutFormat::from_extension)
             .unwrap_or(LutFormat::Unknown);
 
         // 验证LUT文件
         let validation_result = self.validate_lut(path).await?;
-        
+
         Ok(LutInfo {
             path: path.to_path_buf(),
             name,
@@ -98,8 +104,9 @@ impl LutManager {
     /// 验证LUT文件
     pub async fn validate_lut<P: AsRef<Path>>(&self, path: P) -> AppResult<LutValidationResult> {
         let path = path.as_ref();
-        
-        let format = path.extension()
+
+        let format = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .map(LutFormat::from_extension)
             .unwrap_or(LutFormat::Unknown);
@@ -116,14 +123,38 @@ impl LutManager {
         }
 
         match format {
-            LutFormat::Cube => self.validate_cube_lut(&fs::read_to_string(path).await
-                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
-            LutFormat::ThreeDL => self.validate_3dl_lut(&fs::read_to_string(path).await
-                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
-            LutFormat::Lut => self.validate_lut_format(&fs::read_to_string(path).await
-                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
-            LutFormat::Csp => self.validate_csp_lut(&fs::read_to_string(path).await
-                .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?).await,
+            LutFormat::Cube => {
+                self.validate_cube_lut(
+                    &fs::read_to_string(path)
+                        .await
+                        .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?,
+                )
+                .await
+            }
+            LutFormat::ThreeDL => {
+                self.validate_3dl_lut(
+                    &fs::read_to_string(path)
+                        .await
+                        .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?,
+                )
+                .await
+            }
+            LutFormat::Lut => {
+                self.validate_lut_format(
+                    &fs::read_to_string(path)
+                        .await
+                        .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?,
+                )
+                .await
+            }
+            LutFormat::Csp => {
+                self.validate_csp_lut(
+                    &fs::read_to_string(path)
+                        .await
+                        .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?,
+                )
+                .await
+            }
             LutFormat::M3d => Self::validate_parsed_lut(M3dParser::parse(path).await?),
             LutFormat::Look => Self::validate_parsed_lut(LookParser::parse(path).await?),
             LutFormat::Mga => Self::validate_parsed_lut(MgaParser::parse(path).await?),
@@ -159,12 +190,18 @@ impl LutManager {
         &self.supported_formats
     }
 
-    fn validate_parsed_lut(lut_data: crate::core::lut::data::LutData) -> AppResult<LutValidationResult> {
+    fn validate_parsed_lut(
+        lut_data: crate::core::lut::data::LutData,
+    ) -> AppResult<LutValidationResult> {
         let size_info = Some(LutSizeInfo {
             grid_size: Some(lut_data.size as u32),
             input_range: Some((
-                lut_data.domain_min[0].min(lut_data.domain_min[1]).min(lut_data.domain_min[2]),
-                lut_data.domain_max[0].max(lut_data.domain_max[1]).max(lut_data.domain_max[2]),
+                lut_data.domain_min[0]
+                    .min(lut_data.domain_min[1])
+                    .min(lut_data.domain_min[2]),
+                lut_data.domain_max[0]
+                    .max(lut_data.domain_max[1])
+                    .max(lut_data.domain_max[2]),
             )),
             output_range: Some((0.0, 1.0)),
         });
@@ -187,20 +224,24 @@ impl LutManager {
     /// 扫描目录中的LUT文件
     pub async fn scan_lut_directory<P: AsRef<Path>>(&self, dir_path: P) -> AppResult<Vec<LutInfo>> {
         let dir_path = dir_path.as_ref();
-        
+
         if !dir_path.is_dir() {
-            return Err(crate::types::AppError::FileSystem(
-                format!("Path is not a directory: {}", dir_path.display())
-            ));
+            return Err(crate::types::AppError::FileSystem(format!(
+                "Path is not a directory: {}",
+                dir_path.display()
+            )));
         }
 
         let mut lut_files = Vec::new();
-        let mut entries = fs::read_dir(dir_path).await
+        let mut entries = fs::read_dir(dir_path)
+            .await
             .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?;
 
-        while let Some(entry) = entries.next_entry().await
-            .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))? {
-            
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?
+        {
             let path = entry.path();
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -228,7 +269,7 @@ impl LutManager {
 
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
-            
+
             // 跳过注释和空行
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -240,7 +281,11 @@ impl LutManager {
                     match size_str.parse::<u32>() {
                         Ok(size) => {
                             if size < 2 || size > 256 {
-                                warnings.push(format!("Line {}: Unusual grid size: {}", line_num + 1, size));
+                                warnings.push(format!(
+                                    "Line {}: Unusual grid size: {}",
+                                    line_num + 1,
+                                    size
+                                ));
                             }
                             grid_size = Some(size);
                         }
@@ -269,8 +314,7 @@ impl LutManager {
             // 解析数据行
             else if Self::parse_rgb_values(line).is_some() {
                 data_points += 1;
-            }
-            else {
+            } else {
                 warnings.push(format!("Line {}: Unrecognized line format", line_num + 1));
             }
         }
@@ -293,7 +337,9 @@ impl LutManager {
 
         let size_info = grid_size.map(|size| LutSizeInfo {
             grid_size: Some(size),
-            input_range: domain_min.zip(domain_max).map(|(min, max)| (min.0.min(min.1).min(min.2), max.0.max(max.1).max(max.2))),
+            input_range: domain_min
+                .zip(domain_max)
+                .map(|(min, max)| (min.0.min(min.1).min(min.2), max.0.max(max.1).max(max.2))),
             output_range: None, // CUBE格式通常不指定输出范围
         });
 
@@ -315,7 +361,7 @@ impl LutManager {
 
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
-            
+
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -361,7 +407,7 @@ impl LutManager {
 
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
-            
+
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -379,7 +425,11 @@ impl LutManager {
 
         Ok(LutValidationResult {
             is_valid: errors.is_empty(),
-            lut_type: if data_points > 256 { LutType::ThreeDimensional } else { LutType::OneDimensional },
+            lut_type: if data_points > 256 {
+                LutType::ThreeDimensional
+            } else {
+                LutType::OneDimensional
+            },
             format: LutFormat::Lut,
             errors,
             warnings,
@@ -464,9 +514,12 @@ LUT_3D_SIZE 2
         tokio::fs::write(&look_file, format!("LOOK\n{}", content))
             .await
             .expect("write look");
-        tokio::fs::write(&mga_file, format!("MGA 1.0\n{}", content.replace("LUT_3D_SIZE", "GRID_SIZE")))
-            .await
-            .expect("write mga");
+        tokio::fs::write(
+            &mga_file,
+            format!("MGA 1.0\n{}", content.replace("LUT_3D_SIZE", "GRID_SIZE")),
+        )
+        .await
+        .expect("write mga");
         tokio::fs::write(&m3d_file, format!("M3D\n{}", content))
             .await
             .expect("write m3d");
@@ -476,8 +529,26 @@ LUT_3D_SIZE 2
         assert!(formats.contains(&LutFormat::Mga));
         assert!(formats.contains(&LutFormat::M3d));
 
-        assert!(manager.validate_lut(&look_file).await.expect("validate look").is_valid);
-        assert!(manager.validate_lut(&mga_file).await.expect("validate mga").is_valid);
-        assert!(manager.validate_lut(&m3d_file).await.expect("validate m3d").is_valid);
+        assert!(
+            manager
+                .validate_lut(&look_file)
+                .await
+                .expect("validate look")
+                .is_valid
+        );
+        assert!(
+            manager
+                .validate_lut(&mga_file)
+                .await
+                .expect("validate mga")
+                .is_valid
+        );
+        assert!(
+            manager
+                .validate_lut(&m3d_file)
+                .await
+                .expect("validate m3d")
+                .is_valid
+        );
     }
 }

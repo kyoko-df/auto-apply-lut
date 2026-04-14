@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 
 /// 系统信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -438,12 +438,14 @@ impl SystemInfo {
         // 生成警告和建议
         if self.memory_info.usage_percentage > 80.0 {
             warnings.push("High memory usage detected".to_string());
-            recommendations.push("Consider closing other applications to free up memory".to_string());
+            recommendations
+                .push("Consider closing other applications to free up memory".to_string());
         }
 
         if self.gpu_info.is_empty() {
             warnings.push("No GPU detected".to_string());
-            recommendations.push("Consider using a dedicated GPU for better performance".to_string());
+            recommendations
+                .push("Consider using a dedicated GPU for better performance".to_string());
         }
 
         CompatibilityCheck {

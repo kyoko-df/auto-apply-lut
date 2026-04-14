@@ -1,9 +1,9 @@
 use crate::utils::{config::ConfigManager, logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
 use sysinfo::System;
 use tauri::State;
-use std::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CodecInfo {
@@ -66,11 +66,11 @@ pub struct AppSettings {
 #[tauri::command]
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     let mut sys = System::new_all();
-    
+
     // 简化实现，提供基本的系统信息
     let cpu_count = sys.cpus().len();
     let cpu_usage = 0.0; // 简化为0，避免API兼容性问题
-    
+
     let total_memory = sys.total_memory();
     let available_memory = sys.available_memory();
     let memory_usage = if total_memory > 0 {
@@ -78,7 +78,7 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
     } else {
         0.0
     };
-    
+
     // 简化磁盘信息，只提供基本信息
     let disk_usage = vec![DiskInfo {
         name: "System".to_string(),
@@ -87,7 +87,7 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         available_space: available_memory,
         usage_percentage: memory_usage,
     }];
-    
+
     Ok(SystemInfo {
         cpu_usage,
         memory_usage,
@@ -104,9 +104,11 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
 pub async fn get_app_settings(
     config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<AppSettings, String> {
-    let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let cfg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
     let config = cfg.get_config();
-    
+
     Ok(AppSettings {
         default_output_dir: config.default_output_dir.clone().unwrap_or_default(),
         ffmpeg_path: config.ffmpeg_path.clone().unwrap_or_default(),
@@ -181,11 +183,11 @@ pub async fn get_log_files() -> Result<Vec<String>, String> {
     let log_dir = crate::utils::path_utils::get_app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?
         .join("logs");
-    
+
     if !log_dir.exists() {
         return Ok(Vec::new());
     }
-    
+
     let mut log_files = Vec::new();
     match std::fs::read_dir(&log_dir) {
         Ok(entries) => {
@@ -201,7 +203,7 @@ pub async fn get_log_files() -> Result<Vec<String>, String> {
         }
         Err(e) => return Err(format!("Failed to read log directory: {}", e)),
     }
-    
+
     log_files.sort();
     log_files.reverse(); // Most recent first
     Ok(log_files)
@@ -212,13 +214,13 @@ pub async fn read_log_file(file_name: String) -> Result<String, String> {
     let log_dir = crate::utils::path_utils::get_app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?
         .join("logs");
-    
+
     let log_file = log_dir.join(&file_name);
-    
+
     if !log_file.exists() {
         return Err("Log file not found".to_string());
     }
-    
+
     match std::fs::read_to_string(&log_file) {
         Ok(content) => Ok(content),
         Err(e) => Err(format!("Failed to read log file: {}", e)),
@@ -229,7 +231,7 @@ pub async fn read_log_file(file_name: String) -> Result<String, String> {
 pub async fn clear_cache() -> Result<String, String> {
     let cache_dir = crate::utils::path_utils::get_cache_dir()
         .map_err(|e| format!("Failed to get cache dir: {}", e))?;
-    
+
     if cache_dir.exists() {
         match std::fs::remove_dir_all(&cache_dir) {
             Ok(_) => {
@@ -249,11 +251,11 @@ pub async fn clear_cache() -> Result<String, String> {
 pub async fn get_cache_size() -> Result<u64, String> {
     let cache_dir = crate::utils::path_utils::get_cache_dir()
         .map_err(|e| format!("Failed to get cache dir: {}", e))?;
-    
+
     if !cache_dir.exists() {
         return Ok(0);
     }
-    
+
     fn dir_size(path: &std::path::Path) -> Result<u64, std::io::Error> {
         let mut size = 0;
         for entry in std::fs::read_dir(path)? {
@@ -267,7 +269,7 @@ pub async fn get_cache_size() -> Result<u64, String> {
         }
         Ok(size)
     }
-    
+
     match dir_size(&cache_dir) {
         Ok(size) => Ok(size),
         Err(e) => Err(format!("Failed to calculate cache size: {}", e)),
@@ -299,7 +301,7 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
             supported: true,
         },
     ];
-    
+
     let audio_codecs = vec![
         CodecInfo {
             name: "aac".to_string(),
@@ -317,7 +319,7 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
             supported: true,
         },
     ];
-    
+
     Ok(AvailableCodecs {
         video_codecs,
         audio_codecs,
@@ -326,8 +328,8 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FfmpegInfo {
-    pub mode: String,                 // native | external
-    pub static_linked: bool,          // 是否为静态链接（编译期）
+    pub mode: String,                                      // native | external
+    pub static_linked: bool,                               // 是否为静态链接（编译期）
     pub library_versions: Option<HashMap<String, String>>, // 本地链接库版本（native 时）
     pub binary_version: Option<String>,                    // 外部可执行版本（external 时）
     pub binary_path: Option<String>,                       // 外部可执行路径（external 时）
@@ -391,7 +393,9 @@ pub async fn get_ffmpeg_info(
     // 未启用 ffmpeg_native 特性时，回退到外部可执行文件版本信息
     #[cfg(not(feature = "ffmpeg_native"))]
     {
-        let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+        let cfg = config_manager
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
         let ffmpeg_bin = if let Some(p) = cfg
             .get_config()
             .ffmpeg_path
@@ -438,15 +442,24 @@ pub struct FfmpegPathConfig {
 }
 
 #[tauri::command]
-pub async fn get_ffmpeg_path_config(config_manager: State<'_, Mutex<ConfigManager>>) -> Result<FfmpegPathConfig, String> {
-    let cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+pub async fn get_ffmpeg_path_config(
+    config_manager: State<'_, Mutex<ConfigManager>>,
+) -> Result<FfmpegPathConfig, String> {
+    let cfg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
     Ok(FfmpegPathConfig {
         ffmpeg_path: cfg.get_config().ffmpeg_path.clone(),
     })
 }
 
 #[tauri::command]
-pub async fn set_ffmpeg_path_config(path: Option<String>, config_manager: State<'_, Mutex<ConfigManager>>) -> Result<(), String> {
-    let mut cfg = config_manager.lock().map_err(|e| format!("Config lock poisoned: {}", e))?;
+pub async fn set_ffmpeg_path_config(
+    path: Option<String>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
+) -> Result<(), String> {
+    let mut cfg = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?;
     cfg.set_ffmpeg_path(path).map_err(|e| e.to_string())
 }

@@ -89,10 +89,11 @@ body {
   min-height: 0;
   display: grid;
   grid-template-columns: 1.05fr 1.35fr;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 0.9fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 0.92fr) minmax(0, 0.84fr) minmax(0, 1.12fr) auto minmax(0, 1fr);
   grid-template-areas:
     "uploadVideo preview"
     "uploadLut preview"
+    "library preview"
     "settings preview"
     "status status";
   gap: 16px;
@@ -100,6 +101,7 @@ body {
 
 .app-grid > .upload-video-section,
 .app-grid > .upload-lut-section,
+.app-grid > .lut-library-section,
 .app-grid > .preview-section,
 .app-grid > .settings-section,
 .app-grid > .status-section {
@@ -113,6 +115,11 @@ body {
 
 .app-grid > .upload-lut-section {
   grid-area: uploadLut;
+  overflow: hidden;
+}
+
+.app-grid > .lut-library-section {
+  grid-area: library;
   overflow: hidden;
 }
 
@@ -277,6 +284,7 @@ body {
     grid-template-areas:
       "uploadVideo"
       "uploadLut"
+      "library"
       "preview"
       "settings"
       "status";

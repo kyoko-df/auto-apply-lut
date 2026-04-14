@@ -1,11 +1,11 @@
 //! 文件扫描器模块
 //! 提供目录扫描功能，支持递归扫描和文件过滤
 
-use crate::types::{AppResult, AppError};
 use crate::core::file::{FileInfo, FileManager};
-use std::path::{Path, PathBuf};
-use std::fs;
+use crate::types::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 use tokio::task;
 
 /// 扫描选项
@@ -165,7 +165,9 @@ impl FileScanner {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(e) => {
-                    result.errors.push(format!("Failed to read directory entry: {}", e));
+                    result
+                        .errors
+                        .push(format!("Failed to read directory entry: {}", e));
                     continue;
                 }
             };
@@ -322,8 +324,13 @@ impl FileScanner {
             }
         }
 
-        let entries = fs::read_dir(path)
-            .map_err(|e| AppError::Io(format!("Failed to read directory {}: {}", path.display(), e)))?;
+        let entries = fs::read_dir(path).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to read directory {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         for entry in entries {
             let entry = entry
@@ -365,8 +372,13 @@ impl FileScanner {
         path: &Path,
         stats: &mut DirectoryStats,
     ) -> AppResult<()> {
-        let entries = fs::read_dir(path)
-            .map_err(|e| AppError::Io(format!("Failed to read directory {}: {}", path.display(), e)))?;
+        let entries = fs::read_dir(path).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to read directory {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         for entry in entries {
             let entry = entry
@@ -415,10 +427,13 @@ mod tests {
     async fn test_scan_empty_directory() {
         let scanner = FileScanner::new();
         let temp_dir = tempdir().unwrap();
-        
+
         let options = ScanOptions::default();
-        let result = scanner.scan_directory(temp_dir.path(), options).await.unwrap();
-        
+        let result = scanner
+            .scan_directory(temp_dir.path(), options)
+            .await
+            .unwrap();
+
         assert_eq!(result.files.len(), 0);
         assert_eq!(result.directories_scanned, 1);
         assert_eq!(result.total_files, 0);
@@ -428,15 +443,18 @@ mod tests {
     async fn test_scan_with_files() {
         let scanner = FileScanner::new();
         let temp_dir = tempdir().unwrap();
-        
+
         // 创建测试文件
         File::create(temp_dir.path().join("video.mp4")).unwrap();
         File::create(temp_dir.path().join("lut.cube")).unwrap();
         File::create(temp_dir.path().join("other.txt")).unwrap();
-        
+
         let options = ScanOptions::default();
-        let result = scanner.scan_directory(temp_dir.path(), options).await.unwrap();
-        
+        let result = scanner
+            .scan_directory(temp_dir.path(), options)
+            .await
+            .unwrap();
+
         assert_eq!(result.files.len(), 3);
         assert_eq!(result.video_files, 1);
         assert_eq!(result.lut_files, 1);
@@ -446,16 +464,19 @@ mod tests {
     async fn test_video_only_filter() {
         let scanner = FileScanner::new();
         let temp_dir = tempdir().unwrap();
-        
+
         File::create(temp_dir.path().join("video.mp4")).unwrap();
         File::create(temp_dir.path().join("lut.cube")).unwrap();
-        
+
         let options = ScanOptions {
             video_only: true,
             ..Default::default()
         };
-        let result = scanner.scan_directory(temp_dir.path(), options).await.unwrap();
-        
+        let result = scanner
+            .scan_directory(temp_dir.path(), options)
+            .await
+            .unwrap();
+
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.video_files, 1);
         assert_eq!(result.lut_files, 0);
@@ -465,17 +486,20 @@ mod tests {
     async fn test_extension_filter() {
         let scanner = FileScanner::new();
         let temp_dir = tempdir().unwrap();
-        
+
         File::create(temp_dir.path().join("file1.mp4")).unwrap();
         File::create(temp_dir.path().join("file2.avi")).unwrap();
         File::create(temp_dir.path().join("file3.txt")).unwrap();
-        
+
         let options = ScanOptions {
             extension_filter: Some(vec!["mp4".to_string(), "avi".to_string()]),
             ..Default::default()
         };
-        let result = scanner.scan_directory(temp_dir.path(), options).await.unwrap();
-        
+        let result = scanner
+            .scan_directory(temp_dir.path(), options)
+            .await
+            .unwrap();
+
         assert_eq!(result.files.len(), 2);
     }
 
@@ -483,12 +507,12 @@ mod tests {
     async fn test_directory_stats() {
         let scanner = FileScanner::new();
         let temp_dir = tempdir().unwrap();
-        
+
         File::create(temp_dir.path().join("video.mp4")).unwrap();
         File::create(temp_dir.path().join("lut.cube")).unwrap();
-        
+
         let stats = scanner.get_directory_stats(temp_dir.path()).await.unwrap();
-        
+
         assert_eq!(stats.files, 2);
         assert_eq!(stats.video_files, 1);
         assert_eq!(stats.lut_files, 1);

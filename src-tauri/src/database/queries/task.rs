@@ -1,7 +1,7 @@
 //! 任务相关的数据库查询操作
 
-use crate::types::{AppError, AppResult};
 use crate::database::models::Task;
+use crate::types::{AppError, AppResult};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, types::ValueRef, Connection, OptionalExtension, Row};
 
@@ -31,7 +31,7 @@ pub fn insert_task(conn: &Connection, task: &Task) -> AppResult<String> {
             task.completed_at.map(|t| t.timestamp()),
             task.estimated_duration,
             task.actual_duration
-        ]
+        ],
     )?;
     Ok(task.id.clone())
 }
@@ -45,12 +45,10 @@ pub fn get_task_by_id(conn: &Connection, id: &str) -> AppResult<Option<Task>> {
                estimated_duration, actual_duration
         FROM tasks
         WHERE id = ?1
-        "#
+        "#,
     )?;
 
-    let task = stmt
-        .query_row(params![id], map_task_row)
-        .optional()?;
+    let task = stmt.query_row(params![id], map_task_row).optional()?;
     Ok(task)
 }
 
@@ -91,7 +89,7 @@ pub fn update_task(conn: &Connection, task: &Task) -> AppResult<()> {
             task.estimated_duration,
             task.actual_duration,
             &task.id,
-        ]
+        ],
     )?;
     Ok(())
 }
@@ -116,7 +114,7 @@ pub fn list_tasks(
                estimated_duration, actual_duration
         FROM tasks
         ORDER BY created_at DESC
-        "#
+        "#,
     )?;
 
     let task_iter = stmt.query_map([], map_task_row)?;
@@ -152,12 +150,12 @@ pub fn update_task_status(
     if let Some(progress) = progress {
         conn.execute(
             "UPDATE tasks SET status = ?1, progress = ?2 WHERE id = ?3",
-            params![status, progress, id]
+            params![status, progress, id],
         )?;
     } else {
         conn.execute(
             "UPDATE tasks SET status = ?1 WHERE id = ?2",
-            params![status, id]
+            params![status, id],
         )?;
     }
     Ok(())
@@ -167,7 +165,7 @@ pub fn update_task_status(
 pub fn update_task_progress(conn: &Connection, id: &str, progress: f64) -> AppResult<()> {
     conn.execute(
         "UPDATE tasks SET progress = ?1 WHERE id = ?2",
-        params![progress, id]
+        params![progress, id],
     )?;
     Ok(())
 }
@@ -176,7 +174,7 @@ pub fn update_task_progress(conn: &Connection, id: &str, progress: f64) -> AppRe
 pub fn set_task_error(conn: &Connection, id: &str, error_message: &str) -> AppResult<()> {
     conn.execute(
         "UPDATE tasks SET status = 'failed', error_message = ?1 WHERE id = ?2",
-        params![error_message, id]
+        params![error_message, id],
     )?;
     Ok(())
 }
@@ -223,14 +221,14 @@ pub fn get_task_stats(conn: &Connection) -> AppResult<TaskStats> {
     let durations: Vec<f64> = tasks
         .iter()
         .filter_map(|task| {
-            task.actual_duration
-                .map(|value| value as f64)
-                .or_else(|| match (task.started_at, task.completed_at) {
+            task.actual_duration.map(|value| value as f64).or_else(|| {
+                match (task.started_at, task.completed_at) {
                     (Some(started_at), Some(completed_at)) => {
                         Some((completed_at - started_at).num_seconds() as f64)
                     }
                     _ => None,
-                })
+                }
+            })
         })
         .collect();
 
@@ -290,15 +288,17 @@ fn read_optional_datetime(row: &Row<'_>, index: usize) -> rusqlite::Result<Optio
     let value = row.get_ref(index)?;
     match value {
         ValueRef::Null => Ok(None),
-        ValueRef::Integer(ts) => DateTime::<Utc>::from_timestamp(ts, 0)
-            .map(Some)
-            .ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    index,
-                    rusqlite::types::Type::Integer,
-                    Box::new(AppError::Database(format!("无效时间戳: {}", ts))),
-                )
-            }),
+        ValueRef::Integer(ts) => {
+            DateTime::<Utc>::from_timestamp(ts, 0)
+                .map(Some)
+                .ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        index,
+                        rusqlite::types::Type::Integer,
+                        Box::new(AppError::Database(format!("无效时间戳: {}", ts))),
+                    )
+                })
+        }
         ValueRef::Real(ts) => {
             let seconds = ts.trunc() as i64;
             DateTime::<Utc>::from_timestamp(seconds, 0)
@@ -322,7 +322,11 @@ fn read_optional_datetime(row: &Row<'_>, index: usize) -> rusqlite::Result<Optio
 
 fn parse_datetime_text(index: usize, text: &[u8]) -> rusqlite::Result<Option<DateTime<Utc>>> {
     let text = std::str::from_utf8(text).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error))
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
     })?;
 
     if text.trim().is_empty() {
@@ -407,7 +411,8 @@ mod tests {
         assert_eq!(fetched.status, "completed");
         assert_eq!(fetched.name, "task-task-2");
 
-        let completed_only = list_tasks(&conn, Some("completed"), None, None).expect("list completed");
+        let completed_only =
+            list_tasks(&conn, Some("completed"), None, None).expect("list completed");
         assert_eq!(completed_only.len(), 1);
         assert_eq!(completed_only[0].id, "task-2");
 

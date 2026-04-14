@@ -4,22 +4,22 @@
 use serde::{Deserialize, Serialize};
 
 // 数据结构和类型定义
-pub mod video;
-pub mod lut;
-pub mod task;
+pub mod batch;
 pub mod error;
 pub mod gpu;
-pub mod batch;
+pub mod lut;
 pub mod system;
+pub mod task;
+pub mod video;
 
 // 重新导出常用类型
+pub use batch::{BatchConfig, BatchStatus, BatchTask};
 pub use error::{AppError, AppResult};
-pub use video::{VideoInfo, VideoFormat, VideoProcessOptions};
-pub use lut::{LutInfo, LutType, LutFormat, LutApplyOptions, LutValidationResult, LutSizeInfo};
-pub use task::{TaskInfo, TaskStatus, TaskType, TaskProgress};
-pub use gpu::{GpuInfo, GpuAcceleration, GpuPerformanceConfig};
-pub use batch::{BatchTask, BatchStatus, BatchConfig};
-pub use system::{SystemInfo, SystemRequirements, CompatibilityCheck};
+pub use gpu::{GpuAcceleration, GpuInfo, GpuPerformanceConfig};
+pub use lut::{LutApplyOptions, LutFormat, LutInfo, LutSizeInfo, LutType, LutValidationResult};
+pub use system::{CompatibilityCheck, SystemInfo, SystemRequirements};
+pub use task::{TaskInfo, TaskProgress, TaskStatus, TaskType};
+pub use video::{VideoFormat, VideoInfo, VideoProcessOptions};
 
 /// 通用响应结果类型
 #[derive(Debug, Clone, Serialize, Deserialize)]

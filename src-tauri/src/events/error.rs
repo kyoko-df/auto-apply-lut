@@ -1,8 +1,8 @@
 //! 错误事件模块
 
+use crate::types::error::AppError;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
-use crate::types::error::AppError;
 
 /// 错误事件数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,8 +42,9 @@ impl ErrorEvent {
             AppError::NotFound(_) => "NotFound",
             AppError::Internal(_) => "Internal",
             AppError::Unknown(_) => "Unknown",
-        }.to_string();
-        
+        }
+        .to_string();
+
         Self {
             error_id: uuid::Uuid::new_v4().to_string(),
             error_type,
@@ -53,7 +54,7 @@ impl ErrorEvent {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-    
+
     /// 创建新的错误事件
     pub fn new(error_type: String, message: String) -> Self {
         Self {
@@ -65,13 +66,13 @@ impl ErrorEvent {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-    
+
     /// 设置详细信息
     pub fn with_details(mut self, details: String) -> Self {
         self.details = Some(details);
         self
     }
-    
+
     /// 设置任务ID
     pub fn with_task_id(mut self, task_id: String) -> Self {
         self.task_id = Some(task_id);

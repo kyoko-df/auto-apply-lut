@@ -1,8 +1,12 @@
-use super::{batch_manager, file_manager, gpu_manager, lut_manager, processor, system_manager};
+use super::{
+    batch_manager, encoding_options::ProcessingOptions, file_manager, gpu_manager, lut_manager,
+    processor, system_manager,
+};
 use crate::core::ffmpeg::processor::VideoProcessor;
 use crate::core::gpu::GpuManager;
 use crate::core::lut::LutManager;
 use crate::core::task::{TaskManager, TaskType};
+use crate::database::DatabaseManager;
 use crate::utils::config::ConfigManager;
 use crate::utils::path_utils::{get_app_data_dir, get_cache_dir};
 use crate::FfplayState;
@@ -57,12 +61,39 @@ impl Drop for EnvVarGuard {
 static HOME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
-    let lock = HOME_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock poisoned");
+    let lock = HOME_ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("lock poisoned");
     let home_dir = tempdir().expect("failed to create temp home");
     let _home_guard = EnvVarGuard::set("HOME", home_dir.path().as_os_str());
     let result = f(home_dir.path());
     drop(lock);
     result
+}
+
+fn temp_database() -> (tempfile::TempDir, DatabaseManager) {
+    let temp = tempdir().expect("failed to create temp db dir");
+    let db_path = temp.path().join("test.sqlite3");
+    let db_manager = DatabaseManager::new(&db_path).expect("db init failed");
+    db_manager.initialize().expect("db migration failed");
+    (temp, db_manager)
+}
+
+fn default_processing_options() -> ProcessingOptions {
+    ProcessingOptions {
+        hardware_acceleration: false,
+        output_format: Some("mp4".to_string()),
+        video_codec: None,
+        audio_codec: None,
+        quality_preset: Some("balanced".to_string()),
+        resolution: None,
+        fps: None,
+        bitrate: None,
+        color_space: None,
+        two_pass_encoding: false,
+        preserve_metadata: true,
+    }
 }
 
 #[test]
@@ -73,8 +104,10 @@ fn command_interfaces_gpu() {
         .expect("get_gpu_info failed");
     assert!(!gpus.is_empty());
 
-    let hw = run_async(gpu_manager::check_hardware_acceleration(state_ref(&gpu_manager_state)))
-        .expect("check_hardware_acceleration failed");
+    let hw = run_async(gpu_manager::check_hardware_acceleration(state_ref(
+        &gpu_manager_state,
+    )))
+    .expect("check_hardware_acceleration failed");
     assert_eq!(hw.available, !hw.supported_codecs.is_empty());
 
     let result = run_async(gpu_manager::test_hardware_acceleration(
@@ -90,9 +123,12 @@ fn command_interfaces_gpu() {
 #[test]
 fn command_interfaces_lut() {
     let lut_manager_state = LutManager::new();
+    let (_db_dir, db_manager) = temp_database();
 
-    let formats = run_async(lut_manager::get_supported_lut_formats(state_ref(&lut_manager_state)))
-        .expect("get_supported_lut_formats failed");
+    let formats = run_async(lut_manager::get_supported_lut_formats(state_ref(
+        &lut_manager_state,
+    )))
+    .expect("get_supported_lut_formats failed");
     assert!(formats.iter().any(|f| f == "cube"));
 
     let err = run_async(lut_manager::validate_lut_file(
@@ -105,6 +141,7 @@ fn command_interfaces_lut() {
     let err = run_async(lut_manager::get_lut_info(
         "not_exists.cube".to_string(),
         state_ref(&lut_manager_state),
+        state_ref(&db_manager),
     ))
     .expect_err("get_lut_info should fail for non-existent file");
     assert!(!err.is_empty());
@@ -275,7 +312,9 @@ fn command_interfaces_system() {
         assert!(persisted.two_pass_encoding);
         assert!(!persisted.preserve_metadata);
 
-        let log_dir = get_app_data_dir().expect("get_app_data_dir failed").join("logs");
+        let log_dir = get_app_data_dir()
+            .expect("get_app_data_dir failed")
+            .join("logs");
         std::fs::create_dir_all(&log_dir).expect("failed to create logs dir");
         let test_log_name = format!("command-test-{}.log", Uuid::new_v4());
         let test_log_path = log_dir.join(&test_log_name);
@@ -292,7 +331,8 @@ fn command_interfaces_system() {
         let cache_dir = get_cache_dir().expect("get_cache_dir failed");
         let cache_file = cache_dir.join("cache-test.bin");
         std::fs::write(&cache_file, vec![1u8; 1024]).expect("failed to write cache test file");
-        let cache_size = run_async(system_manager::get_cache_size()).expect("get_cache_size failed");
+        let cache_size =
+            run_async(system_manager::get_cache_size()).expect("get_cache_size failed");
         assert!(cache_size >= 1024);
 
         let clear_msg = run_async(system_manager::clear_cache()).expect("clear_cache failed");
@@ -312,9 +352,10 @@ fn command_interfaces_system() {
         ))
         .expect("set_ffmpeg_path_config failed");
 
-        let ffmpeg_cfg =
-            run_async(system_manager::get_ffmpeg_path_config(state_ref(&config_manager)))
-                .expect("get_ffmpeg_path_config failed");
+        let ffmpeg_cfg = run_async(system_manager::get_ffmpeg_path_config(state_ref(
+            &config_manager,
+        )))
+        .expect("get_ffmpeg_path_config failed");
         assert_eq!(
             ffmpeg_cfg.ffmpeg_path.as_deref(),
             Some("/definitely/not/found/ffmpeg")
@@ -327,69 +368,70 @@ fn command_interfaces_system() {
 
 #[test]
 fn command_interfaces_batch() {
-    let temp = tempdir().expect("failed to create temp dir");
-    let input_dir = temp.path().join("input");
-    let output_dir = temp.path().join("output");
-    std::fs::create_dir_all(&input_dir).expect("failed to create input dir");
-    std::fs::create_dir_all(&output_dir).expect("failed to create output dir");
+    with_temp_home(|_| {
+        let temp = tempdir().expect("failed to create temp dir");
+        let input_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        std::fs::create_dir_all(&input_dir).expect("failed to create input dir");
+        std::fs::create_dir_all(&output_dir).expect("failed to create output dir");
 
-    let video_path = input_dir.join("demo.mp4");
-    let lut_path = input_dir.join("look.cube");
-    std::fs::write(&video_path, b"video").expect("failed to write video file");
-    std::fs::write(&lut_path, b"lut").expect("failed to write lut file");
+        let video_path = input_dir.join("demo.mp4");
+        let lut_path = input_dir.join("look.m3d");
+        std::fs::write(&video_path, b"video").expect("failed to write video file");
+        std::fs::write(&lut_path, b"lut").expect("failed to write lut file");
 
-    let scan = run_async(batch_manager::scan_directory_for_videos(
-        input_dir.to_string_lossy().to_string(),
-    ))
-    .expect("scan_directory_for_videos failed");
-    assert!(scan.video_files.iter().any(|p| p.ends_with("demo.mp4")));
-    assert!(scan.lut_files.iter().any(|p| p.ends_with("look.cube")));
+        let scan = run_async(batch_manager::scan_directory_for_videos(
+            input_dir.to_string_lossy().to_string(),
+        ))
+        .expect("scan_directory_for_videos failed");
+        assert!(scan.video_files.iter().any(|p| p.ends_with("demo.mp4")));
+        assert!(scan.lut_files.iter().any(|p| p.ends_with("look.m3d")));
 
-    let generated = run_async(batch_manager::generate_batch_from_directory(
-        input_dir.to_string_lossy().to_string(),
-        lut_path.to_string_lossy().to_string(),
-        output_dir.to_string_lossy().to_string(),
-        0.75,
-    ))
-    .expect("generate_batch_from_directory failed");
-    assert_eq!(generated.len(), 1);
-    assert_eq!(generated[0].intensity, 0.75);
+        let generated = run_async(batch_manager::generate_batch_from_directory(
+            input_dir.to_string_lossy().to_string(),
+            lut_path.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            0.75,
+        ))
+        .expect("generate_batch_from_directory failed");
+        assert_eq!(generated.len(), 1);
+        assert_eq!(generated[0].intensity, 0.75);
 
-    let task_manager = TaskManager::default();
-    let video_processor = VideoProcessor::new(PathBuf::from("ffmpeg"));
-    let lut_manager = LutManager::new();
+        let config_manager = Mutex::new(ConfigManager::new().expect("config init failed"));
+        let task_manager = TaskManager::default();
+        let video_processor = VideoProcessor::new(PathBuf::from("ffmpeg"));
+        let lut_manager = LutManager::new();
 
-    let req = batch_manager::BatchRequest {
-        items: vec![batch_manager::BatchItem {
-            input_path: "/not-exists-input.mp4".to_string(),
-            output_path: output_dir.join("out.mp4").to_string_lossy().to_string(),
-            lut_paths: vec![lut_path.to_string_lossy().to_string()],
-            lut_path: Some(lut_path.to_string_lossy().to_string()),
-            intensity: 1.0,
-        }],
-        hardware_acceleration: false,
-        output_directory: output_dir.to_string_lossy().to_string(),
-        preserve_structure: false,
-    };
-    let start_result = run_async(batch_manager::start_batch_processing(
-        req,
-        state_ref(&task_manager),
-        state_ref(&video_processor),
-        state_ref(&lut_manager),
-    ));
-    assert!(start_result.is_err());
+        let req = batch_manager::BatchRequest {
+            items: vec![batch_manager::BatchItem {
+                input_path: "/not-exists-input.mp4".to_string(),
+                output_path: output_dir.join("out.mp4").to_string_lossy().to_string(),
+                lut_paths: vec![lut_path.to_string_lossy().to_string()],
+                lut_path: Some(lut_path.to_string_lossy().to_string()),
+                intensity: 1.0,
+            }],
+            output_directory: output_dir.to_string_lossy().to_string(),
+            preserve_structure: false,
+            options: default_processing_options(),
+        };
+        let start_result = run_async(batch_manager::start_batch_processing(
+            req,
+            state_ref(&task_manager),
+            state_ref(&video_processor),
+            state_ref(&lut_manager),
+            state_ref(&config_manager),
+        ));
+        assert!(start_result.is_err());
 
-    let progress = run_async(batch_manager::get_batch_progress(
-        "batch-x".to_string(),
-        state_ref(&task_manager),
-    ));
-    assert!(progress.is_err());
+        let progress = run_async(batch_manager::get_batch_progress("batch-x".to_string()));
+        assert!(progress.is_err());
 
-    let cancel_msg = run_async(batch_manager::cancel_batch(
-        "batch-x".to_string(),
-        state_ref(&task_manager),
-    ));
-    assert!(cancel_msg.is_err());
+        let cancel_msg = run_async(batch_manager::cancel_batch(
+            "batch-x".to_string(),
+            state_ref(&task_manager),
+        ));
+        assert!(cancel_msg.is_err());
+    });
 }
 
 #[test]
@@ -403,20 +445,10 @@ fn command_interfaces_processor() {
             input_path: "input.mp4".to_string(),
             output_path: "output.mp4".to_string(),
             output_directory: None,
-            output_format: None,
             lut_paths: vec![],
             lut_path: None,
             intensity: 1.0,
-            hardware_acceleration: false,
-            video_codec: None,
-            audio_codec: None,
-            quality_preset: None,
-            resolution: None,
-            fps: None,
-            bitrate: None,
-            color_space: None,
-            two_pass_encoding: false,
-            preserve_metadata: true,
+            options: default_processing_options(),
             lut_error_strategy: processor::LutErrorStrategy::StopOnError,
         },
         state_ref(&task_manager),
@@ -425,8 +457,10 @@ fn command_interfaces_processor() {
     ));
     assert!(start_res.is_err());
 
-    let missing =
-        run_async(processor::get_task_progress("missing-task".to_string(), state_ref(&task_manager)));
+    let missing = run_async(processor::get_task_progress(
+        "missing-task".to_string(),
+        state_ref(&task_manager),
+    ));
     assert!(missing.is_err());
 
     let task_id = task_manager
@@ -447,8 +481,8 @@ fn command_interfaces_processor() {
     .expect("cancel_task failed");
     assert_eq!(cancel_msg, "Task cancelled successfully");
 
-    let all_tasks =
-        run_async(processor::get_all_tasks(state_ref(&task_manager))).expect("get_all_tasks failed");
+    let all_tasks = run_async(processor::get_all_tasks(state_ref(&task_manager)))
+        .expect("get_all_tasks failed");
     assert!(!all_tasks.is_empty());
 }
 
@@ -456,6 +490,7 @@ fn command_interfaces_processor() {
 fn command_interfaces_processor_video_info() {
     with_temp_home(|_| {
         let config_manager = Mutex::new(ConfigManager::new().expect("config init failed"));
+        let (_db_dir, db_manager) = temp_database();
         config_manager
             .lock()
             .expect("config lock poisoned")
@@ -465,6 +500,7 @@ fn command_interfaces_processor_video_info() {
         let result = run_async(processor::get_video_info(
             "/not/found/video.mp4".to_string(),
             state_ref(&config_manager),
+            state_ref(&db_manager),
         ));
         assert!(result.is_err());
     });

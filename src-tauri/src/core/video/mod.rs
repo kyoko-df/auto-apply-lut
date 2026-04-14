@@ -1,12 +1,12 @@
 //! 视频处理核心模块
 //! 提供视频文件的分析、处理和转换功能
 
-use crate::types::{AppResult, VideoInfo, VideoFormat};
+use crate::types::{AppResult, VideoFormat, VideoInfo};
+use crate::utils::config::ConfigManager;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
-use serde_json::Value;
-use chrono::{DateTime, Utc};
-use crate::utils::config::ConfigManager;
 
 pub mod metadata;
 
@@ -33,7 +33,11 @@ impl VideoManager {
                 .filter(|s| !s.trim().is_empty())
             {
                 // 推断 ffprobe 路径：同目录下可执行名替换
-                let probe_name = if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" };
+                let probe_name = if cfg!(target_os = "windows") {
+                    "ffprobe.exe"
+                } else {
+                    "ffprobe"
+                };
                 let mut ffprobe_path = PathBuf::from(cfg_ffmpeg);
                 if ffprobe_path.is_file() {
                     ffprobe_path.pop();
@@ -52,7 +56,10 @@ impl VideoManager {
                 if Self::is_executable_available(&ffmpeg_path)
                     && Self::is_executable_available(&ffprobe_path)
                 {
-                    return Ok(Self { ffmpeg_path, ffprobe_path });
+                    return Ok(Self {
+                        ffmpeg_path,
+                        ffprobe_path,
+                    });
                 }
             }
         }
@@ -60,7 +67,10 @@ impl VideoManager {
         // 1) 自动发现
         let ffmpeg_path = Self::find_ffmpeg_path()?;
         let ffprobe_path = Self::find_ffprobe_path()?;
-        Ok(Self { ffmpeg_path, ffprobe_path })
+        Ok(Self {
+            ffmpeg_path,
+            ffprobe_path,
+        })
     }
 
     /// 使用自定义路径创建视频管理器
@@ -74,35 +84,41 @@ impl VideoManager {
     /// 获取视频信息
     pub async fn get_video_info<P: AsRef<Path>>(&self, path: P) -> AppResult<VideoInfo> {
         let path = path.as_ref();
-        
+
         // 检查文件是否存在
         if !path.exists() {
-            return Err(crate::types::AppError::FileSystem(
-                format!("Video file not found: {}", path.display())
-            ));
+            return Err(crate::types::AppError::FileSystem(format!(
+                "Video file not found: {}",
+                path.display()
+            )));
         }
 
         // 获取文件基本信息
-        let metadata = tokio::fs::metadata(path).await
+        let metadata = tokio::fs::metadata(path)
+            .await
             .map_err(|e| crate::types::AppError::FileSystem(e.to_string()))?;
-        
+
         let file_size = metadata.len();
-        let created_at = metadata.created()
+        let created_at = metadata
+            .created()
             .map(|t| DateTime::<Utc>::from(t))
             .unwrap_or_else(|_| Utc::now());
-        let modified_at = metadata.modified()
+        let modified_at = metadata
+            .modified()
             .map(|t| DateTime::<Utc>::from(t))
             .unwrap_or_else(|_| Utc::now());
 
         // 使用FFprobe获取视频元数据
         let video_metadata = self.probe_video_metadata(path).await?;
-        
-        let file_name = path.file_name()
+
+        let file_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let format = path.extension()
+        let format = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .map(VideoFormat::from_extension)
             .unwrap_or(VideoFormat::Other("unknown".to_string()));
@@ -168,7 +184,9 @@ impl VideoManager {
         }
 
         // 2) 打包的二进制（随应用一起分发）
-        if let Some(p) = Self::find_packaged_tool("ffmpeg") { return Ok(p); }
+        if let Some(p) = Self::find_packaged_tool("ffmpeg") {
+            return Ok(p);
+        }
 
         // 3) 常见路径 + PATH
         let common_paths = [
@@ -187,7 +205,8 @@ impl VideoManager {
         }
 
         Err(crate::types::AppError::Configuration(
-            "FFmpeg not found. Please install FFmpeg or set FFMPEG_PATH environment variable".to_string()
+            "FFmpeg not found. Please install FFmpeg or set FFMPEG_PATH environment variable"
+                .to_string(),
         ))
     }
 
@@ -201,7 +220,9 @@ impl VideoManager {
         }
 
         // 2) 打包的二进制（随应用一起分发）
-        if let Some(p) = Self::find_packaged_tool("ffprobe") { return Ok(p); }
+        if let Some(p) = Self::find_packaged_tool("ffprobe") {
+            return Ok(p);
+        }
 
         // 3) 常见路径 + PATH
         let common_paths = [
@@ -220,7 +241,8 @@ impl VideoManager {
         }
 
         Err(crate::types::AppError::Configuration(
-            "FFprobe not found. Please install FFmpeg or set FFPROBE_PATH environment variable".to_string()
+            "FFprobe not found. Please install FFmpeg or set FFPROBE_PATH environment variable"
+                .to_string(),
         ))
     }
 
@@ -270,9 +292,18 @@ impl VideoManager {
             let arch = std::env::consts::ARCH;
             vec![
                 resources.join("bin").join("macos").join(arch).join(tool),
-                resources.join("resources").join("bin").join("macos").join(arch).join(tool),
+                resources
+                    .join("resources")
+                    .join("bin")
+                    .join("macos")
+                    .join(arch)
+                    .join(tool),
                 resources.join("bin").join("macos").join(tool),
-                resources.join("resources").join("bin").join("macos").join(tool),
+                resources
+                    .join("resources")
+                    .join("bin")
+                    .join("macos")
+                    .join(tool),
                 resources.join(tool),
                 exe_dir.join(tool),
             ]
@@ -280,8 +311,17 @@ impl VideoManager {
 
         #[cfg(target_os = "linux")]
         let candidates = vec![
-            exe_dir.join("resources").join("bin").join("linux").join(tool),
-            exe_dir.join("resources").join("resources").join("bin").join("linux").join(tool),
+            exe_dir
+                .join("resources")
+                .join("bin")
+                .join("linux")
+                .join(tool),
+            exe_dir
+                .join("resources")
+                .join("resources")
+                .join("bin")
+                .join("linux")
+                .join(tool),
             exe_dir.join("bin").join("linux").join(tool),
             exe_dir.join(tool),
         ];
@@ -289,7 +329,9 @@ impl VideoManager {
         for c in candidates {
             if c.exists() {
                 let p = c.to_string_lossy().to_string();
-                if Self::is_executable_available(&p) { return Some(p); }
+                if Self::is_executable_available(&p) {
+                    return Some(p);
+                }
             }
         }
         None
@@ -299,8 +341,10 @@ impl VideoManager {
     async fn probe_video_metadata<P: AsRef<Path>>(&self, path: P) -> AppResult<VideoMetadata> {
         let output = Command::new(&self.ffprobe_path)
             .args([
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
                 path.as_ref().to_str().unwrap(),
@@ -311,16 +355,16 @@ impl VideoManager {
 
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
-            return Err(crate::types::AppError::FFmpeg(
-                format!("FFprobe failed: {}", error)
-            ));
+            return Err(crate::types::AppError::FFmpeg(format!(
+                "FFprobe failed: {}",
+                error
+            )));
         }
 
         let json_str = String::from_utf8_lossy(&output.stdout);
-        let json: Value = serde_json::from_str(&json_str)
-            .map_err(|e| crate::types::AppError::FFmpeg(
-                format!("Failed to parse FFprobe output: {}", e)
-            ))?;
+        let json: Value = serde_json::from_str(&json_str).map_err(|e| {
+            crate::types::AppError::FFmpeg(format!("Failed to parse FFprobe output: {}", e))
+        })?;
 
         VideoMetadata::from_ffprobe_json(&json)
     }

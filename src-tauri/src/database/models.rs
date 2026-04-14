@@ -1,7 +1,7 @@
 //! 数据库模型定义
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// 视频文件模型
 #[derive(Debug, Clone, Serialize, Deserialize)]

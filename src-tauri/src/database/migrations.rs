@@ -7,28 +7,33 @@ use rusqlite::Connection;
 pub fn run_migrations(conn: &Connection) -> AppResult<()> {
     // 创建迁移表
     create_migration_table(conn)?;
-    
+
     // 运行各个迁移
     if !is_migration_applied(conn, "create_videos_table")? {
         create_videos_table(conn)?;
         mark_migration_applied(conn, "create_videos_table")?;
     }
-    
+
     if !is_migration_applied(conn, "create_luts_table")? {
         create_luts_table(conn)?;
         mark_migration_applied(conn, "create_luts_table")?;
     }
-    
+
     if !is_migration_applied(conn, "create_tasks_table")? {
         create_tasks_table(conn)?;
         mark_migration_applied(conn, "create_tasks_table")?;
     }
-    
+
+    if !is_migration_applied(conn, "create_batches_table")? {
+        create_batches_table(conn)?;
+        mark_migration_applied(conn, "create_batches_table")?;
+    }
+
     if !is_migration_applied(conn, "create_settings_table")? {
         create_settings_table(conn)?;
         mark_migration_applied(conn, "create_settings_table")?;
     }
-    
+
     Ok(())
 }
 
@@ -42,7 +47,7 @@ fn create_migration_table(conn: &Connection) -> AppResult<()> {
             applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         "#,
-        []
+        [],
     )?;
     Ok(())
 }
@@ -56,10 +61,7 @@ fn is_migration_applied(conn: &Connection, name: &str) -> AppResult<bool> {
 
 /// 标记迁移为已应用
 fn mark_migration_applied(conn: &Connection, name: &str) -> AppResult<()> {
-    conn.execute(
-        "INSERT INTO migrations (name) VALUES (?1)",
-        [name]
-    )?;
+    conn.execute("INSERT INTO migrations (name) VALUES (?1)", [name])?;
     Ok(())
 }
 
@@ -84,7 +86,7 @@ fn create_videos_table(conn: &Connection) -> AppResult<()> {
             last_accessed DATETIME
         )
         "#,
-        []
+        [],
     )?;
     Ok(())
 }
@@ -106,7 +108,7 @@ fn create_luts_table(conn: &Connection) -> AppResult<()> {
             last_accessed DATETIME
         )
         "#,
-        []
+        [],
     )?;
     Ok(())
 }
@@ -133,7 +135,29 @@ fn create_tasks_table(conn: &Connection) -> AppResult<()> {
             actual_duration INTEGER
         )
         "#,
-        []
+        [],
+    )?;
+    Ok(())
+}
+
+/// 创建批处理表
+fn create_batches_table(conn: &Connection) -> AppResult<()> {
+    conn.execute(
+        r#"
+        CREATE TABLE batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            total_videos INTEGER NOT NULL DEFAULT 0,
+            processed_videos INTEGER NOT NULL DEFAULT 0,
+            failed_videos INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME
+        )
+        "#,
+        [],
     )?;
     Ok(())
 }
@@ -151,7 +175,7 @@ fn create_settings_table(conn: &Connection) -> AppResult<()> {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         "#,
-        []
+        [],
     )?;
     Ok(())
 }

@@ -1,16 +1,16 @@
 //! 文件管理模块
 //! 提供文件和目录的操作功能，包括扫描、监控、元数据提取等
 
-use crate::types::{AppResult, AppError};
-use std::path::{Path, PathBuf};
-use std::fs;
+use crate::types::{AppError, AppResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
-pub mod scanner;
-pub mod watcher;
 pub mod metadata;
+pub mod scanner;
 pub mod utils;
+pub mod watcher;
 
 /// 文件信息结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,25 +72,34 @@ impl FileManager {
     /// 获取文件信息
     pub fn get_file_info<P: AsRef<Path>>(&self, path: P) -> AppResult<FileInfo> {
         let path = path.as_ref();
-        let metadata = fs::metadata(path)
-            .map_err(|e| AppError::Io(format!("Failed to get metadata for {}: {}", path.display(), e)))?;
+        let metadata = fs::metadata(path).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to get metadata for {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
 
-        let extension = path.extension()
+        let extension = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .map(|s| s.to_lowercase());
 
         let mime_type = self.get_mime_type(&extension);
 
-        let created_at = metadata.created()
+        let created_at = metadata
+            .created()
             .map(DateTime::<Utc>::from)
             .unwrap_or_else(|_| Utc::now());
 
-        let modified_at = metadata.modified()
+        let modified_at = metadata
+            .modified()
             .map(DateTime::<Utc>::from)
             .unwrap_or_else(|_| Utc::now());
 
@@ -111,24 +120,40 @@ impl FileManager {
         let path = path.as_ref();
 
         if !path.exists() {
-            return Err(AppError::Io(format!("Directory does not exist: {}", path.display())));
+            return Err(AppError::Io(format!(
+                "Directory does not exist: {}",
+                path.display()
+            )));
         }
         if !path.is_dir() {
-            return Err(AppError::Io(format!("Path is not a directory: {}", path.display())));
+            return Err(AppError::Io(format!(
+                "Path is not a directory: {}",
+                path.display()
+            )));
         }
 
         let mut items = Vec::new();
-        let entries = fs::read_dir(path)
-            .map_err(|e| AppError::Io(format!("Failed to read directory {}: {}", path.display(), e)))?;
+        let entries = fs::read_dir(path).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to read directory {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry
+                .map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
             let entry_path = entry.path();
             match self.get_file_info(&entry_path) {
                 Ok(info) => items.push(info),
                 Err(e) => {
                     // 忽略单个条目的错误，继续处理其它项
-                    tracing::warn!("list_directory: failed to get info for {}: {}", entry_path.display(), e);
+                    tracing::warn!(
+                        "list_directory: failed to get info for {}: {}",
+                        entry_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -211,54 +236,77 @@ impl FileManager {
 
     /// 创建目录
     pub fn create_directory<P: AsRef<Path>>(&self, path: P) -> AppResult<()> {
-        fs::create_dir_all(path.as_ref())
-            .map_err(|e| AppError::Io(format!("Failed to create directory {}: {}", path.as_ref().display(), e)))
+        fs::create_dir_all(path.as_ref()).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to create directory {}: {}",
+                path.as_ref().display(),
+                e
+            ))
+        })
     }
 
     /// 删除文件
     pub fn delete_file<P: AsRef<Path>>(&self, path: P) -> AppResult<()> {
-        fs::remove_file(path.as_ref())
-            .map_err(|e| AppError::Io(format!("Failed to delete file {}: {}", path.as_ref().display(), e)))
+        fs::remove_file(path.as_ref()).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to delete file {}: {}",
+                path.as_ref().display(),
+                e
+            ))
+        })
     }
 
     /// 删除目录
     pub fn delete_directory<P: AsRef<Path>>(&self, path: P) -> AppResult<()> {
-        fs::remove_dir_all(path.as_ref())
-            .map_err(|e| AppError::Io(format!("Failed to delete directory {}: {}", path.as_ref().display(), e)))
+        fs::remove_dir_all(path.as_ref()).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to delete directory {}: {}",
+                path.as_ref().display(),
+                e
+            ))
+        })
     }
 
     /// 复制文件
     pub fn copy_file<P: AsRef<Path>>(&self, from: P, to: P) -> AppResult<u64> {
-        fs::copy(from.as_ref(), to.as_ref())
-            .map_err(|e| AppError::Io(format!(
+        fs::copy(from.as_ref(), to.as_ref()).map_err(|e| {
+            AppError::Io(format!(
                 "Failed to copy file from {} to {}: {}",
                 from.as_ref().display(),
                 to.as_ref().display(),
                 e
-            )))
+            ))
+        })
     }
 
     /// 移动文件
     pub fn move_file<P: AsRef<Path>>(&self, from: P, to: P) -> AppResult<()> {
-        fs::rename(from.as_ref(), to.as_ref())
-            .map_err(|e| AppError::Io(format!(
+        fs::rename(from.as_ref(), to.as_ref()).map_err(|e| {
+            AppError::Io(format!(
                 "Failed to move file from {} to {}: {}",
                 from.as_ref().display(),
                 to.as_ref().display(),
                 e
-            )))
+            ))
+        })
     }
 
     /// 获取目录大小
     pub fn get_directory_size<P: AsRef<Path>>(&self, path: P) -> AppResult<u64> {
         let mut total_size = 0;
-        let entries = fs::read_dir(path.as_ref())
-            .map_err(|e| AppError::Io(format!("Failed to read directory {}: {}", path.as_ref().display(), e)))?;
+        let entries = fs::read_dir(path.as_ref()).map_err(|e| {
+            AppError::Io(format!(
+                "Failed to read directory {}: {}",
+                path.as_ref().display(),
+                e
+            ))
+        })?;
 
         for entry in entries {
             let entry = entry
                 .map_err(|e| AppError::Io(format!("Failed to read directory entry: {}", e)))?;
-            let metadata = entry.metadata()
+            let metadata = entry
+                .metadata()
                 .map_err(|e| AppError::Io(format!("Failed to get metadata: {}", e)))?;
 
             if metadata.is_file() {

@@ -1,20 +1,20 @@
 //! FFmpeg集成模块
 //! 提供视频处理、LUT应用和格式转换功能
 
-use crate::types::{AppResult, AppError};
+use crate::types::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use tokio::process::Command as AsyncCommand;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command as AsyncCommand;
 use tokio::sync::Mutex;
 
-pub mod processor;
-pub mod encoder;
 pub mod decoder;
+pub mod encoder;
 pub mod filters;
+pub mod processor;
 pub mod utils;
 
 /// 对外导出：发现打包或系统中的 ffmpeg/ffprobe 路径
@@ -47,7 +47,7 @@ impl FFmpegManager {
     pub fn new() -> AppResult<Self> {
         let ffmpeg_path = Self::find_ffmpeg_executable()?;
         let ffprobe_path = Self::find_ffprobe_executable()?;
-        
+
         Ok(Self {
             ffmpeg_path,
             ffprobe_path,
@@ -60,12 +60,18 @@ impl FFmpegManager {
     pub fn with_paths(ffmpeg_path: PathBuf, ffprobe_path: PathBuf) -> AppResult<Self> {
         // 验证可执行文件存在
         if !ffmpeg_path.exists() {
-            return Err(AppError::FFmpeg(format!("FFmpeg not found at: {:?}", ffmpeg_path)));
+            return Err(AppError::FFmpeg(format!(
+                "FFmpeg not found at: {:?}",
+                ffmpeg_path
+            )));
         }
         if !ffprobe_path.exists() {
-            return Err(AppError::FFmpeg(format!("FFprobe not found at: {:?}", ffprobe_path)));
+            return Err(AppError::FFmpeg(format!(
+                "FFprobe not found at: {:?}",
+                ffprobe_path
+            )));
         }
-        
+
         Ok(Self {
             ffmpeg_path,
             ffprobe_path,
@@ -79,11 +85,15 @@ impl FFmpegManager {
         // 0) 环境变量优先
         if let Ok(p) = std::env::var("FFMPEG_PATH") {
             let pb = PathBuf::from(&p);
-            if pb.exists() || Self::check_command_works(&p) { return Ok(pb); }
+            if pb.exists() || Self::check_command_works(&p) {
+                return Ok(pb);
+            }
         }
 
         // 1) 打包的资源目录
-        if let Some(pb) = Self::find_packaged_tool("ffmpeg") { return Ok(pb); }
+        if let Some(pb) = Self::find_packaged_tool("ffmpeg") {
+            return Ok(pb);
+        }
 
         // 2) 常见安装路径
         #[cfg(target_os = "windows")]
@@ -103,12 +113,14 @@ impl FFmpegManager {
         for p in common_paths {
             let pb = PathBuf::from(p);
             if pb.is_absolute() {
-                if pb.exists() { return Ok(pb); }
+                if pb.exists() {
+                    return Ok(pb);
+                }
             } else if Self::check_command_works(p) {
                 return Ok(pb);
             }
         }
-        
+
         Err(AppError::FFmpeg("FFmpeg executable not found".to_string()))
     }
 
@@ -117,11 +129,15 @@ impl FFmpegManager {
         // 0) 环境变量优先
         if let Ok(p) = std::env::var("FFPROBE_PATH") {
             let pb = PathBuf::from(&p);
-            if pb.exists() || Self::check_command_works(&p) { return Ok(pb); }
+            if pb.exists() || Self::check_command_works(&p) {
+                return Ok(pb);
+            }
         }
 
         // 1) 打包的资源目录
-        if let Some(pb) = Self::find_packaged_tool("ffprobe") { return Ok(pb); }
+        if let Some(pb) = Self::find_packaged_tool("ffprobe") {
+            return Ok(pb);
+        }
 
         // 2) 常见安装路径
         #[cfg(target_os = "windows")]
@@ -141,7 +157,9 @@ impl FFmpegManager {
         for p in common_paths {
             let pb = PathBuf::from(p);
             if pb.is_absolute() {
-                if pb.exists() { return Ok(pb); }
+                if pb.exists() {
+                    return Ok(pb);
+                }
             } else if Self::check_command_works(p) {
                 return Ok(pb);
             }
@@ -242,10 +260,19 @@ impl FFmpegManager {
             vec![
                 // arch-specific first (for universal apps)
                 resources.join("bin").join("macos").join(arch).join(tool),
-                resources.join("resources").join("bin").join("macos").join(arch).join(tool),
+                resources
+                    .join("resources")
+                    .join("bin")
+                    .join("macos")
+                    .join(arch)
+                    .join(tool),
                 // legacy / fallback locations
                 resources.join("bin").join("macos").join(tool),
-                resources.join("resources").join("bin").join("macos").join(tool),
+                resources
+                    .join("resources")
+                    .join("bin")
+                    .join("macos")
+                    .join(tool),
                 resources.join(tool),
                 exe_dir.join(tool),
             ]
@@ -253,8 +280,17 @@ impl FFmpegManager {
 
         #[cfg(target_os = "linux")]
         let candidates = vec![
-            exe_dir.join("resources").join("bin").join("linux").join(tool),
-            exe_dir.join("resources").join("resources").join("bin").join("linux").join(tool),
+            exe_dir
+                .join("resources")
+                .join("bin")
+                .join("linux")
+                .join(tool),
+            exe_dir
+                .join("resources")
+                .join("resources")
+                .join("bin")
+                .join("linux")
+                .join(tool),
             exe_dir.join("bin").join("linux").join(tool),
             exe_dir.join(tool),
         ];
@@ -262,8 +298,14 @@ impl FFmpegManager {
         for c in candidates {
             if c.exists() {
                 // 再次确认可执行
-                let s = if cfg!(target_os = "windows") { c.to_string_lossy().to_string() } else { c.to_string_lossy().to_string() };
-                if Self::check_command_works(&s) { return Some(c); }
+                let s = if cfg!(target_os = "windows") {
+                    c.to_string_lossy().to_string()
+                } else {
+                    c.to_string_lossy().to_string()
+                };
+                if Self::check_command_works(&s) {
+                    return Some(c);
+                }
             }
         }
         None
@@ -273,8 +315,10 @@ impl FFmpegManager {
     pub async fn get_video_info(&self, input_path: &Path) -> AppResult<VideoInfo> {
         let output = AsyncCommand::new(&self.ffprobe_path)
             .args([
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
                 input_path.to_str().unwrap(),
@@ -294,29 +338,48 @@ impl FFmpegManager {
 
         // 将 streams 转换为内部结构
         let streams: Vec<StreamInfo> = probe.streams.drain(..).map(Into::into).collect();
-        let (duration, bitrate, format, video_codec, audio_codec, fps, width, height) = if let Some(fmt) = probe.format {
-            let duration = fmt.duration.parse::<f64>().unwrap_or(0.0);
-            let bitrate = fmt.bit_rate.parse::<u64>().unwrap_or(0);
-            let format = fmt.format_name;
-            let mut video_codec = String::from("unknown");
-            let mut audio_codec = None;
-            let mut fps = 0.0;
-            let mut width = 0;
-            let mut height = 0;
-            for s in &streams {
-                if s.codec_type == "video" {
-                    video_codec = s.codec_name.clone();
-                    fps = s.fps.unwrap_or(0.0);
-                    width = s.width.unwrap_or(0);
-                    height = s.height.unwrap_or(0);
-                } else if s.codec_type == "audio" {
-                    audio_codec = Some(s.codec_name.clone());
+        let (duration, bitrate, format, video_codec, audio_codec, fps, width, height) =
+            if let Some(fmt) = probe.format {
+                let duration = fmt.duration.parse::<f64>().unwrap_or(0.0);
+                let bitrate = fmt.bit_rate.parse::<u64>().unwrap_or(0);
+                let format = fmt.format_name;
+                let mut video_codec = String::from("unknown");
+                let mut audio_codec = None;
+                let mut fps = 0.0;
+                let mut width = 0;
+                let mut height = 0;
+                for s in &streams {
+                    if s.codec_type == "video" {
+                        video_codec = s.codec_name.clone();
+                        fps = s.fps.unwrap_or(0.0);
+                        width = s.width.unwrap_or(0);
+                        height = s.height.unwrap_or(0);
+                    } else if s.codec_type == "audio" {
+                        audio_codec = Some(s.codec_name.clone());
+                    }
                 }
-            }
-            (duration, bitrate, format, video_codec, audio_codec, fps, width, height)
-        } else {
-            (0.0, 0, String::from("unknown"), String::from("unknown"), None, 0.0, 0, 0)
-        };
+                (
+                    duration,
+                    bitrate,
+                    format,
+                    video_codec,
+                    audio_codec,
+                    fps,
+                    width,
+                    height,
+                )
+            } else {
+                (
+                    0.0,
+                    0,
+                    String::from("unknown"),
+                    String::from("unknown"),
+                    None,
+                    0.0,
+                    0,
+                    0,
+                )
+            };
 
         Ok(VideoInfo {
             duration,
@@ -492,7 +555,7 @@ mod tests {
             output_path: PathBuf::from("/output/video.mp4"),
             lut_path: PathBuf::from("/luts/test.cube"),
         };
-        
+
         assert_eq!(task.id, "test_task");
         assert_eq!(task.input_path, PathBuf::from("/input/video.mp4"));
     }
@@ -505,7 +568,7 @@ mod tests {
             error: None,
             output_path: Some(PathBuf::from("/output/video.mp4")),
         };
-        
+
         assert!(result.success);
         assert!(result.error.is_none());
         assert!(result.output_path.is_some());
@@ -520,7 +583,7 @@ mod tests {
             can_encode: true,
             can_decode: false,
         };
-        
+
         assert_eq!(codec.name, "libx264");
         assert!(codec.can_encode);
         assert!(!codec.can_decode);
@@ -534,7 +597,7 @@ mod tests {
             can_mux: true,
             can_demux: true,
         };
-        
+
         assert_eq!(format.name, "mp4");
         assert!(format.can_mux);
         assert!(format.can_demux);
@@ -588,7 +651,7 @@ impl Default for EncodingSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamInfo {
     pub index: u32,
-    pub codec_type: String,  // video / audio / subtitle / data
+    pub codec_type: String, // video / audio / subtitle / data
     pub codec_name: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -615,7 +678,11 @@ fn parse_frame_rate_str(s: &str) -> Option<f64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
         let d: f64 = den.trim().parse().ok()?;
-        if d != 0.0 { Some(n / d) } else { None }
+        if d != 0.0 {
+            Some(n / d)
+        } else {
+            None
+        }
     } else {
         s.trim().parse::<f64>().ok()
     }

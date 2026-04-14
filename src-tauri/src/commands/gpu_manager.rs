@@ -25,9 +25,15 @@ pub async fn test_hardware_acceleration(
     match gpu_manager.test_hardware_acceleration(&codec).await {
         Ok(success) => {
             if success {
-                logger::log_info(&format!("Hardware acceleration test passed for codec: {}", codec));
+                logger::log_info(&format!(
+                    "Hardware acceleration test passed for codec: {}",
+                    codec
+                ));
             } else {
-                logger::log_warn(&format!("Hardware acceleration test failed for codec: {}", codec));
+                logger::log_warn(&format!(
+                    "Hardware acceleration test failed for codec: {}",
+                    codec
+                ));
             }
             Ok(success)
         }

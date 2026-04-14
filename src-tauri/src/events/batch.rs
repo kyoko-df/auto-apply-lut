@@ -101,7 +101,7 @@ impl BatchEvent {
             timestamp: chrono::Utc::now().timestamp(),
         }
     }
-    
+
     /// 设置进度信息
     pub fn with_progress(
         mut self,
@@ -114,7 +114,7 @@ impl BatchEvent {
         self.overall_progress = overall_progress;
         self
     }
-    
+
     /// 设置当前项目
     pub fn with_current_item(mut self, current_item: BatchItem) -> Self {
         self.current_item = Some(current_item);

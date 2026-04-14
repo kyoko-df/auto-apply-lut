@@ -1,13 +1,13 @@
 //! FFmpeg解码器模块
 //! 提供视频解码和信息提取功能
 
-use crate::types::{AppResult, AppError};
-use crate::core::ffmpeg::{VideoInfo, StreamInfo, Resolution};
-use std::path::{Path, PathBuf};
+use crate::core::ffmpeg::{Resolution, StreamInfo, VideoInfo};
+use crate::types::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::process::Command as AsyncCommand;
-use serde::{Serialize, Deserialize};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::process::Command as AsyncCommand;
 
 /// 视频解码器
 pub struct VideoDecoder {
@@ -42,14 +42,18 @@ impl VideoDecoder {
         // 使用FFprobe获取视频信息
         let mut cmd = AsyncCommand::new(&self.ffprobe_path);
         cmd.args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             video_path.to_str().unwrap(),
         ]);
 
-        let output = cmd.output().await
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to run ffprobe: {}", e)))?;
 
         if !output.status.success() {
@@ -78,19 +82,20 @@ impl VideoDecoder {
         let streams = probe_result.streams;
 
         // 查找视频流
-        let video_stream = streams.iter()
+        let video_stream = streams
+            .iter()
             .find(|s| s.codec_type == "video")
             .ok_or_else(|| AppError::FFmpeg("No video stream found".to_string()))?;
 
         // 查找音频流
-        let audio_stream = streams.iter()
-            .find(|s| s.codec_type == "audio");
+        let audio_stream = streams.iter().find(|s| s.codec_type == "audio");
 
-        let duration = format.duration.parse::<f64>()
+        let duration = format
+            .duration
+            .parse::<f64>()
             .map_err(|_| AppError::FFmpeg("Invalid duration format".to_string()))?;
 
-        let bitrate = format.bit_rate.parse::<u64>()
-            .unwrap_or(0);
+        let bitrate = format.bit_rate.parse::<u64>().unwrap_or(0);
 
         let fps = if let Some(r_frame_rate) = &video_stream.r_frame_rate {
             self.parse_frame_rate(r_frame_rate)?
@@ -106,7 +111,10 @@ impl VideoDecoder {
                 codec_name: stream.codec_name.clone(),
                 width: stream.width,
                 height: stream.height,
-                fps: stream.r_frame_rate.as_ref().and_then(|s| self.parse_frame_rate(s).ok()),
+                fps: stream
+                    .r_frame_rate
+                    .as_ref()
+                    .and_then(|s| self.parse_frame_rate(s).ok()),
                 duration: stream.duration.as_ref().and_then(|d| d.parse().ok()),
             });
         }
@@ -129,18 +137,21 @@ impl VideoDecoder {
         if frame_rate.contains('/') {
             let parts: Vec<&str> = frame_rate.split('/').collect();
             if parts.len() == 2 {
-                let numerator: f64 = parts[0].parse()
+                let numerator: f64 = parts[0]
+                    .parse()
                     .map_err(|_| AppError::FFmpeg("Invalid frame rate numerator".to_string()))?;
-                let denominator: f64 = parts[1].parse()
+                let denominator: f64 = parts[1]
+                    .parse()
                     .map_err(|_| AppError::FFmpeg("Invalid frame rate denominator".to_string()))?;
-                
+
                 if denominator != 0.0 {
                     return Ok(numerator / denominator);
                 }
             }
         }
-        
-        frame_rate.parse::<f64>()
+
+        frame_rate
+            .parse::<f64>()
             .map_err(|_| AppError::FFmpeg("Invalid frame rate format".to_string()))
     }
 
@@ -151,7 +162,8 @@ impl VideoDecoder {
         output_dir: &Path,
         options: FrameExtractionOptions,
     ) -> AppResult<Vec<PathBuf>> {
-        tokio::fs::create_dir_all(output_dir).await
+        tokio::fs::create_dir_all(output_dir)
+            .await
             .map_err(AppError::from)?;
 
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
@@ -161,7 +173,7 @@ impl VideoDecoder {
         if let Some(start_time) = options.start_time {
             cmd.args(["-ss", &start_time.as_secs().to_string()]);
         }
-        
+
         if let Some(duration) = options.duration {
             cmd.args(["-t", &duration.as_secs().to_string()]);
         }
@@ -194,23 +206,35 @@ impl VideoDecoder {
         let output_pattern = output_dir.join(format!("frame_%06d.{}", options.format.extension()));
         cmd.args(["-y", output_pattern.to_str().unwrap()]);
 
-        let output = cmd.output().await
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to extract frames: {}", e)))?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(AppError::FFmpeg(format!("Frame extraction failed: {}", error_msg)));
+            return Err(AppError::FFmpeg(format!(
+                "Frame extraction failed: {}",
+                error_msg
+            )));
         }
 
         // 收集生成的帧文件
         let mut frame_files = Vec::new();
-        let mut entries = tokio::fs::read_dir(output_dir).await
+        let mut entries = tokio::fs::read_dir(output_dir)
+            .await
             .map_err(AppError::from)?;
 
-        while let Some(entry) = entries.next_entry().await
-            .map_err(AppError::from)? {
+        while let Some(entry) = entries.next_entry().await.map_err(AppError::from)? {
             let path = entry.path();
-            if path.is_file() && path.file_name().unwrap().to_str().unwrap().starts_with("frame_") {
+            if path.is_file()
+                && path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("frame_")
+            {
                 frame_files.push(path);
             }
         }
@@ -246,12 +270,17 @@ impl VideoDecoder {
         // 输出文件
         cmd.args(["-y", output_path.to_str().unwrap()]);
 
-        let output = cmd.output().await
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to generate thumbnail: {}", e)))?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(AppError::FFmpeg(format!("Thumbnail generation failed: {}", error_msg)));
+            return Err(AppError::FFmpeg(format!(
+                "Thumbnail generation failed: {}",
+                error_msg
+            )));
         }
 
         Ok(())
@@ -260,7 +289,7 @@ impl VideoDecoder {
     /// 检测视频格式支持
     pub async fn check_format_support(&self, video_path: &Path) -> AppResult<FormatSupport> {
         let video_info = self.get_video_info(video_path).await?;
-        
+
         let mut support = FormatSupport {
             can_decode: true,
             can_encode: true,
@@ -288,7 +317,9 @@ impl VideoDecoder {
                 support.warnings.push("AV1编码速度较慢".to_string());
             }
             codec => {
-                support.warnings.push(format!("未知的视频编解码器: {}", codec));
+                support
+                    .warnings
+                    .push(format!("未知的视频编解码器: {}", codec));
                 support.can_encode = false;
             }
         }
@@ -306,19 +337,25 @@ impl VideoDecoder {
                     support.supported_codecs.push("Opus".to_string());
                 }
                 codec => {
-                    support.warnings.push(format!("未知的音频编解码器: {}", codec));
+                    support
+                        .warnings
+                        .push(format!("未知的音频编解码器: {}", codec));
                 }
             }
         }
 
         // 检查分辨率
         if video_info.width > 3840 || video_info.height > 2160 {
-            support.warnings.push("超高分辨率视频可能需要更多处理时间".to_string());
+            support
+                .warnings
+                .push("超高分辨率视频可能需要更多处理时间".to_string());
         }
 
         // 检查帧率
         if video_info.fps > 60.0 {
-            support.warnings.push("高帧率视频可能需要更多处理时间".to_string());
+            support
+                .warnings
+                .push("高帧率视频可能需要更多处理时间".to_string());
         }
 
         Ok(support)
@@ -327,7 +364,7 @@ impl VideoDecoder {
     /// 分析视频质量
     pub async fn analyze_quality(&self, video_path: &Path) -> AppResult<QualityAnalysis> {
         let video_info = self.get_video_info(video_path).await?;
-        
+
         let mut analysis = QualityAnalysis {
             overall_score: 0.0,
             resolution_score: 0.0,
@@ -343,7 +380,7 @@ impl VideoDecoder {
             p if p >= 1920 * 1080 => 90.0,  // 1080p
             p if p >= 1280 * 720 => 75.0,   // 720p
             p if p >= 854 * 480 => 60.0,    // 480p
-            _ => 40.0,                       // 低分辨率
+            _ => 40.0,                      // 低分辨率
         };
 
         // 分析码率
@@ -368,19 +405,26 @@ impl VideoDecoder {
         };
 
         // 计算总分
-        analysis.overall_score = (analysis.resolution_score + analysis.bitrate_score + analysis.codec_score) / 3.0;
+        analysis.overall_score =
+            (analysis.resolution_score + analysis.bitrate_score + analysis.codec_score) / 3.0;
 
         // 生成建议
         if analysis.resolution_score < 70.0 {
-            analysis.recommendations.push("考虑提高视频分辨率以获得更好的观看体验".to_string());
+            analysis
+                .recommendations
+                .push("考虑提高视频分辨率以获得更好的观看体验".to_string());
         }
-        
+
         if analysis.bitrate_score < 70.0 {
-            analysis.recommendations.push("码率较低，可能影响视频质量".to_string());
+            analysis
+                .recommendations
+                .push("码率较低，可能影响视频质量".to_string());
         }
-        
+
         if analysis.codec_score < 80.0 {
-            analysis.recommendations.push("考虑使用更现代的编解码器（如H.265）".to_string());
+            analysis
+                .recommendations
+                .push("考虑使用更现代的编解码器（如H.265）".to_string());
         }
 
         Ok(analysis)
@@ -463,10 +507,10 @@ impl Default for FrameExtractionOptions {
 /// 帧提取模式
 #[derive(Debug, Clone)]
 pub enum FrameExtractionMode {
-    EveryNthFrame(u32),      // 每N帧提取一次
-    ByFps(f64),              // 按指定帧率提取
-    ByInterval(Duration),    // 按时间间隔提取
-    KeyFramesOnly,           // 只提取关键帧
+    EveryNthFrame(u32),   // 每N帧提取一次
+    ByFps(f64),           // 按指定帧率提取
+    ByInterval(Duration), // 按时间间隔提取
+    KeyFramesOnly,        // 只提取关键帧
 }
 
 /// 图像格式
@@ -502,7 +546,10 @@ impl Default for ThumbnailOptions {
         Self {
             timestamp: Duration::from_secs(10), // 10秒处
             quality: 2,
-            resolution: Some(Resolution { width: 320, height: 240 }),
+            resolution: Some(Resolution {
+                width: 320,
+                height: 240,
+            }),
         }
     }
 }
@@ -542,7 +589,10 @@ mod tests {
     #[test]
     fn test_frame_extraction_options() {
         let options = FrameExtractionOptions::default();
-        assert!(matches!(options.extraction_mode, FrameExtractionMode::ByFps(1.0)));
+        assert!(matches!(
+            options.extraction_mode,
+            FrameExtractionMode::ByFps(1.0)
+        ));
         assert_eq!(options.quality, 2);
         assert!(matches!(options.format, ImageFormat::Jpeg));
     }
@@ -569,11 +619,14 @@ mod tests {
             PathBuf::from("/usr/bin/ffprobe"),
             PathBuf::from("/usr/bin/ffmpeg"),
         );
-        
+
         // 测试分数格式
-        assert_eq!(decoder.parse_frame_rate("30000/1001").unwrap(), 30000.0 / 1001.0);
+        assert_eq!(
+            decoder.parse_frame_rate("30000/1001").unwrap(),
+            30000.0 / 1001.0
+        );
         assert_eq!(decoder.parse_frame_rate("25/1").unwrap(), 25.0);
-        
+
         // 测试小数格式
         assert_eq!(decoder.parse_frame_rate("29.97").unwrap(), 29.97);
         assert_eq!(decoder.parse_frame_rate("60").unwrap(), 60.0);
@@ -588,8 +641,9 @@ mod tests {
             codec_score: 85.0,
             recommendations: Vec::new(),
         };
-        
-        analysis.overall_score = (analysis.resolution_score + analysis.bitrate_score + analysis.codec_score) / 3.0;
+
+        analysis.overall_score =
+            (analysis.resolution_score + analysis.bitrate_score + analysis.codec_score) / 3.0;
         assert!((analysis.overall_score - 85.0).abs() < 0.1);
     }
 
@@ -602,7 +656,7 @@ mod tests {
             recommended_settings: None,
             warnings: Vec::new(),
         };
-        
+
         assert!(support.can_decode);
         assert!(support.can_encode);
         assert_eq!(support.supported_codecs.len(), 2);
@@ -614,11 +668,11 @@ mod tests {
             PathBuf::from("/usr/bin/ffprobe"),
             PathBuf::from("/usr/bin/ffmpeg"),
         );
-        
+
         // 测试缓存统计
         let stats = decoder.get_cache_stats().await;
         assert_eq!(stats.entries, 0);
-        
+
         // 测试清理缓存
         decoder.clear_cache().await;
         let stats = decoder.get_cache_stats().await;
@@ -631,7 +685,7 @@ mod tests {
         let mode2 = FrameExtractionMode::ByFps(2.0);
         let mode3 = FrameExtractionMode::ByInterval(Duration::from_secs(5));
         let mode4 = FrameExtractionMode::KeyFramesOnly;
-        
+
         // 确保所有模式都能正确创建
         assert!(matches!(mode1, FrameExtractionMode::EveryNthFrame(10)));
         assert!(matches!(mode2, FrameExtractionMode::ByFps(f) if (f - 2.0).abs() < 0.1));
@@ -645,10 +699,10 @@ mod tests {
             entries: 10,
             memory_usage: 1024,
         };
-        
+
         let serialized = serde_json::to_string(&stats).unwrap();
         let deserialized: CacheStats = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(deserialized.entries, 10);
         assert_eq!(deserialized.memory_usage, 1024);
     }

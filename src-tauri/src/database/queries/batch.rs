@@ -1,8 +1,8 @@
 //! 批处理相关数据库查询
 
 use crate::types::AppResult;
-use rusqlite::Connection;
 use chrono::{DateTime, Utc};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,9 +27,9 @@ pub fn create_batch(conn: &Connection, batch: &Batch) -> AppResult<i64> {
             name, description, status, total_videos, processed_videos, failed_videos,
             created_at, updated_at, completed_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-        "#
+        "#,
     )?;
-    
+
     stmt.execute([
         &batch.name,
         &batch.description.as_deref().unwrap_or("").to_string(),
@@ -39,9 +39,12 @@ pub fn create_batch(conn: &Connection, batch: &Batch) -> AppResult<i64> {
         &batch.failed_videos.to_string(),
         &batch.created_at.to_rfc3339(),
         &batch.updated_at.to_rfc3339(),
-        &batch.completed_at.map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+        &batch
+            .completed_at
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default(),
     ])?;
-    
+
     Ok(conn.last_insert_rowid())
 }
 
@@ -52,9 +55,9 @@ pub fn get_batch_by_id(conn: &Connection, id: i64) -> AppResult<Option<Batch>> {
         SELECT id, name, description, status, total_videos, processed_videos, failed_videos,
                created_at, updated_at, completed_at
         FROM batches WHERE id = ?1
-        "#
+        "#,
     )?;
-    
+
     let batch_iter = stmt.query_map([id], |row| {
         Ok(Batch {
             id: row.get(0)?,
@@ -64,23 +67,31 @@ pub fn get_batch_by_id(conn: &Connection, id: i64) -> AppResult<Option<Batch>> {
             total_videos: row.get::<_, String>(4)?.parse().unwrap_or(0),
             processed_videos: row.get::<_, String>(5)?.parse().unwrap_or(0),
             failed_videos: row.get::<_, String>(6)?.parse().unwrap_or(0),
-            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap().with_timezone(&Utc),
-            updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap().with_timezone(&Utc),
+            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                .unwrap()
+                .with_timezone(&Utc),
+            updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                .unwrap()
+                .with_timezone(&Utc),
             completed_at: {
                 let completed_str: String = row.get(9)?;
                 if completed_str.is_empty() {
                     None
                 } else {
-                    Some(DateTime::parse_from_rfc3339(&completed_str).unwrap().with_timezone(&Utc))
+                    Some(
+                        DateTime::parse_from_rfc3339(&completed_str)
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    )
                 }
             },
         })
     })?;
-    
+
     for batch in batch_iter {
         return Ok(Some(batch?));
     }
-    
+
     Ok(None)
 }
 
@@ -91,9 +102,9 @@ pub fn get_all_batches(conn: &Connection) -> AppResult<Vec<Batch>> {
         SELECT id, name, description, status, total_videos, processed_videos, failed_videos,
                created_at, updated_at, completed_at
         FROM batches ORDER BY created_at DESC
-        "#
+        "#,
     )?;
-    
+
     let batch_iter = stmt.query_map([], |row| {
         Ok(Batch {
             id: row.get(0)?,
@@ -103,24 +114,32 @@ pub fn get_all_batches(conn: &Connection) -> AppResult<Vec<Batch>> {
             total_videos: row.get::<_, String>(4)?.parse().unwrap_or(0),
             processed_videos: row.get::<_, String>(5)?.parse().unwrap_or(0),
             failed_videos: row.get::<_, String>(6)?.parse().unwrap_or(0),
-            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap().with_timezone(&Utc),
-            updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap().with_timezone(&Utc),
+            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                .unwrap()
+                .with_timezone(&Utc),
+            updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
+                .unwrap()
+                .with_timezone(&Utc),
             completed_at: {
                 let completed_str: String = row.get(9)?;
                 if completed_str.is_empty() {
                     None
                 } else {
-                    Some(DateTime::parse_from_rfc3339(&completed_str).unwrap().with_timezone(&Utc))
+                    Some(
+                        DateTime::parse_from_rfc3339(&completed_str)
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    )
                 }
             },
         })
     })?;
-    
+
     let mut batches = Vec::new();
     for batch in batch_iter {
         batches.push(batch?);
     }
-    
+
     Ok(batches)
 }
 
@@ -132,9 +151,9 @@ pub fn update_batch(conn: &Connection, batch: &Batch) -> AppResult<()> {
             name = ?1, description = ?2, status = ?3, total_videos = ?4,
             processed_videos = ?5, failed_videos = ?6, updated_at = ?7, completed_at = ?8
         WHERE id = ?9
-        "#
+        "#,
     )?;
-    
+
     stmt.execute([
         &batch.name,
         &batch.description.as_deref().unwrap_or("").to_string(),
@@ -143,10 +162,13 @@ pub fn update_batch(conn: &Connection, batch: &Batch) -> AppResult<()> {
         &batch.processed_videos.to_string(),
         &batch.failed_videos.to_string(),
         &batch.updated_at.to_rfc3339(),
-        &batch.completed_at.map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+        &batch
+            .completed_at
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default(),
         &batch.id.to_string(),
     ])?;
-    
+
     Ok(())
 }
 
@@ -160,16 +182,10 @@ pub fn delete_batch(conn: &Connection, id: i64) -> AppResult<()> {
 /// 更新批处理状态
 pub fn update_batch_status(conn: &Connection, id: i64, status: &str) -> AppResult<()> {
     let now = Utc::now();
-    let mut stmt = conn.prepare(
-        "UPDATE batches SET status = ?1, updated_at = ?2 WHERE id = ?3"
-    )?;
-    
-    stmt.execute([
-        status,
-        &now.to_rfc3339(),
-        &id.to_string(),
-    ])?;
-    
+    let mut stmt = conn.prepare("UPDATE batches SET status = ?1, updated_at = ?2 WHERE id = ?3")?;
+
+    stmt.execute([status, &now.to_rfc3339(), &id.to_string()])?;
+
     Ok(())
 }
 
@@ -184,14 +200,14 @@ pub fn update_batch_progress(
     let mut stmt = conn.prepare(
         "UPDATE batches SET processed_videos = ?1, failed_videos = ?2, updated_at = ?3 WHERE id = ?4"
     )?;
-    
+
     stmt.execute([
         &processed_videos.to_string(),
         &failed_videos.to_string(),
         &now.to_rfc3339(),
         &id.to_string(),
     ])?;
-    
+
     Ok(())
 }
 
@@ -199,14 +215,10 @@ pub fn update_batch_progress(
 pub fn complete_batch(conn: &Connection, id: i64) -> AppResult<()> {
     let now = Utc::now();
     let mut stmt = conn.prepare(
-        "UPDATE batches SET status = 'completed', completed_at = ?1, updated_at = ?2 WHERE id = ?3"
+        "UPDATE batches SET status = 'completed', completed_at = ?1, updated_at = ?2 WHERE id = ?3",
     )?;
-    
-    stmt.execute([
-        &now.to_rfc3339(),
-        &now.to_rfc3339(),
-        &id.to_string(),
-    ])?;
-    
+
+    stmt.execute([&now.to_rfc3339(), &now.to_rfc3339(), &id.to_string()])?;
+
     Ok(())
 }

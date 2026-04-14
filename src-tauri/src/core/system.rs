@@ -1,8 +1,8 @@
 //! 系统信息模块
 //! 提供系统资源监控和信息查询功能
 
-use crate::types::{AppResult, AppError};
-use serde::{Serialize, Deserialize};
+use crate::types::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use sysinfo::System;
 
 /// 系统信息
@@ -28,11 +28,11 @@ impl SystemManager {
             system: System::new_all(),
         }
     }
-    
+
     /// 获取系统信息
     pub fn get_system_info(&mut self) -> AppResult<SystemInfo> {
         self.system.refresh_all();
-        
+
         Ok(SystemInfo {
             os: System::name().unwrap_or_else(|| "Unknown".to_string()),
             kernel_version: System::kernel_version().unwrap_or_else(|| "Unknown".to_string()),
@@ -42,7 +42,7 @@ impl SystemManager {
             cpu_usage: self.system.global_cpu_usage(),
         })
     }
-    
+
     /// 获取内存使用率
     pub fn get_memory_usage(&mut self) -> f32 {
         self.system.refresh_memory();
@@ -54,7 +54,7 @@ impl SystemManager {
             0.0
         }
     }
-    
+
     /// 获取CPU使用率
     pub fn get_cpu_usage(&mut self) -> f32 {
         self.system.refresh_cpu_usage();

@@ -1,14 +1,14 @@
 //! FFmpeg工具模块
 //! 提供FFmpeg相关的辅助功能和实用工具
 
-use crate::types::{AppResult, AppError};
-use crate::core::ffmpeg::{VideoInfo, EncodingSettings, Resolution};
-use std::path::{Path, PathBuf};
+use crate::core::ffmpeg::{EncodingSettings, Resolution, VideoInfo};
+use crate::types::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::process::Command as AsyncCommand;
-use serde::{Serialize, Deserialize};
-use std::time::{Duration, Instant};
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tokio::process::Command as AsyncCommand;
 
 /// FFmpeg工具集
 pub struct FFmpegUtils {
@@ -31,14 +31,16 @@ impl FFmpegUtils {
     pub async fn get_ffmpeg_version(&self) -> AppResult<VersionInfo> {
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-version"]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to get FFmpeg version: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(AppError::FFmpeg("Failed to get FFmpeg version".to_string()));
         }
-        
+
         let output_str = String::from_utf8_lossy(&output.stdout);
         self.parse_version_info(&output_str)
     }
@@ -49,7 +51,7 @@ impl FFmpegUtils {
         if lines.is_empty() {
             return Err(AppError::FFmpeg("Empty version output".to_string()));
         }
-        
+
         let first_line = lines[0];
         let version = if let Some(start) = first_line.find("version ") {
             let version_start = start + 8;
@@ -61,10 +63,10 @@ impl FFmpegUtils {
         } else {
             "unknown".to_string()
         };
-        
+
         let build_date = self.extract_build_date(&output);
         let configuration = self.extract_configuration(&output);
-        
+
         Ok(VersionInfo {
             version,
             build_date,
@@ -102,7 +104,7 @@ impl FFmpegUtils {
     pub async fn get_supported_codecs(&self) -> AppResult<CodecSupport> {
         let mut video_codecs = Vec::new();
         let mut audio_codecs = Vec::new();
-        
+
         // 获取编码器
         let encoders = self.get_encoders().await?;
         for encoder in encoders {
@@ -112,7 +114,7 @@ impl FFmpegUtils {
                 _ => {}
             }
         }
-        
+
         Ok(CodecSupport {
             video_codecs,
             audio_codecs,
@@ -123,14 +125,16 @@ impl FFmpegUtils {
     async fn get_encoders(&self) -> AppResult<Vec<CodecInfo>> {
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-encoders"]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to get encoders: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(AppError::FFmpeg("Failed to get encoder list".to_string()));
         }
-        
+
         let output_str = String::from_utf8_lossy(&output.stdout);
         self.parse_codec_list(&output_str, true)
     }
@@ -139,14 +143,16 @@ impl FFmpegUtils {
     pub async fn get_decoders(&self) -> AppResult<Vec<CodecInfo>> {
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-decoders"]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to get decoders: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(AppError::FFmpeg("Failed to get decoder list".to_string()));
         }
-        
+
         let output_str = String::from_utf8_lossy(&output.stdout);
         self.parse_codec_list(&output_str, false)
     }
@@ -155,23 +161,23 @@ impl FFmpegUtils {
     fn parse_codec_list(&self, output: &str, is_encoder: bool) -> AppResult<Vec<CodecInfo>> {
         let mut codecs = Vec::new();
         let mut in_list = false;
-        
+
         for line in output.lines() {
             if line.contains("------") {
                 in_list = true;
                 continue;
             }
-            
+
             if !in_list || line.trim().is_empty() {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 {
                 let flags = parts[0];
                 let name = parts[1];
                 let description = parts[2..].join(" ");
-                
+
                 let media_type = if flags.contains('V') {
                     MediaType::Video
                 } else if flags.contains('A') {
@@ -181,7 +187,7 @@ impl FFmpegUtils {
                 } else {
                     MediaType::Data
                 };
-                
+
                 codecs.push(CodecInfo {
                     name: name.to_string(),
                     description,
@@ -193,7 +199,7 @@ impl FFmpegUtils {
                 });
             }
         }
-        
+
         Ok(codecs)
     }
 
@@ -201,14 +207,16 @@ impl FFmpegUtils {
     pub async fn get_supported_formats(&self) -> AppResult<FormatSupport> {
         let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
         cmd.args(["-formats"]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to get formats: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(AppError::FFmpeg("Failed to get format list".to_string()));
         }
-        
+
         let output_str = String::from_utf8_lossy(&output.stdout);
         self.parse_format_list(&output_str)
     }
@@ -217,23 +225,23 @@ impl FFmpegUtils {
     fn parse_format_list(&self, output: &str) -> AppResult<FormatSupport> {
         let mut formats = Vec::new();
         let mut in_list = false;
-        
+
         for line in output.lines() {
             if line.contains("--") {
                 in_list = true;
                 continue;
             }
-            
+
             if !in_list || line.trim().is_empty() {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 {
                 let flags = parts[0];
                 let name = parts[1];
                 let description = parts[2..].join(" ");
-                
+
                 formats.push(FormatInfo {
                     name: name.to_string(),
                     description,
@@ -242,7 +250,7 @@ impl FFmpegUtils {
                 });
             }
         }
-        
+
         Ok(FormatSupport { formats })
     }
 
@@ -260,14 +268,14 @@ impl FFmpegUtils {
             errors: Vec::new(),
             warnings: Vec::new(),
         };
-        
+
         // 检查文件是否存在
         if !file_path.exists() {
             result.errors.push("File does not exist".to_string());
             return Ok(result);
         }
         result.file_exists = true;
-        
+
         // 检查文件是否可读
         match tokio::fs::metadata(file_path).await {
             Ok(metadata) => {
@@ -279,30 +287,36 @@ impl FFmpegUtils {
                 }
             }
             Err(e) => {
-                result.errors.push(format!("Cannot read file metadata: {}", e));
+                result
+                    .errors
+                    .push(format!("Cannot read file metadata: {}", e));
                 return Ok(result);
             }
         }
-        
+
         // 使用FFprobe验证视频
         let mut cmd = AsyncCommand::new(&self.ffprobe_path);
         cmd.args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             file_path.to_str().unwrap(),
         ]);
-        
-        let output = cmd.output().await
+
+        let output = cmd
+            .output()
+            .await
             .map_err(|e| AppError::FFmpeg(format!("Failed to probe file: {}", e)))?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             result.errors.push(format!("FFprobe failed: {}", error_msg));
             return Ok(result);
         }
-        
+
         // 解析FFprobe输出
         let json_output = String::from_utf8_lossy(&output.stdout);
         match serde_json::from_str::<serde_json::Value>(&json_output) {
@@ -319,7 +333,7 @@ impl FFmpegUtils {
                         }
                     }
                 }
-                
+
                 // 检查格式
                 if let Some(format) = data["format"].as_object() {
                     if let Some(duration) = format["duration"].as_str() {
@@ -327,44 +341,50 @@ impl FFmpegUtils {
                             result.duration_valid = dur > 0.0;
                         }
                     }
-                    
+
                     if let Some(format_name) = format["format_name"].as_str() {
-                        result.format_supported = self.is_format_supported(format_name).await.unwrap_or(false);
+                        result.format_supported =
+                            self.is_format_supported(format_name).await.unwrap_or(false);
                     }
                 }
-                
+
                 result.codec_supported = true; // 如果FFprobe能解析，说明编解码器支持
             }
             Err(e) => {
-                result.errors.push(format!("Failed to parse probe output: {}", e));
+                result
+                    .errors
+                    .push(format!("Failed to parse probe output: {}", e));
                 return Ok(result);
             }
         }
-        
+
         // 添加警告
         if !result.has_video_stream {
             result.warnings.push("No video stream found".to_string());
         }
-        
+
         if !result.has_audio_stream {
             result.warnings.push("No audio stream found".to_string());
         }
-        
+
         // 判断整体有效性
-        result.is_valid = result.file_exists && 
-                         result.is_readable && 
-                         result.has_video_stream && 
-                         result.duration_valid && 
-                         result.format_supported && 
-                         result.codec_supported;
-        
+        result.is_valid = result.file_exists
+            && result.is_readable
+            && result.has_video_stream
+            && result.duration_valid
+            && result.format_supported
+            && result.codec_supported;
+
         Ok(result)
     }
 
     /// 检查格式是否支持
     async fn is_format_supported(&self, format_name: &str) -> AppResult<bool> {
         let supported_formats = self.get_supported_formats().await?;
-        Ok(supported_formats.formats.iter().any(|f| f.name == format_name))
+        Ok(supported_formats
+            .formats
+            .iter()
+            .any(|f| f.name == format_name))
     }
 
     /// 估算处理时间
@@ -378,15 +398,19 @@ impl FFmpegUtils {
         let resolution_factor = self.calculate_resolution_factor(video_info, settings);
         let codec_factor = self.calculate_codec_factor(settings);
         let operation_factor = self.calculate_operation_factor(&operation);
-        
+
         let estimated_seconds = base_time * resolution_factor * codec_factor * operation_factor;
         Duration::from_secs_f64(estimated_seconds.max(1.0))
     }
 
     /// 计算分辨率因子
-    fn calculate_resolution_factor(&self, video_info: &VideoInfo, settings: &EncodingSettings) -> f64 {
+    fn calculate_resolution_factor(
+        &self,
+        video_info: &VideoInfo,
+        settings: &EncodingSettings,
+    ) -> f64 {
         let input_pixels = video_info.width as f64 * video_info.height as f64;
-        
+
         if let Some(resolution) = &settings.resolution {
             let output_pixels = resolution.width as f64 * resolution.height as f64;
             (output_pixels / input_pixels).sqrt() // 平方根关系
@@ -432,7 +456,7 @@ impl FFmpegUtils {
             estimated_time: Duration::from_secs(0),
             estimated_size: 0,
         };
-        
+
         // 根据用途生成建议
         match target_use_case {
             ProcessingUseCase::Archive => {
@@ -446,16 +470,23 @@ impl FFmpegUtils {
                     bitrate: None,
                     extra_params: HashMap::new(),
                 };
-                suggestions.optimization_tips.push("使用HEVC编码器获得更好的压缩率".to_string());
-                suggestions.optimization_tips.push("使用较慢的预设以获得最佳质量".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("使用HEVC编码器获得更好的压缩率".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("使用较慢的预设以获得最佳质量".to_string());
             }
             ProcessingUseCase::Streaming => {
                 let target_resolution = if video_info.width > 1920 {
-                    Some(Resolution { width: 1920, height: 1080 })
+                    Some(Resolution {
+                        width: 1920,
+                        height: 1080,
+                    })
                 } else {
                     None
                 };
-                
+
                 suggestions.recommended_settings = EncodingSettings {
                     video_codec: "libx264".to_string(),
                     audio_codec: "aac".to_string(),
@@ -470,8 +501,12 @@ impl FFmpegUtils {
                         params
                     },
                 };
-                suggestions.optimization_tips.push("使用H.264编码器确保兼容性".to_string());
-                suggestions.optimization_tips.push("添加faststart标志优化流媒体播放".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("使用H.264编码器确保兼容性".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("添加faststart标志优化流媒体播放".to_string());
             }
             ProcessingUseCase::Mobile => {
                 suggestions.recommended_settings = EncodingSettings {
@@ -479,7 +514,10 @@ impl FFmpegUtils {
                     audio_codec: "aac".to_string(),
                     preset: "medium".to_string(),
                     crf: 26,
-                    resolution: Some(Resolution { width: 1280, height: 720 }),
+                    resolution: Some(Resolution {
+                        width: 1280,
+                        height: 720,
+                    }),
                     fps: Some(30.0),
                     bitrate: Some("1M".to_string()),
                     extra_params: {
@@ -489,8 +527,12 @@ impl FFmpegUtils {
                         params
                     },
                 };
-                suggestions.optimization_tips.push("使用baseline profile确保移动设备兼容性".to_string());
-                suggestions.optimization_tips.push("降低分辨率和码率以适应移动网络".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("使用baseline profile确保移动设备兼容性".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("降低分辨率和码率以适应移动网络".to_string());
             }
             ProcessingUseCase::Preview => {
                 suggestions.recommended_settings = EncodingSettings {
@@ -498,43 +540,57 @@ impl FFmpegUtils {
                     audio_codec: "aac".to_string(),
                     preset: "ultrafast".to_string(),
                     crf: 28,
-                    resolution: Some(Resolution { width: 854, height: 480 }),
+                    resolution: Some(Resolution {
+                        width: 854,
+                        height: 480,
+                    }),
                     fps: Some(15.0),
                     bitrate: None,
                     extra_params: HashMap::new(),
                 };
-                suggestions.optimization_tips.push("使用ultrafast预设快速生成预览".to_string());
-                suggestions.optimization_tips.push("降低分辨率和帧率以加快处理速度".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("使用ultrafast预设快速生成预览".to_string());
+                suggestions
+                    .optimization_tips
+                    .push("降低分辨率和帧率以加快处理速度".to_string());
             }
         }
-        
+
         // 生成警告
         if video_info.width > 3840 || video_info.height > 2160 {
-            suggestions.warnings.push("超高分辨率视频处理时间较长".to_string());
+            suggestions
+                .warnings
+                .push("超高分辨率视频处理时间较长".to_string());
         }
-        
+
         if video_info.fps > 60.0 {
-            suggestions.warnings.push("高帧率视频处理时间较长".to_string());
+            suggestions
+                .warnings
+                .push("高帧率视频处理时间较长".to_string());
         }
-        
+
         if video_info.duration > 3600.0 {
-            suggestions.warnings.push("长视频处理时间较长，建议分段处理".to_string());
+            suggestions
+                .warnings
+                .push("长视频处理时间较长，建议分段处理".to_string());
         }
-        
+
         // 估算处理时间
         suggestions.estimated_time = self.estimate_processing_time(
             video_info,
             &suggestions.recommended_settings,
             ProcessingOperation::Transcode,
         );
-        
+
         // 估算文件大小（简化计算）
         if let Some(bitrate_str) = &suggestions.recommended_settings.bitrate {
             if let Ok(bitrate) = bitrate_str.trim_end_matches('M').parse::<f64>() {
-                suggestions.estimated_size = (bitrate * 1_000_000.0 * video_info.duration / 8.0) as u64;
+                suggestions.estimated_size =
+                    (bitrate * 1_000_000.0 * video_info.duration / 8.0) as u64;
             }
         }
-        
+
         suggestions
     }
 
@@ -545,18 +601,18 @@ impl FFmpegUtils {
             bytes_freed: 0,
             errors: Vec::new(),
         };
-        
+
         if !temp_dir.exists() {
             return Ok(result);
         }
-        
-        let mut entries = tokio::fs::read_dir(temp_dir).await
+
+        let mut entries = tokio::fs::read_dir(temp_dir)
+            .await
             .map_err(AppError::from)?;
-        
-        while let Some(entry) = entries.next_entry().await
-            .map_err(AppError::from)? {
+
+        while let Some(entry) = entries.next_entry().await.map_err(AppError::from)? {
             let path = entry.path();
-            
+
             if path.is_file() {
                 match tokio::fs::metadata(&path).await {
                     Ok(metadata) => {
@@ -567,17 +623,25 @@ impl FFmpegUtils {
                                 result.bytes_freed += size;
                             }
                             Err(e) => {
-                                result.errors.push(format!("Failed to remove {}: {}", path.display(), e));
+                                result.errors.push(format!(
+                                    "Failed to remove {}: {}",
+                                    path.display(),
+                                    e
+                                ));
                             }
                         }
                     }
                     Err(e) => {
-                        result.errors.push(format!("Failed to get metadata for {}: {}", path.display(), e));
+                        result.errors.push(format!(
+                            "Failed to get metadata for {}: {}",
+                            path.display(),
+                            e
+                        ));
                     }
                 }
             }
         }
-        
+
         Ok(result)
     }
 }
@@ -693,12 +757,12 @@ impl CleanupResult {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
         let mut size = self.bytes_freed as f64;
         let mut unit_index = 0;
-        
+
         while size >= 1024.0 && unit_index < UNITS.len() - 1 {
             size /= 1024.0;
             unit_index += 1;
         }
-        
+
         format!("{:.2} {}", size, UNITS[unit_index])
     }
 }
@@ -716,7 +780,7 @@ mod tests {
             configuration: Some("--enable-gpl --enable-libx264".to_string()),
             full_output: "ffmpeg version 4.4.0".to_string(),
         };
-        
+
         assert_eq!(version_info.version, "4.4.0");
         assert!(version_info.build_date.is_some());
         assert!(version_info.configuration.is_some());
@@ -733,7 +797,7 @@ mod tests {
             supports_lossless: true,
             supports_lossy: true,
         };
-        
+
         assert_eq!(codec.name, "libx264");
         assert_eq!(codec.media_type, MediaType::Video);
         assert!(codec.is_encoder);
@@ -749,7 +813,7 @@ mod tests {
             can_demux: true,
             can_mux: true,
         };
-        
+
         assert_eq!(format.name, "mp4");
         assert!(format.can_demux);
         assert!(format.can_mux);
@@ -769,7 +833,7 @@ mod tests {
             errors: Vec::new(),
             warnings: Vec::new(),
         };
-        
+
         assert!(result.is_valid);
         assert!(result.has_video_stream);
         assert!(result.has_audio_stream);
@@ -795,7 +859,7 @@ mod tests {
             bytes_freed: 1024 * 1024 * 10, // 10MB
             errors: Vec::new(),
         };
-        
+
         assert_eq!(result.files_removed, 5);
         assert_eq!(result.format_bytes_freed(), "10.00 MB");
     }
@@ -808,7 +872,7 @@ mod tests {
             errors: Vec::new(),
         };
         assert_eq!(result1.format_bytes_freed(), "1.00 KB");
-        
+
         let result2 = CleanupResult {
             files_removed: 0,
             bytes_freed: 1024 * 1024 * 1024,
@@ -829,7 +893,7 @@ mod tests {
             PathBuf::from("/usr/bin/ffmpeg"),
             PathBuf::from("/usr/bin/ffprobe"),
         );
-        
+
         // 基本创建测试
         assert_eq!(utils.ffmpeg_path, PathBuf::from("/usr/bin/ffmpeg"));
         assert_eq!(utils.ffprobe_path, PathBuf::from("/usr/bin/ffprobe"));
@@ -838,30 +902,26 @@ mod tests {
     #[test]
     fn test_codec_support() {
         let support = CodecSupport {
-            video_codecs: vec![
-                CodecInfo {
-                    name: "libx264".to_string(),
-                    description: "H.264".to_string(),
-                    media_type: MediaType::Video,
-                    is_encoder: true,
-                    supports_hardware: false,
-                    supports_lossless: true,
-                    supports_lossy: true,
-                }
-            ],
-            audio_codecs: vec![
-                CodecInfo {
-                    name: "aac".to_string(),
-                    description: "AAC".to_string(),
-                    media_type: MediaType::Audio,
-                    is_encoder: true,
-                    supports_hardware: false,
-                    supports_lossless: false,
-                    supports_lossy: true,
-                }
-            ],
+            video_codecs: vec![CodecInfo {
+                name: "libx264".to_string(),
+                description: "H.264".to_string(),
+                media_type: MediaType::Video,
+                is_encoder: true,
+                supports_hardware: false,
+                supports_lossless: true,
+                supports_lossy: true,
+            }],
+            audio_codecs: vec![CodecInfo {
+                name: "aac".to_string(),
+                description: "AAC".to_string(),
+                media_type: MediaType::Audio,
+                is_encoder: true,
+                supports_hardware: false,
+                supports_lossless: false,
+                supports_lossy: true,
+            }],
         };
-        
+
         assert_eq!(support.video_codecs.len(), 1);
         assert_eq!(support.audio_codecs.len(), 1);
         assert_eq!(support.video_codecs[0].name, "libx264");
@@ -871,16 +931,14 @@ mod tests {
     #[test]
     fn test_format_support() {
         let support = FormatSupport {
-            formats: vec![
-                FormatInfo {
-                    name: "mp4".to_string(),
-                    description: "MP4".to_string(),
-                    can_demux: true,
-                    can_mux: true,
-                }
-            ],
+            formats: vec![FormatInfo {
+                name: "mp4".to_string(),
+                description: "MP4".to_string(),
+                can_demux: true,
+                can_mux: true,
+            }],
         };
-        
+
         assert_eq!(support.formats.len(), 1);
         assert_eq!(support.formats[0].name, "mp4");
         assert!(support.formats[0].can_demux);

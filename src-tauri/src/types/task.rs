@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 /// 任务状态
@@ -193,11 +193,7 @@ impl Default for TaskPriority {
 
 impl TaskInfo {
     /// 创建新任务
-    pub fn new(
-        name: String,
-        task_type: TaskType,
-        config: TaskConfig,
-    ) -> Self {
+    pub fn new(name: String, task_type: TaskType, config: TaskConfig) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,
@@ -267,6 +263,9 @@ impl TaskInfo {
 
     /// 检查任务是否可以取消
     pub fn can_cancel(&self) -> bool {
-        matches!(self.status, TaskStatus::Pending | TaskStatus::Running | TaskStatus::Paused)
+        matches!(
+            self.status,
+            TaskStatus::Pending | TaskStatus::Running | TaskStatus::Paused
+        )
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import FileUpload from './components/FileUpload';
+import LutLibraryPanel from './components/LutLibraryPanel';
 import VideoPreview from './components/VideoPreview';
 import SettingsModal from './components/SettingsModal';
 import ProcessingStatus from './components/ProcessingStatus';
@@ -481,9 +482,19 @@ function App() {
       const startRes = await invoke<BatchStartResponse>('start_batch_processing', {
         request: {
           items,
-          hardware_acceleration: settings.hardware_acceleration,
           output_directory: settings.output_directory || '',
           preserve_structure: false,
+          hardware_acceleration: settings.hardware_acceleration,
+          output_format: settings.output_format,
+          video_codec: settings.video_codec,
+          audio_codec: settings.audio_codec,
+          quality_preset: settings.quality_preset,
+          resolution: settings.resolution,
+          fps: settings.fps,
+          bitrate: settings.bitrate,
+          color_space: settings.color_space,
+          two_pass_encoding: settings.two_pass_encoding,
+          preserve_metadata: settings.preserve_metadata,
         }
       });
 
@@ -884,6 +895,15 @@ function App() {
               videoPath={activeVideoFile || undefined}
               processedVideoPath={processedVideoPath || undefined}
               lutPaths={lutFiles}
+            />
+          </div>
+
+          <div className="lut-library-section">
+            <LutLibraryPanel
+              activeVideoPath={activeVideoFile}
+              selectedLutPaths={lutFiles}
+              onSelectedLutPathsChange={handleLutSelect}
+              disabled={hasProcessingTask}
             />
           </div>
 

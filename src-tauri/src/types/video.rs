@@ -1,8 +1,8 @@
 //! 视频相关类型定义
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 
 /// 视频文件信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

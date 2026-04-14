@@ -1,15 +1,15 @@
 //! 文件管理命令模块
 //! 提供文件操作相关的Tauri命令
 
+use crate::core::file::{FileInfo as CoreFileInfo, FileManager as CoreFileManager};
+use crate::utils::config::ConfigManager;
 use crate::utils::logger;
+use crate::FfplayState;
 use serde::{Deserialize, Serialize};
-use crate::core::file::{FileManager as CoreFileManager, FileInfo as CoreFileInfo};
-use std::process::Command;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 use tauri::State;
-use crate::utils::config::ConfigManager;
-use crate::FfplayState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
@@ -222,7 +222,11 @@ pub async fn open_file_location(path: String) -> Result<String, String> {
 }
 
 fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, String> {
-    let ffplay_name = if cfg!(target_os = "windows") { "ffplay.exe" } else { "ffplay" };
+    let ffplay_name = if cfg!(target_os = "windows") {
+        "ffplay.exe"
+    } else {
+        "ffplay"
+    };
 
     // 1) If user configured an ffmpeg path, try to resolve ffplay in the same directory first.
     if let Some(ffmpeg_path) = cfg_ffmpeg_path.filter(|s| !s.trim().is_empty()) {
