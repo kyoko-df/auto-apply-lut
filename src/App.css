@@ -101,7 +101,7 @@ body {
 
 .app-grid > .upload-video-section,
 .app-grid > .upload-lut-section,
-.app-grid > .lut-library-section,
+.app-grid > .lut-library-shell,
 .app-grid > .preview-section,
 .app-grid > .settings-section,
 .app-grid > .status-section {
@@ -118,7 +118,7 @@ body {
   overflow: hidden;
 }
 
-.app-grid > .lut-library-section {
+.app-grid > .lut-library-shell {
   grid-area: library;
   overflow: hidden;
 }

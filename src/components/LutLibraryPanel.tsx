@@ -14,6 +14,7 @@ interface LutLibraryItem {
   is_valid: boolean;
   error_message?: string | null;
   updated_at: string;
+  is_placeholder?: boolean;
 }
 
 interface LutLibraryPanelProps {
@@ -63,12 +64,13 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
       path,
       name: path.split(/[\\/]/).pop() || path,
       size: 0,
-      lut_type: 'Unknown',
+      lut_type: 'Loading',
       format: path.split('.').pop()?.toUpperCase() || '',
-      category: 'Selected',
-      is_valid: true,
+      category: '正在读取资料',
+      is_valid: false,
       updated_at: '',
-      error_message: null
+      error_message: null,
+      is_placeholder: true
     });
   }, [libraryItems, selectedLutPaths]);
 
@@ -103,6 +105,9 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
         }
       } catch (err) {
         console.error('Failed to sync LUT selection:', err);
+        if (active) {
+          setError(err instanceof Error ? err.message : '同步 LUT 资料失败');
+        }
       }
     };
 
@@ -252,10 +257,22 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
             <div className="lut-preview-tags">
               <span>{previewItem.category}</span>
               <span>{previewItem.format || 'UNKNOWN'}</span>
-              <span>{previewItem.is_valid ? '可用' : '无效'}</span>
+              <span>
+                {previewItem.is_placeholder
+                  ? '资料同步中'
+                  : previewItem.is_valid
+                    ? '可用'
+                    : '无效'}
+              </span>
             </div>
             <div className="lut-preview-details">
-              <span>{previewItem.size > 0 ? formatFileSize(previewItem.size) : '大小未知'}</span>
+              <span>
+                {previewItem.is_placeholder
+                  ? '正在读取文件资料'
+                  : previewItem.size > 0
+                    ? formatFileSize(previewItem.size)
+                    : '大小未知'}
+              </span>
               {previewItem.updated_at && <span>{formatUpdatedAt(previewItem.updated_at)}</span>}
             </div>
             {previewItem.error_message && (
@@ -266,7 +283,7 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
       </div>
 
       {selectedItems.length > 0 && (
-        <div className="lut-library-section">
+        <div className="lut-library-group">
           <div className="lut-library-section-title">当前任务</div>
           <div className="lut-library-list">
             {selectedItems.map(item => (
@@ -281,7 +298,13 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
                   <div className="lut-library-item-meta">
                     <span>{item.category}</span>
                     <span>{item.format || 'UNKNOWN'}</span>
-                    <span>{item.is_valid ? '已选中' : '待修复'}</span>
+                    <span>
+                      {item.is_placeholder
+                        ? '同步中'
+                        : item.is_valid
+                          ? '已选中'
+                          : '待修复'}
+                    </span>
                   </div>
                 </div>
                 <div className="lut-library-item-actions">
@@ -293,7 +316,7 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
         </div>
       )}
 
-      <div className="lut-library-section">
+      <div className="lut-library-group">
         <div className="lut-library-section-title">资料库</div>
         <div className="lut-library-list">
           {libraryLoading && libraryItems.length === 0 && (

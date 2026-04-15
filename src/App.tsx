@@ -898,7 +898,7 @@ function App() {
             />
           </div>
 
-          <div className="lut-library-section">
+          <div className="lut-library-shell">
             <LutLibraryPanel
               activeVideoPath={activeVideoFile}
               selectedLutPaths={lutFiles}
