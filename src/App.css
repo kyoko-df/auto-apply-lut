@@ -22,6 +22,14 @@ body {
   gap: 16px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .header-brand h1 {
   margin: 0;
   font-size: clamp(1.8rem, 3vw, 2.3rem);
@@ -89,11 +97,10 @@ body {
   min-height: 0;
   display: grid;
   grid-template-columns: 1.05fr 1.35fr;
-  grid-template-rows: minmax(0, 0.92fr) minmax(0, 0.84fr) minmax(0, 1.12fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.92fr) auto minmax(0, 1fr);
   grid-template-areas:
     "uploadVideo preview"
     "uploadLut preview"
-    "library preview"
     "settings preview"
     "status status";
   gap: 16px;
@@ -101,7 +108,6 @@ body {
 
 .app-grid > .upload-video-section,
 .app-grid > .upload-lut-section,
-.app-grid > .lut-library-shell,
 .app-grid > .preview-section,
 .app-grid > .settings-section,
 .app-grid > .status-section {
@@ -115,11 +121,6 @@ body {
 
 .app-grid > .upload-lut-section {
   grid-area: uploadLut;
-  overflow: hidden;
-}
-
-.app-grid > .lut-library-shell {
-  grid-area: library;
   overflow: hidden;
 }
 
@@ -197,6 +198,29 @@ body {
 .btn-settings:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.lut-library-modal {
+  max-width: 1120px;
+}
+
+.lut-library-modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--color-fg-subtle);
+  font-size: 0.9rem;
+}
+
+.lut-library-modal-body {
+  padding: 0;
+  min-height: 0;
+  height: min(78vh, 860px);
+}
+
+.lut-library-modal-body .lut-library-panel {
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
 }
 
 .processed-video-info {
@@ -284,7 +308,6 @@ body {
     grid-template-areas:
       "uploadVideo"
       "uploadLut"
-      "library"
       "preview"
       "settings"
       "status";
@@ -301,6 +324,11 @@ body {
   .app-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .header-metrics {

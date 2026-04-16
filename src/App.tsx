@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import FileUpload from './components/FileUpload';
 import LutLibraryPanel from './components/LutLibraryPanel';
@@ -210,6 +211,7 @@ function App() {
   const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
   const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLutLibraryOpen, setIsLutLibraryOpen] = useState(false);
   const [, setPersistedAppSettings] = useState<PersistedAppSettings>(DEFAULT_APP_SETTINGS);
   const [settings, setSettings] = useState<ProcessingSettings>(() => mapAppSettingsToProcessingSettings(DEFAULT_APP_SETTINGS));
 
@@ -264,6 +266,21 @@ function App() {
       return;
     }
   }, [lutFiles]);
+
+  useEffect(() => {
+    if (!isLutLibraryOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsLutLibraryOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isLutLibraryOpen]);
 
   const handleVideoSelect = useCallback((filePaths: string[]) => {
     setProcessedVideoPath(null);
@@ -864,18 +881,27 @@ function App() {
           <h1>Auto Apply LUT</h1>
           <p>自动化视频 LUT 批处理工作台</p>
         </div>
-        <div className="header-metrics">
-          <div className="metric-chip">
-            <span className="metric-label">视频</span>
-            <span className="metric-value">{selectedVideoCount}</span>
-          </div>
-          <div className="metric-chip">
-            <span className="metric-label">LUT</span>
-            <span className="metric-value">{lutFiles.length}</span>
-          </div>
-          <div className={`metric-chip ${hasProcessingTask ? 'is-busy' : ''}`}>
-            <span className="metric-label">状态</span>
-            <span className="metric-value">{hasProcessingTask ? '处理中' : '待命'}</span>
+        <div className="header-actions">
+          <button
+            className="btn-settings"
+            type="button"
+            onClick={() => setIsLutLibraryOpen(true)}
+          >
+            LUT 资料库
+          </button>
+          <div className="header-metrics">
+            <div className="metric-chip">
+              <span className="metric-label">视频</span>
+              <span className="metric-value">{selectedVideoCount}</span>
+            </div>
+            <div className="metric-chip">
+              <span className="metric-label">LUT</span>
+              <span className="metric-value">{lutFiles.length}</span>
+            </div>
+            <div className={`metric-chip ${hasProcessingTask ? 'is-busy' : ''}`}>
+              <span className="metric-label">状态</span>
+              <span className="metric-value">{hasProcessingTask ? '处理中' : '待命'}</span>
+            </div>
           </div>
         </div>
       </header>
@@ -895,15 +921,6 @@ function App() {
               videoPath={activeVideoFile || undefined}
               processedVideoPath={processedVideoPath || undefined}
               lutPaths={lutFiles}
-            />
-          </div>
-
-          <div className="lut-library-shell">
-            <LutLibraryPanel
-              activeVideoPath={activeVideoFile}
-              selectedLutPaths={lutFiles}
-              onSelectedLutPathsChange={handleLutSelect}
-              disabled={hasProcessingTask}
             />
           </div>
 
@@ -987,6 +1004,45 @@ function App() {
         onSettingsChange={handleSettingsChange}
         disabled={hasProcessingTask}
       />
+      {isLutLibraryOpen && createPortal(
+        <div
+          className="modal-overlay"
+          onClick={() => setIsLutLibraryOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="modal-content lut-library-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="LUT 资料库"
+          >
+            <div className="modal-header">
+              <div>
+                <h2>LUT 资料库</h2>
+                <p className="lut-library-modal-subtitle">预览、复用和管理已导入的 LUT 文件</p>
+              </div>
+              <button
+                className="btn-close"
+                type="button"
+                onClick={() => setIsLutLibraryOpen(false)}
+                aria-label="关闭 LUT 资料库"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body lut-library-modal-body">
+              <LutLibraryPanel
+                activeVideoPath={activeVideoFile}
+                selectedLutPaths={lutFiles}
+                onSelectedLutPathsChange={handleLutSelect}
+                disabled={hasProcessingTask}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
