@@ -1017,26 +1017,13 @@ function App() {
             aria-modal="true"
             aria-label="LUT 资料库"
           >
-            <div className="modal-header">
-              <div>
-                <h2>LUT 资料库</h2>
-                <p className="lut-library-modal-subtitle">预览、复用和管理已导入的 LUT 文件</p>
-              </div>
-              <button
-                className="btn-close"
-                type="button"
-                onClick={() => setIsLutLibraryOpen(false)}
-                aria-label="关闭 LUT 资料库"
-              >
-                ×
-              </button>
-            </div>
             <div className="modal-body lut-library-modal-body">
               <LutLibraryPanel
                 activeVideoPath={activeVideoFile}
                 selectedLutPaths={lutFiles}
                 onSelectedLutPathsChange={handleLutSelect}
                 disabled={hasProcessingTask}
+                onClose={() => setIsLutLibraryOpen(false)}
               />
             </div>
           </div>

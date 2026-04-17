@@ -22,6 +22,7 @@ interface LutLibraryPanelProps {
   selectedLutPaths: string[];
   onSelectedLutPathsChange: (paths: string[]) => void;
   disabled?: boolean;
+  onClose?: () => void;
 }
 
 const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
@@ -47,7 +48,8 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
   activeVideoPath,
   selectedLutPaths,
   onSelectedLutPathsChange,
-  disabled = false
+  disabled = false,
+  onClose
 }) => {
   const [libraryItems, setLibraryItems] = useState<LutLibraryItem[]>([]);
   const [selectedPreviewPath, setSelectedPreviewPath] = useState<string | null>(null);
@@ -212,13 +214,13 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
   );
 
   return (
-    <div className="lut-library-panel card">
+    <div className="lut-library-panel">
       <div className="lut-library-header">
         <div>
-          <h3>LUT 资料库</h3>
+          <h2>LUT 资料库</h2>
           <p>预览、复用和管理已导入的 LUT 文件</p>
         </div>
-        <div className="lut-library-actions">
+        <div className="lut-library-actions" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button
             className="lut-library-button secondary"
             onClick={() => void loadLibrary()}
@@ -233,6 +235,19 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
           >
             {importing ? '导入中...' : '导入目录'}
           </button>
+          {onClose && (
+            <button
+              className="btn-close"
+              type="button"
+              onClick={onClose}
+              aria-label="关闭"
+              style={{ marginLeft: '8px' }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 

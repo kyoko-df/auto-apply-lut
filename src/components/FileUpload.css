@@ -28,7 +28,7 @@
   flex-wrap: wrap;
 }
 
-.upload-toolbar-button {
+.upload-toolbar .upload-toolbar-button {
   width: auto;
   height: 38px;
   padding: 0 14px;
@@ -140,11 +140,12 @@
 }
 
 .video-upload-area {
-  height: clamp(170px, 28vh, 300px);
+  flex: 1;
+  min-height: 170px;
 }
 
 .video-upload-area .video-list {
-  max-height: 100%;
+  height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -152,12 +153,12 @@
 }
 
 .lut-upload-area {
+  flex: 1;
   min-height: 100px;
-  max-height: clamp(190px, 30vh, 320px);
 }
 
 .lut-upload-area .lut-list {
-  max-height: 100%;
+  height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -222,11 +223,13 @@
 }
 
 .icon-button {
-  height: 44px;
+  height: 36px;
+  width: 36px;
+  padding: 0;
   border: 1px solid var(--border-soft);
   background: var(--surface-card);
   color: var(--color-fg);
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
