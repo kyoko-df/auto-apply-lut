@@ -190,6 +190,14 @@
   border: 1px solid var(--border-soft);
   background: var(--surface-elevated);
   box-shadow: var(--shadow-soft);
+  transition: transform var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.lut-library-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.12);
 }
 
 .lut-library-item.active {

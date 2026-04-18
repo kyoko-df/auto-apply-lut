@@ -34,9 +34,12 @@ body {
   margin: 0;
   font-size: clamp(1.8rem, 3vw, 2.3rem);
   line-height: 1.12;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 800;
+  letter-spacing: -0.03em;
   color: var(--color-fg);
+  background: linear-gradient(135deg, var(--color-fg) 0%, color-mix(in oklab, var(--color-fg), transparent 30%) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .header-brand p {
@@ -64,6 +67,13 @@ body {
   flex-direction: column;
   justify-content: center;
   min-width: 76px;
+  transition: transform var(--duration-medium) var(--ease-standard),
+              box-shadow var(--duration-medium) var(--ease-standard);
+}
+
+.metric-chip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.08);
 }
 
 .metric-chip.is-busy {
