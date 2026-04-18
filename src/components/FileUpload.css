@@ -54,11 +54,11 @@
               box-shadow var(--duration-medium) var(--ease-standard),
               background-color var(--duration-medium) var(--ease-standard),
               border-color var(--duration-medium) var(--ease-standard);
-  min-height: 120px;
   display: flex;
   align-items: stretch;
   justify-content: stretch;
   box-shadow: var(--shadow-soft);
+  min-height: 0;
 }
 
 .upload-area:hover:not(.disabled) {
@@ -78,7 +78,13 @@
   background: var(--surface-card);
 }
 
-.upload-content { width: 100%; display: flex; align-items: stretch; justify-content: stretch; }
+.upload-content { 
+  width: 100%; 
+  display: flex; 
+  align-items: stretch; 
+  justify-content: stretch; 
+  min-height: 0;
+}
 
 .upload-placeholder {
   text-align: center;

@@ -99,15 +99,16 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .app-grid {
   height: 100%;
-  min-height: 0;
+  min-height: 840px;
   display: grid;
   grid-template-columns: 1.05fr 1.35fr;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 0.92fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(280px, 1fr) minmax(200px, 0.92fr) auto minmax(180px, 1fr);
   grid-template-areas:
     "uploadVideo preview"
     "uploadLut preview"
@@ -322,6 +323,7 @@ body {
       "settings"
       "status";
     height: auto;
+    min-height: auto;
   }
 }
 
