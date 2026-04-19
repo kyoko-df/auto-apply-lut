@@ -616,32 +616,6 @@ impl LutParser for CspParser {
     }
 }
 
-/// VLT格式解析器（占位符）
-pub struct VltParser;
-
-#[async_trait]
-impl LutParser for VltParser {
-    async fn parse(_path: &Path) -> AppResult<LutData> {
-        Err(AppError::Validation(
-            "VLT format parsing not implemented yet".to_string(),
-        ))
-    }
-
-    async fn write(_lut_data: &LutData, _path: &Path) -> AppResult<()> {
-        Err(AppError::Validation(
-            "VLT format writing not implemented yet".to_string(),
-        ))
-    }
-
-    async fn parse_header(
-        _path: &Path,
-    ) -> AppResult<(LutType, u32, Option<String>, Option<String>)> {
-        Err(AppError::Validation(
-            "VLT format header parsing not implemented yet".to_string(),
-        ))
-    }
-}
-
 /// MGA格式解析器（占位符）
 pub struct MgaParser;
 

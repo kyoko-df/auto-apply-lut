@@ -42,7 +42,7 @@ impl LutConverter {
         use LutFormat::*;
 
         // 同格式转换
-        for format in [Cube, ThreeDL, Lut, Csp, Vlt, Mga, M3d, Look].iter() {
+        for format in [Cube, ThreeDL, Lut, Csp, Mga, M3d, Look].iter() {
             map.insert((*format, *format), Direct);
         }
 
@@ -57,7 +57,7 @@ impl LutConverter {
         }
 
         // 1D LUT格式之间的转换
-        let one_d_formats = [Lut, Vlt, Mga];
+        let one_d_formats = [Lut, Mga];
         for &from in &one_d_formats {
             for &to in &one_d_formats {
                 if from != to {
@@ -637,9 +637,7 @@ impl FormatCompatibilityChecker {
             (M3d, Cube) | (Cube, M3d) => true,
 
             // 1D LUT格式之间兼容
-            (Lut, Vlt) | (Vlt, Lut) => true,
             (Lut, Mga) | (Mga, Lut) => true,
-            (Vlt, Mga) | (Mga, Vlt) => true,
 
             // 其他组合不兼容
             _ => false,
@@ -652,7 +650,7 @@ impl FormatCompatibilityChecker {
 
         match format {
             Cube | ThreeDL | Csp | M3d | Look => LutType::ThreeDimensional,
-            Lut | Vlt | Mga => LutType::OneDimensional,
+            Lut | Mga => LutType::OneDimensional,
             Unknown => LutType::Unknown,
         }
     }
@@ -755,7 +753,7 @@ mod tests {
 
         assert!(FormatCompatibilityChecker::are_compatible(
             LutFormat::Lut,
-            LutFormat::Vlt
+            LutFormat::Mga
         ));
 
         assert!(!FormatCompatibilityChecker::are_compatible(
@@ -836,11 +834,11 @@ mod tests {
         };
 
         let converted = converter
-            .interpolate_convert(&lut_data, LutFormat::Vlt, &options)
+            .interpolate_convert(&lut_data, LutFormat::Mga, &options)
             .await
             .unwrap();
 
-        assert_eq!(converted.format, LutFormat::Vlt);
+        assert_eq!(converted.format, LutFormat::Mga);
         assert_eq!(converted.size, 8);
         assert_eq!(converted.data.len(), 8);
     }
@@ -880,7 +878,7 @@ mod tests {
         let converter = LutConverter::new();
 
         assert!(converter.is_conversion_supported(LutFormat::Cube, LutFormat::ThreeDL));
-        assert!(converter.is_conversion_supported(LutFormat::Lut, LutFormat::Vlt));
+        assert!(converter.is_conversion_supported(LutFormat::Lut, LutFormat::Mga));
         assert!(!converter.is_conversion_supported(LutFormat::Cube, LutFormat::Lut));
     }
 
