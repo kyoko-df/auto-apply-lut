@@ -158,14 +158,6 @@ impl LutManager {
             LutFormat::M3d => Self::validate_parsed_lut(M3dParser::parse(path).await?),
             LutFormat::Look => Self::validate_parsed_lut(LookParser::parse(path).await?),
             LutFormat::Mga => Self::validate_parsed_lut(MgaParser::parse(path).await?),
-            LutFormat::Vlt => Ok(LutValidationResult {
-                is_valid: false,
-                lut_type: LutType::Unknown,
-                format,
-                errors: vec![format!("LUT format {:?} is not yet implemented", format)],
-                warnings: vec![],
-                size_info: None,
-            }),
             LutFormat::Unknown => Ok(LutValidationResult {
                 is_valid: false,
                 lut_type: LutType::Unknown,

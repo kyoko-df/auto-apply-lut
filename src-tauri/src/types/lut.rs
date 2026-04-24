@@ -50,8 +50,6 @@ pub enum LutFormat {
     M3d,
     /// .look格式
     Look,
-    /// .vlt格式
-    Vlt,
     /// .mga格式
     Mga,
     /// 未知格式
@@ -68,7 +66,6 @@ impl LutFormat {
             "csp" => LutFormat::Csp,
             "m3d" => LutFormat::M3d,
             "look" => LutFormat::Look,
-            "vlt" => LutFormat::Vlt,
             "mga" => LutFormat::Mga,
             _ => LutFormat::Unknown,
         }
@@ -83,7 +80,6 @@ impl LutFormat {
             LutFormat::Csp => "csp",
             LutFormat::M3d => "m3d",
             LutFormat::Look => "look",
-            LutFormat::Vlt => "vlt",
             LutFormat::Mga => "mga",
             LutFormat::Unknown => "unknown",
         }
@@ -91,7 +87,7 @@ impl LutFormat {
 
     /// 获取支持的文件扩展名
     pub fn supported_extensions() -> Vec<&'static str> {
-        vec!["cube", "3dl", "lut", "csp", "m3d", "look", "vlt", "mga"]
+        vec!["cube", "3dl", "lut", "csp", "m3d", "look", "mga"]
     }
 
     /// 检查是否为支持的格式
@@ -136,6 +132,20 @@ impl Default for LutApplyOptions {
             interpolation: true,
             color_space: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LutFormat;
+
+    #[test]
+    fn supported_extensions_do_not_expose_vlt() {
+        let extensions = LutFormat::supported_extensions();
+
+        assert!(!extensions.contains(&"vlt"));
+        assert!(!LutFormat::is_supported("vlt"));
+        assert_eq!(LutFormat::from_extension("vlt"), LutFormat::Unknown);
     }
 }
 
