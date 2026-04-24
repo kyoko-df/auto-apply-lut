@@ -692,7 +692,7 @@ impl LutValidator {
         // 检查文件扩展名
         if let Some(extension) = path.extension() {
             let ext = extension.to_string_lossy().to_lowercase();
-            let supported_extensions = ["cube", "3dl", "lut", "csp", "vlt", "mga", "m3d", "look"];
+            let supported_extensions = ["cube", "3dl", "lut", "csp", "mga", "m3d", "look"];
 
             if !supported_extensions.contains(&ext.as_str()) {
                 return Err(AppError::Validation(format!(

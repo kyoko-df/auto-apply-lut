@@ -20,7 +20,6 @@ impl LutUtils {
                 "csp" => Some(LutFormat::Csp),
                 "m3d" => Some(LutFormat::M3d),
                 "look" => Some(LutFormat::Look),
-                "vlt" => Some(LutFormat::Vlt),
                 "mga" => Some(LutFormat::Mga),
                 _ => None,
             }

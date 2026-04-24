@@ -185,7 +185,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         multiple: true,
         filters: [{
           name: 'LUT Files',
-          extensions: ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look']
+            extensions: ['cube', '3dl', 'lut', 'csp', 'mga', 'm3d', 'look']
         }]
       });
 
@@ -284,7 +284,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
         syncVideoFiles(selectedInfos);
       }
     } else if (type === 'lut') {
-      const lutExtensions = ['cube', '3dl', 'lut', 'csp', 'vlt', 'mga', 'm3d', 'look'];
+      const lutExtensions = ['cube', '3dl', 'lut', 'csp', 'mga', 'm3d', 'look'];
       const selectedInfos: FileInfo[] = [];
       for (const file of files) {
         const extension = file.name.split('.').pop()?.toLowerCase();
@@ -369,7 +369,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
       <input
         ref={lutInputRef}
         type="file"
-        accept=".cube,.3dl,.lut,.csp,.vlt,.mga,.m3d,.look"
+        accept=".cube,.3dl,.lut,.csp,.mga,.m3d,.look"
         style={{ display: 'none' }}
         multiple
         onChange={handleLutInputChange}
