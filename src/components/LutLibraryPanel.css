@@ -248,6 +248,128 @@
   line-height: 1;
 }
 
+.lut-batch-convert-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 12, 18, 0.48);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1200;
+}
+
+.lut-batch-convert-dialog {
+  width: min(560px, calc(100vw - 32px));
+  border-radius: 18px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-card);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  padding: 20px;
+}
+
+.lut-batch-convert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lut-batch-convert-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+
+.lut-batch-convert-body {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lut-batch-convert-summary {
+  margin: 0;
+  color: var(--color-fg-subtle);
+  font-size: 0.86rem;
+}
+
+.lut-batch-convert-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lut-batch-convert-field span {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-fg-subtle);
+}
+
+.lut-batch-convert-field select {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-elevated);
+  color: var(--color-fg);
+  padding: 0 12px;
+}
+
+.lut-batch-convert-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.lut-batch-convert-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-elevated);
+}
+
+.lut-batch-convert-result-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+
+.lut-batch-convert-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lut-batch-convert-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--surface-card), white 6%);
+  border: 1px solid var(--border-soft);
+}
+
+.lut-batch-convert-result-source,
+.lut-batch-convert-result-target {
+  word-break: break-all;
+  font-size: 0.8rem;
+}
+
+.lut-batch-convert-result-source {
+  color: var(--color-fg-subtle);
+}
+
+.lut-batch-convert-result-target {
+  color: var(--color-fg);
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .lut-library-header,
   .lut-library-preview {
@@ -269,5 +391,9 @@
 
   .lut-library-item-actions {
     justify-content: flex-end;
+  }
+
+  .lut-batch-convert-actions {
+    flex-direction: column-reverse;
   }
 }

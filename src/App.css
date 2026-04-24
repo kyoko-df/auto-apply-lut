@@ -38,6 +38,7 @@ body {
   letter-spacing: -0.03em;
   color: var(--color-fg);
   background: linear-gradient(135deg, var(--color-fg) 0%, color-mix(in oklab, var(--color-fg), transparent 30%) 100%);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -104,11 +105,11 @@ body {
 }
 
 .app-grid {
-  height: 100%;
-  min-height: 840px;
+  height: auto;
+  min-height: clamp(680px, calc(100vh - 176px), 820px);
   display: grid;
   grid-template-columns: 1.05fr 1.35fr;
-  grid-template-rows: minmax(280px, 1fr) minmax(200px, 0.92fr) auto minmax(180px, 1fr);
+  grid-template-rows: minmax(248px, 1fr) minmax(172px, 0.82fr) auto minmax(152px, 0.88fr);
   grid-template-areas:
     "uploadVideo preview"
     "uploadLut preview"
@@ -297,6 +298,36 @@ body {
 
 .output-action-success {
   background: var(--color-success);
+}
+
+@media (max-height: 820px) and (min-width: 1201px) {
+  body {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .app {
+    height: auto;
+    min-height: 100%;
+    padding: 16px;
+    gap: 16px;
+    overflow: visible;
+  }
+
+  .app-main {
+    overflow: visible;
+  }
+
+  .app-grid {
+    min-height: auto;
+    grid-template-rows: minmax(188px, 0.92fr) minmax(136px, 0.68fr) auto minmax(132px, 0.72fr);
+  }
+
+  .app-grid > .preview-section,
+  .app-grid > .settings-section,
+  .app-grid > .status-section {
+    padding: 14px;
+  }
 }
 
 @media (max-width: 1200px) {

@@ -25,6 +25,35 @@ interface LutLibraryPanelProps {
   onClose?: () => void;
 }
 
+interface BatchConvertResult {
+  success_count: number;
+  failure_count: number;
+  results: Array<{
+    source_path: string;
+    target_path?: string | null;
+    success: boolean;
+    error_message?: string | null;
+  }>;
+}
+
+const FORMAT_VARIANTS: Record<string, { value: string; label: string }> = {
+  CUBE: { value: 'Cube', label: 'CUBE' },
+  '3DL': { value: 'ThreeDL', label: '3DL' },
+  CSP: { value: 'Csp', label: 'CSP' },
+  M3D: { value: 'M3d', label: 'M3D' },
+  LOOK: { value: 'Look', label: 'LOOK' },
+  LUT: { value: 'Lut', label: 'LUT' }
+};
+
+const SUPPORTED_TARGETS_BY_FORMAT: Record<string, string[]> = {
+  CUBE: ['3DL', 'CSP', 'M3D', 'LOOK'],
+  '3DL': ['CUBE', 'CSP', 'M3D'],
+  CSP: ['CUBE', '3DL', 'M3D'],
+  M3D: ['CUBE', '3DL', 'CSP'],
+  LOOK: ['CUBE'],
+  LUT: []
+};
+
 const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 
 const formatFileSize = (bytes: number) => {
@@ -58,6 +87,10 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isBatchConvertOpen, setIsBatchConvertOpen] = useState(false);
+  const [batchConvertTargetFormat, setBatchConvertTargetFormat] = useState('');
+  const [isBatchConverting, setIsBatchConverting] = useState(false);
+  const [batchConvertResult, setBatchConvertResult] = useState<BatchConvertResult | null>(null);
 
   const selectedSet = useMemo(() => new Set(selectedLutPaths), [selectedLutPaths]);
   const selectedItems = useMemo(() => {
@@ -213,6 +246,76 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
     [libraryItems, selectedItems, selectedPreviewPath]
   );
 
+  const batchConvertState = useMemo(() => {
+    if (selectedItems.length === 0) {
+      return { availableFormats: [] as Array<{ value: string; label: string }>, error: '请先选择 LUT 文件' };
+    }
+
+    if (selectedItems.some(item => item.is_placeholder)) {
+      return { availableFormats: [] as Array<{ value: string; label: string }>, error: '请等待 LUT 资料同步完成后再转换' };
+    }
+
+    if (selectedItems.some(item => !item.is_valid)) {
+      return { availableFormats: [] as Array<{ value: string; label: string }>, error: '仅支持转换可用的 LUT 文件' };
+    }
+
+    const dimensions = new Set(selectedItems.map(item => item.lut_type));
+    if (dimensions.size > 1) {
+      return {
+        availableFormats: [] as Array<{ value: string; label: string }>,
+        error: '当前选中项包含不同维度的 LUT，无法批量转换到同一目标格式'
+      };
+    }
+
+    const availableKeys = selectedItems
+      .map(item => SUPPORTED_TARGETS_BY_FORMAT[item.format] ?? [])
+      .reduce<string[]>((acc, current, index) => {
+        if (index === 0) return current;
+        return acc.filter(value => current.includes(value));
+      }, []);
+
+    const availableFormats = availableKeys
+      .map(key => FORMAT_VARIANTS[key])
+      .filter(Boolean);
+
+    if (availableFormats.length === 0) {
+      return {
+        availableFormats,
+        error: '当前选中项没有可用的目标格式'
+      };
+    }
+
+    return { availableFormats, error: null as string | null };
+  }, [selectedItems]);
+
+  const openBatchConvert = useCallback(() => {
+    setBatchConvertTargetFormat('');
+    setBatchConvertResult(null);
+    setIsBatchConvertOpen(true);
+  }, []);
+
+  const handleBatchConvert = useCallback(async () => {
+    if (!isTauriEnv() || !batchConvertTargetFormat || batchConvertState.error || selectedLutPaths.length === 0) {
+      return;
+    }
+
+    try {
+      setIsBatchConverting(true);
+      const response = await invoke<BatchConvertResult>('batch_convert_luts', {
+        request: {
+          paths: selectedLutPaths,
+          target_format: batchConvertTargetFormat
+        }
+      });
+      setBatchConvertResult(response);
+      await loadLibrary();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '批量转换失败');
+    } finally {
+      setIsBatchConverting(false);
+    }
+  }, [batchConvertState.error, batchConvertTargetFormat, loadLibrary, selectedLutPaths]);
+
   return (
     <div className="lut-library-panel">
       <div className="lut-library-header">
@@ -234,6 +337,13 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
             disabled={disabled || importing}
           >
             {importing ? '导入中...' : '导入目录'}
+          </button>
+          <button
+            className="lut-library-button"
+            onClick={openBatchConvert}
+            disabled={disabled || selectedItems.length === 0}
+          >
+            批量转换
           </button>
           {onClose && (
             <button
@@ -386,6 +496,87 @@ const LutLibraryPanel: React.FC<LutLibraryPanelProps> = ({
           ))}
         </div>
       </div>
+
+      {isBatchConvertOpen && (
+        <div className="lut-batch-convert-overlay" onClick={() => setIsBatchConvertOpen(false)}>
+          <div className="lut-batch-convert-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="lut-batch-convert-header">
+              <h3>批量转换 LUT</h3>
+              <button
+                type="button"
+                className="btn-close"
+                aria-label="关闭批量转换"
+                onClick={() => setIsBatchConvertOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="lut-batch-convert-body">
+              <p className="lut-batch-convert-summary">{`已选 ${selectedItems.length} 个文件`}</p>
+
+              {batchConvertState.error ? (
+                <div className="lut-library-error">{batchConvertState.error}</div>
+              ) : (
+                <label className="lut-batch-convert-field">
+                  <span>目标格式</span>
+                  <select
+                    aria-label="目标格式"
+                    value={batchConvertTargetFormat}
+                    onChange={(event) => setBatchConvertTargetFormat(event.target.value)}
+                  >
+                    <option value="">请选择</option>
+                    {batchConvertState.availableFormats.map(format => (
+                      <option key={format.value} value={format.value}>
+                        {format.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <div className="lut-batch-convert-actions">
+                <button
+                  type="button"
+                  className="lut-library-button secondary"
+                  onClick={() => setIsBatchConvertOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="lut-library-button"
+                  disabled={Boolean(batchConvertState.error) || !batchConvertTargetFormat || isBatchConverting}
+                  onClick={() => void handleBatchConvert()}
+                >
+                  {isBatchConverting ? '转换中...' : '开始转换'}
+                </button>
+              </div>
+
+              {batchConvertResult && (
+                <div className="lut-batch-convert-result">
+                  <div className="lut-batch-convert-result-title">
+                    {`成功 ${batchConvertResult.success_count} 个，失败 ${batchConvertResult.failure_count} 个`}
+                  </div>
+                  <div className="lut-batch-convert-result-list">
+                    {batchConvertResult.results.map((item) => (
+                      <div key={`${item.source_path}-${item.target_path ?? 'failed'}`} className="lut-batch-convert-result-item">
+                        <div className="lut-batch-convert-result-source">{item.source_path}</div>
+                        {item.target_path && (
+                          <div className="lut-batch-convert-result-target">{item.target_path}</div>
+                        )}
+                        {item.error_message && (
+                          <div className="lut-library-item-error">{item.error_message}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -113,6 +113,7 @@ pub fn run() {
             commands::lut_manager::list_lut_library,
             commands::lut_manager::import_lut_directory,
             commands::lut_manager::remove_lut_from_library,
+            commands::lut_manager::batch_convert_luts,
             commands::lut_manager::generate_lut_preview,
             // Task
             commands::processor::start_video_processing,

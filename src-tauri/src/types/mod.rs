@@ -8,6 +8,7 @@ pub mod batch;
 pub mod error;
 pub mod gpu;
 pub mod lut;
+pub mod lut_conversion;
 pub mod system;
 pub mod task;
 pub mod video;
@@ -17,6 +18,9 @@ pub use batch::{BatchConfig, BatchStatus, BatchTask};
 pub use error::{AppError, AppResult};
 pub use gpu::{GpuAcceleration, GpuInfo, GpuPerformanceConfig};
 pub use lut::{LutApplyOptions, LutFormat, LutInfo, LutSizeInfo, LutType, LutValidationResult};
+pub use lut_conversion::{
+    BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse,
+};
 pub use system::{CompatibilityCheck, SystemInfo, SystemRequirements};
 pub use task::{TaskInfo, TaskProgress, TaskStatus, TaskType};
 pub use video::{VideoFormat, VideoInfo, VideoProcessOptions};

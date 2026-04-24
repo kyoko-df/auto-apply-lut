@@ -1,10 +1,13 @@
 //! LUT格式转换器模块
 //! 提供不同LUT格式之间的转换功能
 
-use crate::core::lut::{LutData, LutFormat, LutInfo, LutType};
+use crate::core::lut::parser::{
+    CspParser, CubeParser, GenericLutParser, LookParser, LutParser, M3dParser, ThreeDLParser,
+};
+use crate::core::lut::{LutData, LutFormat, LutType};
 use crate::types::{AppError, AppResult};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// LUT格式转换器
 pub struct LutConverter {
@@ -350,14 +353,16 @@ impl LutConverter {
 
         for file_path in lut_files {
             let result = match self.convert_file(file_path, target_format, &options).await {
-                Ok(converted_data) => ConversionResult {
+                Ok((converted_data, target_path)) => ConversionResult {
                     source_path: file_path.to_path_buf(),
+                    target_path: Some(target_path),
                     success: true,
                     converted_data: Some(converted_data),
                     error: None,
                 },
                 Err(error) => ConversionResult {
                     source_path: file_path.to_path_buf(),
+                    target_path: None,
                     success: false,
                     converted_data: None,
                     error: Some(error.to_string()),
@@ -370,15 +375,76 @@ impl LutConverter {
     }
 
     /// 转换文件
+    fn build_output_path(&self, source_path: &Path, target_format: LutFormat) -> AppResult<PathBuf> {
+        let parent = source_path.parent().ok_or_else(|| {
+            AppError::InvalidInput("Source path has no parent directory".to_string())
+        })?;
+        let stem = source_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| AppError::InvalidInput("Source file name is invalid".to_string()))?;
+        let extension = target_format.extension();
+
+        let mut candidate = parent.join(format!("{stem}.converted.{extension}"));
+        let mut index = 1usize;
+        while candidate.exists() {
+            candidate = parent.join(format!("{stem}.converted-{index}.{extension}"));
+            index += 1;
+        }
+
+        Ok(candidate)
+    }
+
+    async fn load_lut_file(&self, file_path: &Path) -> AppResult<LutData> {
+        match LutFormat::from_extension(
+            file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default(),
+        ) {
+            LutFormat::Cube => CubeParser::parse(file_path).await,
+            LutFormat::ThreeDL => ThreeDLParser::parse(file_path).await,
+            LutFormat::Lut => GenericLutParser::parse(file_path).await,
+            LutFormat::Csp => CspParser::parse(file_path).await,
+            LutFormat::M3d => M3dParser::parse(file_path).await,
+            LutFormat::Look => LookParser::parse(file_path).await,
+            LutFormat::Mga | LutFormat::Unknown => {
+                Err(AppError::Validation("无法识别 LUT 格式".to_string()))
+            }
+        }
+    }
+
+    async fn write_lut_file(&self, lut_data: &LutData, output_path: &Path) -> AppResult<()> {
+        match lut_data.format {
+            LutFormat::Cube => CubeParser::write(lut_data, output_path).await,
+            LutFormat::ThreeDL => ThreeDLParser::write(lut_data, output_path).await,
+            LutFormat::Lut => GenericLutParser::write(lut_data, output_path).await,
+            LutFormat::Csp => CspParser::write(lut_data, output_path).await,
+            LutFormat::M3d => M3dParser::write(lut_data, output_path).await,
+            LutFormat::Look => LookParser::write(lut_data, output_path).await,
+            LutFormat::Mga | LutFormat::Unknown => {
+                Err(AppError::Validation("该 LUT 格式暂不支持导出".to_string()))
+            }
+        }
+    }
+
     async fn convert_file(
         &self,
         file_path: &Path,
         target_format: LutFormat,
         options: &ConversionOptions,
-    ) -> AppResult<LutData> {
-        // 这里需要先加载LUT文件，然后进行转换
-        // 实际实现中需要调用LUT解析器
-        todo!("Implement file loading and conversion")
+    ) -> AppResult<(LutData, PathBuf)> {
+        let lut_data = self.load_lut_file(file_path).await?;
+
+        if !self.is_conversion_supported(lut_data.format, target_format) {
+            return Err(AppError::Validation("源格式与目标格式不兼容".to_string()));
+        }
+
+        let converted = self.convert(&lut_data, target_format, options.clone()).await?;
+        let output_path = self.build_output_path(file_path, target_format)?;
+        self.write_lut_file(&converted, &output_path).await?;
+
+        Ok((converted, output_path))
     }
 
     /// 获取支持的转换
@@ -577,6 +643,7 @@ pub enum ConversionQuality {
 #[derive(Debug, Clone)]
 pub struct ConversionResult {
     pub source_path: std::path::PathBuf,
+    pub target_path: Option<std::path::PathBuf>,
     pub success: bool,
     pub converted_data: Option<LutData>,
     pub error: Option<String>,
@@ -616,6 +683,114 @@ pub struct ConversionStats {
     pub conversion_time_ms: u64,
     pub quality_estimate: ConversionQuality,
     pub data_size_reduction: f32, // 百分比
+}
+
+#[cfg(test)]
+mod batch_file_conversion_tests {
+    use super::*;
+    use tempfile::tempdir;
+    use tokio::fs;
+
+    async fn write_test_cube(path: &Path) {
+        fs::write(
+            path,
+            r#"TITLE "Sample"
+LUT_3D_SIZE 2
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.0 1.0 0.0
+1.0 1.0 0.0
+0.0 0.0 1.0
+1.0 0.0 1.0
+0.0 1.0 1.0
+1.0 1.0 1.0
+"#,
+        )
+        .await
+        .expect("write source lut");
+    }
+
+    #[tokio::test]
+    async fn test_convert_file_writes_converted_file_next_to_source() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("sample.cube");
+
+        write_test_cube(&source_path).await;
+
+        let (converted, actual_output_path) = converter
+            .convert_file(&source_path, LutFormat::Csp, &ConversionOptions::default())
+            .await
+            .expect("convert file");
+
+        let output_path = dir.path().join("sample.converted.csp");
+        let written = fs::read_to_string(&output_path).await.expect("read output");
+
+        assert_eq!(converted.format, LutFormat::Csp);
+        assert_eq!(actual_output_path, output_path);
+        assert!(output_path.exists());
+        assert!(!written.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_convert_file_appends_incrementing_suffix_when_target_exists() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("sample.cube");
+        let existing_output = dir.path().join("sample.converted.csp");
+
+        write_test_cube(&source_path).await;
+        fs::write(&existing_output, "occupied")
+            .await
+            .expect("write occupied");
+
+        converter
+            .convert_file(&source_path, LutFormat::Csp, &ConversionOptions::default())
+            .await
+            .expect("convert file");
+
+        assert!(dir.path().join("sample.converted-1.csp").exists());
+    }
+
+    #[tokio::test]
+    async fn test_convert_file_rejects_cross_dimension_conversion() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("sample.cube");
+
+        write_test_cube(&source_path).await;
+
+        let err = converter
+            .convert_file(&source_path, LutFormat::Lut, &ConversionOptions::default())
+            .await
+            .expect_err("should reject");
+
+        assert!(err.to_string().contains("不兼容"));
+    }
+
+    #[tokio::test]
+    async fn test_batch_convert_reports_output_path() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("sample.cube");
+
+        write_test_cube(&source_path).await;
+
+        let results = converter
+            .batch_convert(
+                vec![source_path.as_path()],
+                LutFormat::Csp,
+                ConversionOptions::default(),
+            )
+            .await
+            .expect("batch convert");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].target_path.as_deref(),
+            Some(dir.path().join("sample.converted.csp").as_path())
+        );
+    }
 }
 
 /// 格式兼容性检查器

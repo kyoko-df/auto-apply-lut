@@ -2,12 +2,13 @@
 //! 提供LUT文件操作、资料库管理和预览相关的Tauri命令
 
 use crate::core::ffmpeg::processor::VideoProcessor;
+use crate::core::lut::converter::{ConversionOptions, LutConverter};
 use crate::core::lut::LutManager;
 use crate::database::models::Lut as DbLut;
 use crate::database::queries::lut as lut_queries;
 use crate::database::runtime::upsert_lut_info;
 use crate::database::DatabaseManager;
-use crate::types::{LutInfo, LutValidationResult};
+use crate::types::{BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse, LutInfo, LutValidationResult};
 use crate::utils::logger;
 use crate::utils::path_utils::get_cache_dir;
 use chrono::Utc;
@@ -310,6 +311,40 @@ pub async fn remove_lut_from_library(
     Ok("Removed from LUT library".to_string())
 }
 
+/// 批量转换 LUT 文件。
+#[tauri::command]
+pub async fn batch_convert_luts(
+    request: BatchConvertLutsRequest,
+) -> Result<BatchConvertLutsResponse, String> {
+    let converter = LutConverter::new();
+    let paths: Vec<&Path> = request.paths.iter().map(Path::new).collect();
+    let results = converter
+        .batch_convert(paths, request.target_format, ConversionOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mapped: Vec<BatchConvertLutItemResult> = results
+        .into_iter()
+        .map(|item| BatchConvertLutItemResult {
+            source_path: item.source_path.to_string_lossy().to_string(),
+            target_path: item
+                .target_path
+                .map(|path| path.to_string_lossy().to_string()),
+            success: item.success,
+            error_message: item.error,
+        })
+        .collect();
+
+    let success_count = mapped.iter().filter(|item| item.success).count();
+    let failure_count = mapped.iter().filter(|item| !item.success).count();
+
+    Ok(BatchConvertLutsResponse {
+        success_count,
+        failure_count,
+        results: mapped,
+    })
+}
+
 /// 生成 LUT 预览图。
 #[tauri::command]
 pub async fn generate_lut_preview(
@@ -365,4 +400,77 @@ pub async fn generate_lut_preview(
     }
 
     Ok(preview_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod batch_convert_contract_tests {
+    use crate::types::lut_conversion::{
+        BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse,
+    };
+    use crate::types::LutFormat;
+    use tempfile::tempdir;
+    use tokio::fs;
+
+    #[test]
+    fn batch_convert_response_contract_is_stable() {
+        let request = BatchConvertLutsRequest {
+            paths: vec!["/tmp/a.cube".to_string()],
+            target_format: LutFormat::Csp,
+        };
+
+        let item = BatchConvertLutItemResult {
+            source_path: "/tmp/a.cube".to_string(),
+            target_path: Some("/tmp/a.converted.csp".to_string()),
+            success: true,
+            error_message: None,
+        };
+
+        let response = BatchConvertLutsResponse {
+            success_count: 1,
+            failure_count: 0,
+            results: vec![item],
+        };
+
+        assert_eq!(request.paths.len(), 1);
+        assert_eq!(response.success_count, 1);
+        assert_eq!(response.failure_count, 0);
+        assert_eq!(response.results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn batch_convert_command_returns_counts_and_output_path() {
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("sample.cube");
+
+        fs::write(
+            &source_path,
+            r#"TITLE "Sample"
+LUT_3D_SIZE 2
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.0 1.0 0.0
+1.0 1.0 0.0
+0.0 0.0 1.0
+1.0 0.0 1.0
+0.0 1.0 1.0
+1.0 1.0 1.0
+"#,
+        )
+        .await
+        .expect("write source");
+
+        let response = super::batch_convert_luts(BatchConvertLutsRequest {
+            paths: vec![source_path.to_string_lossy().to_string()],
+            target_format: LutFormat::Csp,
+        })
+        .await
+        .expect("batch convert command");
+
+        assert_eq!(response.success_count, 1);
+        assert_eq!(response.failure_count, 0);
+        assert_eq!(
+            response.results[0].target_path.as_deref(),
+            Some(dir.path().join("sample.converted.csp").to_string_lossy().as_ref())
+        );
+    }
 }
