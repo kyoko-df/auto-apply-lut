@@ -396,7 +396,7 @@ impl LutConverter {
     }
 
     async fn load_lut_file(&self, file_path: &Path) -> AppResult<LutData> {
-        match LutFormat::from_extension(
+        let parse_result = match LutFormat::from_extension(
             file_path
                 .extension()
                 .and_then(|ext| ext.to_str())
@@ -408,10 +408,19 @@ impl LutConverter {
             LutFormat::Csp => CspParser::parse(file_path).await,
             LutFormat::M3d => M3dParser::parse(file_path).await,
             LutFormat::Look => LookParser::parse(file_path).await,
-            LutFormat::Mga | LutFormat::Unknown => {
-                Err(AppError::Validation("无法识别 LUT 格式".to_string()))
-            }
-        }
+            LutFormat::Mga | LutFormat::Unknown => Err(AppError::Validation(format!(
+                "无法识别 LUT 格式: {}",
+                file_path.display()
+            ))),
+        };
+
+        parse_result.map_err(|error| {
+            AppError::Validation(format!(
+                "无法解析 LUT 文件: {} ({})",
+                file_path.display(),
+                error
+            ))
+        })
     }
 
     async fn write_lut_file(&self, lut_data: &LutData, output_path: &Path) -> AppResult<()> {
@@ -856,6 +865,26 @@ LUT_3D_SIZE 2
             results[0].target_path.as_deref(),
             Some(dir.path().join("sample.converted.csp").as_path())
         );
+    }
+
+    #[tokio::test]
+    async fn test_load_lut_file_includes_file_path_when_parse_fails() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("broken.cube");
+
+        fs::write(&source_path, "LUT_3D_SIZE invalid")
+            .await
+            .expect("write invalid lut");
+
+        let err = converter
+            .load_lut_file(&source_path)
+            .await
+            .expect_err("invalid file should fail to parse");
+
+        let message = err.to_string();
+        assert!(message.contains("无法解析 LUT 文件"));
+        assert!(message.contains(&source_path.display().to_string()));
     }
 
     #[test]
