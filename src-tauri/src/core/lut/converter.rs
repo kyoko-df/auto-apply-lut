@@ -370,15 +370,72 @@ impl LutConverter {
     }
 
     /// 转换文件
+    ///
+    /// 根据扩展名推断源 LUT 格式，使用对应解析器加载后调用 [`LutConverter::convert`]
+    /// 完成到 `target_format` 的数据转换。仅返回内存中的 [`LutData`]，若需要落盘请
+    /// 调用 [`LutConverter::write_lut_file`]。
     async fn convert_file(
         &self,
         file_path: &Path,
         target_format: LutFormat,
         options: &ConversionOptions,
     ) -> AppResult<LutData> {
-        // 这里需要先加载LUT文件，然后进行转换
-        // 实际实现中需要调用LUT解析器
-        todo!("Implement file loading and conversion")
+        let source_format = crate::core::lut::utils::LutUtils::detect_format_from_extension(
+            file_path,
+        )
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "Cannot determine LUT format from extension: {}",
+                file_path.display()
+            ))
+        })?;
+
+        let lut_data = Self::parse_lut_file(file_path, source_format).await?;
+        self.convert(&lut_data, target_format, options.clone())
+            .await
+    }
+
+    /// 按格式分发调用对应解析器读取 LUT 文件
+    async fn parse_lut_file(path: &Path, format: LutFormat) -> AppResult<LutData> {
+        use crate::core::lut::parser::{
+            CspParser, CubeParser, GenericLutParser, LookParser, LutParser, M3dParser, MgaParser,
+            ThreeDLParser,
+        };
+
+        match format {
+            LutFormat::Cube => CubeParser::parse(path).await,
+            LutFormat::ThreeDL => ThreeDLParser::parse(path).await,
+            LutFormat::Lut => GenericLutParser::parse(path).await,
+            LutFormat::Csp => CspParser::parse(path).await,
+            LutFormat::M3d => M3dParser::parse(path).await,
+            LutFormat::Look => LookParser::parse(path).await,
+            LutFormat::Mga => MgaParser::parse(path).await,
+            LutFormat::Unknown => Err(AppError::Validation(format!(
+                "Unknown LUT format: {}",
+                path.display()
+            ))),
+        }
+    }
+
+    /// 将转换后的 [`LutData`] 写入磁盘，格式由 `lut_data.format` 决定。
+    pub async fn write_lut_file(lut_data: &LutData, path: &Path) -> AppResult<()> {
+        use crate::core::lut::parser::{
+            CspParser, CubeParser, GenericLutParser, LookParser, LutParser, M3dParser, MgaParser,
+            ThreeDLParser,
+        };
+
+        match lut_data.format {
+            LutFormat::Cube => CubeParser::write(lut_data, path).await,
+            LutFormat::ThreeDL => ThreeDLParser::write(lut_data, path).await,
+            LutFormat::Lut => GenericLutParser::write(lut_data, path).await,
+            LutFormat::Csp => CspParser::write(lut_data, path).await,
+            LutFormat::M3d => M3dParser::write(lut_data, path).await,
+            LutFormat::Look => LookParser::write(lut_data, path).await,
+            LutFormat::Mga => MgaParser::write(lut_data, path).await,
+            LutFormat::Unknown => Err(AppError::Validation(
+                "Cannot write LUT with Unknown format".to_string(),
+            )),
+        }
     }
 
     /// 获取支持的转换
@@ -935,5 +992,115 @@ mod tests {
         let optimized = converter.optimize_lut(&lut_data, &options).unwrap();
 
         assert!(optimized.metadata.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod convert_file_tests {
+    use super::*;
+    use crate::core::lut::parser::{CubeParser, LutParser};
+    use crate::core::lut::LutData;
+    use std::collections::HashMap;
+
+    fn minimal_3d_lut() -> LutData {
+        let mut data_3d = vec![vec![vec![[0.0f32, 0.0, 0.0]; 2]; 2]; 2];
+        for r in 0..2 {
+            for g in 0..2 {
+                for b in 0..2 {
+                    data_3d[r][g][b] = [r as f32, g as f32, b as f32];
+                }
+            }
+        }
+
+        LutData {
+            lut_type: LutType::ThreeDimensional,
+            format: LutFormat::Cube,
+            size: 2,
+            data_3d: Some(data_3d),
+            data_1d: None,
+            metadata: HashMap::new(),
+            title: Some("Test LUT".to_string()),
+            description: None,
+            domain_min: [0.0, 0.0, 0.0],
+            domain_max: [1.0, 1.0, 1.0],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_convert_file_round_trip_cube_to_threedl() {
+        let converter = LutConverter::new();
+        let lut_data = minimal_3d_lut();
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.cube");
+        CubeParser::write(&lut_data, &src).await.unwrap();
+
+        let converted = converter
+            .convert_file(&src, LutFormat::ThreeDL, &ConversionOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(converted.format, LutFormat::ThreeDL);
+        assert_eq!(converted.lut_type, LutType::ThreeDimensional);
+        assert_eq!(converted.size, lut_data.size);
+    }
+
+    #[tokio::test]
+    async fn test_convert_file_unknown_extension_returns_error() {
+        let converter = LutConverter::new();
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("not_a_lut.xyz");
+        tokio::fs::write(&src, "whatever").await.unwrap();
+
+        let err = converter
+            .convert_file(&src, LutFormat::Cube, &ConversionOptions::default())
+            .await
+            .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Cannot determine LUT format"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_lut_file_unknown_format_is_error() {
+        let mut lut_data = minimal_3d_lut();
+        lut_data.format = LutFormat::Unknown;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("out.cube");
+        let err = LutConverter::write_lut_file(&lut_data, &dst)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Unknown"));
+    }
+
+    #[tokio::test]
+    async fn test_batch_convert_reports_per_file_results() {
+        let converter = LutConverter::new();
+        let lut_data = minimal_3d_lut();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ok_path = dir.path().join("ok.cube");
+        let bad_path = dir.path().join("bad.xyz");
+        CubeParser::write(&lut_data, &ok_path).await.unwrap();
+        tokio::fs::write(&bad_path, "whatever").await.unwrap();
+
+        let results = converter
+            .batch_convert(
+                vec![ok_path.as_path(), bad_path.as_path()],
+                LutFormat::ThreeDL,
+                ConversionOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        assert!(results[0].converted_data.is_some());
+        assert!(!results[1].success);
+        assert!(results[1].error.is_some());
     }
 }
