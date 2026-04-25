@@ -545,9 +545,75 @@ impl LutConverter {
     }
 
     /// 压缩相似颜色
-    fn compress_similar_colors(&self, _lut_data: &mut LutData, _threshold: f32) -> AppResult<()> {
-        // TODO: 实现相似颜色压缩功能
-        // 暂时禁用此功能以避免复杂的数据结构处理
+    fn compress_similar_colors(&self, lut_data: &mut LutData, threshold: f32) -> AppResult<()> {
+        if threshold <= 0.0 {
+            return Ok(());
+        }
+
+        match lut_data.lut_type {
+            LutType::ThreeDimensional => {
+                if let Some(ref mut data_3d) = lut_data.data_3d {
+                    let mut clusters: Vec<Vec<[usize; 3]>> = Vec::new();
+                    let mut cluster_averages: Vec<[f32; 3]> = Vec::new();
+
+                    for (r, plane) in data_3d.iter().enumerate() {
+                        for (g, row) in plane.iter().enumerate() {
+                            for (b, &color) in row.iter().enumerate() {
+                                if let Some(index) = cluster_averages
+                                    .iter()
+                                    .position(|avg| self.color_distance(avg, &color) <= threshold)
+                                {
+                                    clusters[index].push([r, g, b]);
+                                    let cluster_colors: Vec<[f32; 3]> = clusters[index]
+                                        .iter()
+                                        .map(|[cr, cg, cb]| data_3d[*cr][*cg][*cb])
+                                        .collect();
+                                    cluster_averages[index] =
+                                        self.average_colors(cluster_colors.as_slice());
+                                } else {
+                                    clusters.push(vec![[r, g, b]]);
+                                    cluster_averages.push(color);
+                                }
+                            }
+                        }
+                    }
+
+                    for (index, positions) in clusters.iter().enumerate() {
+                        let average = cluster_averages[index];
+                        for [r, g, b] in positions {
+                            data_3d[*r][*g][*b] = average;
+                        }
+                    }
+                }
+            }
+            LutType::OneDimensional => {
+                if let Some(ref mut data_1d) = lut_data.data_1d {
+                    for channel in [&mut data_1d.red, &mut data_1d.green, &mut data_1d.blue] {
+                        let mut index = 0usize;
+                        while index < channel.len() {
+                            let mut group_end = index + 1;
+                            while group_end < channel.len()
+                                && (channel[group_end] - channel[index]).abs() <= threshold
+                            {
+                                group_end += 1;
+                            }
+
+                            if group_end - index > 1 {
+                                let average = channel[index..group_end].iter().sum::<f32>()
+                                    / (group_end - index) as f32;
+                                for value in &mut channel[index..group_end] {
+                                    *value = average;
+                                }
+                            }
+
+                            index = group_end;
+                        }
+                    }
+                }
+            }
+            LutType::Unknown => {}
+        }
+
         Ok(())
     }
 
@@ -790,6 +856,49 @@ LUT_3D_SIZE 2
             results[0].target_path.as_deref(),
             Some(dir.path().join("sample.converted.csp").as_path())
         );
+    }
+
+    #[test]
+    fn test_optimize_lut_compresses_similar_3d_colors() {
+        let converter = LutConverter::new();
+        let original_far_color = [0.0, 1.0, 0.0];
+        let lut_data = LutData {
+            lut_type: LutType::ThreeDimensional,
+            format: LutFormat::Cube,
+            size: 2,
+            data_3d: Some(vec![
+                vec![
+                    vec![[0.0, 0.0, 0.0], [0.005, 0.005, 0.005]],
+                    vec![original_far_color, [1.0, 1.0, 0.0]],
+                ],
+                vec![
+                    vec![[1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+                    vec![[0.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+                ],
+            ]),
+            data_1d: None,
+            metadata: std::collections::HashMap::new(),
+            title: Some("Compress Test LUT".to_string()),
+            description: None,
+            domain_min: [0.0, 0.0, 0.0],
+            domain_max: [1.0, 1.0, 1.0],
+        };
+
+        let options = OptimizationOptions {
+            compress_similar_colors: true,
+            similarity_threshold: 0.01,
+            ..Default::default()
+        };
+
+        let optimized = converter.optimize_lut(&lut_data, &options).unwrap();
+        let optimized_data = optimized.data_3d.expect("optimized 3d data");
+
+        for component in 0..3 {
+            assert!((optimized_data[0][0][0][component] - 0.0025).abs() < 0.0001);
+            assert!((optimized_data[0][0][1][component] - 0.0025).abs() < 0.0001);
+        }
+
+        assert_eq!(optimized_data[0][1][0], original_far_color);
     }
 }
 
@@ -1111,4 +1220,5 @@ mod tests {
 
         assert!(optimized.metadata.is_empty());
     }
+
 }

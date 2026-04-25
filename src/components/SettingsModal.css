@@ -836,3 +836,55 @@
     color: #fca5a5;
   }
 }
+
+.settings-modal .diagnostics-card {
+  margin-top: 8px;
+}
+
+.settings-modal .log-browser {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.settings-modal .log-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-modal .log-file-item {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #1d1d1f;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.settings-modal .log-file-item.active {
+  border-color: #007aff;
+  color: #007aff;
+}
+
+.settings-modal .log-content {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #e5e7eb;
+  font: 12px/1.5 SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-modal .log-file-item {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(58, 58, 60, 0.7);
+    color: #f5f5f7;
+  }
+}

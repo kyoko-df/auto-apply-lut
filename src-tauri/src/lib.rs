@@ -90,14 +90,24 @@ pub fn run() {
             get_app_info,
             commands::system_manager::get_app_settings,
             commands::system_manager::update_app_settings,
+            commands::system_manager::get_system_info,
             commands::system_manager::get_available_codecs,
             commands::system_manager::get_ffmpeg_info,
             commands::system_manager::get_ffmpeg_path_config,
             commands::system_manager::set_ffmpeg_path_config,
+            commands::system_manager::get_log_files,
+            commands::system_manager::read_log_file,
+            commands::system_manager::clear_cache,
+            commands::system_manager::get_cache_size,
             // GPU
             commands::gpu_manager::get_gpu_info,
             commands::gpu_manager::check_hardware_acceleration,
             commands::gpu_manager::test_hardware_acceleration,
+            commands::file_manager::list_directory,
+            commands::file_manager::create_directory,
+            commands::file_manager::delete_path,
+            commands::file_manager::copy_file,
+            commands::file_manager::move_file,
             commands::file_manager::get_file_info,
             commands::file_manager::open_file,
             commands::file_manager::open_folder,
@@ -182,5 +192,38 @@ mod tests {
         let data = response.data.expect("missing app info data");
         assert_eq!(data["name"], "Auto Apply LUT");
         assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn tauri_handler_registers_exposed_backend_commands() {
+        let source = include_str!("lib.rs");
+        let handler_start = source
+            .find("tauri::generate_handler![")
+            .expect("missing generate_handler macro");
+        let handler_source = &source[handler_start..];
+        let handler_end = handler_source
+            .find("])")
+            .expect("missing generate_handler terminator");
+        let handler_source = &handler_source[..handler_end];
+
+        let required_registrations = [
+            "commands::system_manager::get_system_info",
+            "commands::system_manager::get_log_files",
+            "commands::system_manager::read_log_file",
+            "commands::system_manager::clear_cache",
+            "commands::system_manager::get_cache_size",
+            "commands::file_manager::list_directory",
+            "commands::file_manager::create_directory",
+            "commands::file_manager::delete_path",
+            "commands::file_manager::copy_file",
+            "commands::file_manager::move_file",
+        ];
+
+        for registration in required_registrations {
+            assert!(
+                handler_source.contains(registration),
+                "missing tauri handler registration: {registration}"
+            );
+        }
     }
 }

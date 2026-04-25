@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { invoke } from '@tauri-apps/api/core';
 import './SettingsModal.css';
 
 interface SettingsModalProps {
@@ -56,20 +57,39 @@ interface HardwareAccelerationInfo {
   recommended_settings: string[];
 }
 
+interface SystemInfo {
+  cpu_usage: number;
+  memory_usage: number;
+  total_memory: number;
+  available_memory: number;
+  disk_usage: Array<{
+    name: string;
+    mount_point: string;
+    total_space: number;
+    available_space: number;
+    usage_percentage: number;
+  }>;
+  cpu_count: number;
+  system_name: string;
+  system_version: string;
+}
+
 // 运行时检测是否处于 Tauri 环境
 const isTauriEnv = () => typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
 
 // 安全调用 Tauri invoke（在浏览器预览中优雅降级）
 async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (typeof invoke !== 'function' || !isTauriEnv()) {
+    throw new Error('tauri_unavailable');
+  }
+
   try {
-    const mod = await import('@tauri-apps/api/core');
-    if (typeof mod?.invoke === 'function' && isTauriEnv()) {
-      return await mod.invoke<T>(cmd, args);
+    return await invoke<T>(cmd, args);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
     }
-    throw new Error('tauri_unavailable');
-  } catch {
-    // 浏览器预览模式：返回模拟数据
-    throw new Error('tauri_unavailable');
+    throw new Error(cmd);
   }
 }
 
@@ -109,6 +129,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [hwAccelInfo, setHwAccelInfo] = useState<HardwareAccelerationInfo | null>(null);
   const [codecTestLoading, setCodecTestLoading] = useState(false);
   const [codecTestResult, setCodecTestResult] = useState<boolean | null>(null);
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [systemInfoError, setSystemInfoError] = useState<string | null>(null);
+  const [systemInfoLoading, setSystemInfoLoading] = useState(false);
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
+  const [cacheError, setCacheError] = useState<string | null>(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
+  const [cacheActionLoading, setCacheActionLoading] = useState(false);
+  const [cacheActionMessage, setCacheActionMessage] = useState<string | null>(null);
+  const [logFiles, setLogFiles] = useState<string[]>([]);
+  const [logFilesLoading, setLogFilesLoading] = useState(false);
+  const [logFilesError, setLogFilesError] = useState<string | null>(null);
+  const [selectedLogFile, setSelectedLogFile] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState('');
+  const [logContentLoading, setLogContentLoading] = useState(false);
+  const [logContentError, setLogContentError] = useState<string | null>(null);
+  const [hasLoadedLogs, setHasLoadedLogs] = useState(false);
 
   // 质量预设选项
   const qualityPresets: QualityPreset[] = [
@@ -201,6 +237,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     return `${mb.toFixed(0)} MB`;
   }, []);
 
+  const formatBytes = useCallback((bytes?: number | null): string => {
+    if (bytes == null || bytes < 0) return '未知';
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+    return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+  }, []);
+
   const loadGpuDiagnostics = useCallback(async () => {
     try {
       setGpuLoading(true);
@@ -224,6 +273,118 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       setHwAccelInfo(null);
     } finally {
       setGpuLoading(false);
+    }
+  }, []);
+
+  const loadSystemDiagnostics = useCallback(async () => {
+    try {
+      setSystemInfoLoading(true);
+      setCacheLoading(true);
+      setSystemInfoError(null);
+      setCacheError(null);
+      setCacheActionMessage(null);
+
+      const [info, size] = await Promise.all([
+        safeInvoke<SystemInfo>('get_system_info'),
+        safeInvoke<number>('get_cache_size')
+      ]);
+
+      setSystemInfo(info);
+      setCacheSize(size);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message === 'tauri_unavailable') {
+        setSystemInfoError('当前环境不支持系统诊断（浏览器预览模式）');
+        setCacheError('当前环境不支持缓存诊断（浏览器预览模式）');
+      } else {
+        setSystemInfoError('系统信息加载失败');
+        setCacheError('缓存信息加载失败');
+      }
+      setSystemInfo(null);
+      setCacheSize(null);
+    } finally {
+      setSystemInfoLoading(false);
+      setCacheLoading(false);
+    }
+  }, []);
+
+  const refreshCacheSize = useCallback(async () => {
+    try {
+      setCacheLoading(true);
+      setCacheError(null);
+      const size = await safeInvoke<number>('get_cache_size');
+      setCacheSize(size);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      setCacheError(
+        message === 'tauri_unavailable'
+          ? '当前环境不支持缓存诊断（浏览器预览模式）'
+          : '缓存信息加载失败'
+      );
+    } finally {
+      setCacheLoading(false);
+    }
+  }, []);
+
+  const handleClearCache = useCallback(async () => {
+    try {
+      setCacheActionLoading(true);
+      setCacheActionMessage(null);
+      await safeInvoke<string>('clear_cache');
+      setCacheActionMessage('缓存已清理');
+      await refreshCacheSize();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      setCacheActionMessage(
+        message === 'tauri_unavailable'
+          ? '当前环境不支持缓存清理（浏览器预览模式）'
+          : '清理缓存失败'
+      );
+    } finally {
+      setCacheActionLoading(false);
+    }
+  }, [refreshCacheSize]);
+
+  const loadLogFiles = useCallback(async () => {
+    try {
+      setLogFilesLoading(true);
+      setLogFilesError(null);
+      const files = await safeInvoke<string[]>('get_log_files');
+      setLogFiles(files);
+      setHasLoadedLogs(true);
+      if (!files.includes(selectedLogFile || '')) {
+        setSelectedLogFile(null);
+        setLogContent('');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      setLogFilesError(
+        message === 'tauri_unavailable'
+          ? '当前环境不支持日志查看（浏览器预览模式）'
+          : '日志列表加载失败'
+      );
+    } finally {
+      setLogFilesLoading(false);
+    }
+  }, [selectedLogFile]);
+
+  const loadLogContent = useCallback(async (fileName: string) => {
+    try {
+      setSelectedLogFile(fileName);
+      setLogContentLoading(true);
+      setLogContentError(null);
+      const content = await safeInvoke<string>('read_log_file', { fileName });
+      setLogContent(content);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      setLogContentError(
+        message === 'tauri_unavailable'
+          ? '当前环境不支持日志查看（浏览器预览模式）'
+          : '日志内容读取失败'
+      );
+      setLogContent('');
+    } finally {
+      setLogContentLoading(false);
     }
   }, []);
 
@@ -271,9 +432,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       loadAvailableCodecs();
       loadGpuDiagnostics();
+      loadSystemDiagnostics();
       setCodecTestResult(null);
     }
-  }, [isOpen, loadAvailableCodecs, loadGpuDiagnostics]);
+  }, [isOpen, loadAvailableCodecs, loadGpuDiagnostics, loadSystemDiagnostics]);
 
   // ESC键关闭弹窗
   useEffect(() => {
@@ -564,6 +726,104 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                     </span>
                   )}
                 </div>
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <h3>系统与缓存</h3>
+
+              <div className="setting-group gpu-diagnostics">
+                <div className="gpu-header">
+                  <span className="setting-label">运行环境</span>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={loadSystemDiagnostics}
+                    disabled={disabled || systemInfoLoading || cacheLoading}
+                    type="button"
+                  >
+                    {systemInfoLoading || cacheLoading ? '刷新中...' : '刷新'}
+                  </button>
+                </div>
+
+                {systemInfoError && <div className="gpu-error">{systemInfoError}</div>}
+
+                {!systemInfoError && systemInfo && (
+                  <div className="gpu-list">
+                    <div className="gpu-item">
+                      <div className="gpu-title">{systemInfo.system_name} {systemInfo.system_version}</div>
+                      <div className="gpu-meta">CPU 核心: {systemInfo.cpu_count}</div>
+                      <div className="gpu-meta">CPU 占用: {systemInfo.cpu_usage.toFixed(1)}%</div>
+                      <div className="gpu-meta">内存占用: {systemInfo.memory_usage.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="gpu-summary">
+                  <div className="gpu-meta">
+                    缓存大小: {cacheLoading ? '读取中...' : formatBytes(cacheSize)}
+                  </div>
+                  <div className="gpu-test-row">
+                    <button
+                      className="btn-secondary btn-small"
+                      onClick={handleClearCache}
+                      disabled={disabled || cacheActionLoading || cacheLoading}
+                      type="button"
+                    >
+                      {cacheActionLoading ? '清理中...' : '清理缓存'}
+                    </button>
+                    {cacheActionMessage && (
+                      <span className="gpu-test-result success">{cacheActionMessage}</span>
+                    )}
+                  </div>
+                  {cacheError && <div className="gpu-error">{cacheError}</div>}
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <h3>日志</h3>
+
+              <div className="setting-group gpu-diagnostics diagnostics-card">
+                <div className="gpu-header">
+                  <span className="setting-label">应用日志</span>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={loadLogFiles}
+                    disabled={disabled || logFilesLoading}
+                    type="button"
+                  >
+                    {logFilesLoading ? '加载中...' : '加载日志'}
+                  </button>
+                </div>
+
+                {logFilesError && <div className="gpu-error">{logFilesError}</div>}
+
+                {!logFilesError && hasLoadedLogs && logFiles.length === 0 && (
+                  <div className="gpu-meta">暂无日志文件</div>
+                )}
+
+                {logFiles.length > 0 && (
+                  <div className="log-browser">
+                    <div className="log-file-list">
+                      {logFiles.map((file) => (
+                        <button
+                          key={file}
+                          type="button"
+                          className={`log-file-item ${selectedLogFile === file ? 'active' : ''}`}
+                          onClick={() => void loadLogContent(file)}
+                        >
+                          {file}
+                        </button>
+                      ))}
+                    </div>
+
+                    <pre className="log-content">
+                      {logContentLoading ? '正在读取日志...' : logContent || '请选择日志文件'}
+                    </pre>
+                  </div>
+                )}
+
+                {logContentError && <div className="gpu-error">{logContentError}</div>}
               </div>
             </div>
           </div>
