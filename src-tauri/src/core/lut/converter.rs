@@ -481,7 +481,7 @@ impl LutConverter {
     }
 
     /// 获取转换方法
-    pub fn get_conversion_method(
+    fn get_conversion_method(
         &self,
         from: LutFormat,
         to: LutFormat,
@@ -887,6 +887,26 @@ LUT_3D_SIZE 2
         assert!(message.contains(&source_path.display().to_string()));
     }
 
+    #[tokio::test]
+    async fn test_load_lut_file_includes_file_path_for_unknown_format() {
+        let converter = LutConverter::new();
+        let dir = tempdir().expect("temp dir");
+        let source_path = dir.path().join("unknown.xyz");
+
+        fs::write(&source_path, "irrelevant")
+            .await
+            .expect("write unknown lut");
+
+        let err = converter
+            .load_lut_file(&source_path)
+            .await
+            .expect_err("unknown format should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("无法识别 LUT 格式"));
+        assert!(message.contains(&source_path.display().to_string()));
+    }
+
     #[test]
     fn test_optimize_lut_compresses_similar_3d_colors() {
         let converter = LutConverter::new();
@@ -1000,254 +1020,4 @@ pub enum FormatFeature {
     InputRange,
     /// 输出范围支持
     OutputRange,
-}
-
-#[cfg(disabled_test)]
-mod tests {
-    use super::*;
-    use crate::core::lut::LutData1D;
-    use std::collections::HashMap;
-
-    fn create_test_3d_lut() -> LutData {
-        let mut data_3d = vec![vec![vec![[0.0; 3]; 2]; 2]; 2];
-        // 简单的测试数据
-        for r in 0..2 {
-            for g in 0..2 {
-                for b in 0..2 {
-                    data_3d[r][g][b] = [r as f32, g as f32, b as f32];
-                }
-            }
-        }
-
-        LutData {
-            lut_type: LutType::ThreeDimensional,
-            format: LutFormat::Cube,
-            size: 2,
-            data_3d: Some(data_3d),
-            data_1d: None,
-            metadata: HashMap::new(),
-            title: Some("Test LUT".to_string()),
-            description: None,
-            domain_min: [0.0, 0.0, 0.0],
-            domain_max: [1.0, 1.0, 1.0],
-        }
-    }
-
-    fn create_test_1d_lut() -> LutData {
-        let mut lut = LutData::new_1d(LutFormat::Lut, 4, Some("Test 1D LUT".to_string()));
-        // 填充 1D 三通道数据
-        for i in 0..4 {
-            let v = match i {
-                0 => 0.0,
-                1 => 0.33,
-                2 => 0.66,
-                _ => 1.0,
-            };
-            // R,G,B 三个通道一致
-            let _ = lut.set_1d_point(0, i, v);
-            let _ = lut.set_1d_point(1, i, v);
-            let _ = lut.set_1d_point(2, i, v);
-        }
-        lut
-    }
-
-    #[test]
-    fn test_converter_creation() {
-        let converter = LutConverter::new();
-        assert!(!converter.conversion_map.is_empty());
-    }
-
-    #[test]
-    fn test_format_compatibility() {
-        assert!(FormatCompatibilityChecker::are_compatible(
-            LutFormat::Cube,
-            LutFormat::ThreeDL
-        ));
-
-        assert!(FormatCompatibilityChecker::are_compatible(
-            LutFormat::Lut,
-            LutFormat::Mga
-        ));
-
-        assert!(!FormatCompatibilityChecker::are_compatible(
-            LutFormat::Cube,
-            LutFormat::Lut
-        ));
-    }
-
-    #[test]
-    fn test_dimension_type() {
-        assert_eq!(
-            FormatCompatibilityChecker::get_dimension_type(LutFormat::Cube),
-            LutType::ThreeDimensional
-        );
-
-        assert_eq!(
-            FormatCompatibilityChecker::get_dimension_type(LutFormat::Lut),
-            LutType::OneDimensional
-        );
-    }
-
-    #[test]
-    fn test_feature_support() {
-        assert!(FormatCompatibilityChecker::supports_feature(
-            LutFormat::Cube,
-            FormatFeature::Metadata
-        ));
-
-        assert!(!FormatCompatibilityChecker::supports_feature(
-            LutFormat::ThreeDL,
-            FormatFeature::Metadata
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_direct_conversion() {
-        let converter = LutConverter::new();
-        let lut_data = create_test_3d_lut();
-
-        let converted = converter
-            .direct_convert(&lut_data, LutFormat::ThreeDL)
-            .await
-            .unwrap();
-
-        assert_eq!(converted.format, LutFormat::ThreeDL);
-        assert_eq!(converted.data, lut_data.data);
-        assert_eq!(converted.size, lut_data.size);
-    }
-
-    #[tokio::test]
-    async fn test_resample_conversion() {
-        let converter = LutConverter::new();
-        let lut_data = create_test_3d_lut();
-
-        let options = ConversionOptions {
-            target_size: Some(4),
-            ..Default::default()
-        };
-
-        let converted = converter
-            .resample_convert(&lut_data, LutFormat::ThreeDL, &options)
-            .await
-            .unwrap();
-
-        assert_eq!(converted.format, LutFormat::ThreeDL);
-        assert_eq!(converted.size, 4);
-        assert_eq!(converted.data.len(), 4 * 4 * 4);
-    }
-
-    #[tokio::test]
-    async fn test_interpolate_conversion() {
-        let converter = LutConverter::new();
-        let lut_data = create_test_1d_lut();
-
-        let options = ConversionOptions {
-            target_size: Some(8),
-            ..Default::default()
-        };
-
-        let converted = converter
-            .interpolate_convert(&lut_data, LutFormat::Mga, &options)
-            .await
-            .unwrap();
-
-        assert_eq!(converted.format, LutFormat::Mga);
-        assert_eq!(converted.size, 8);
-        assert_eq!(converted.data.len(), 8);
-    }
-
-    #[test]
-    fn test_trilinear_interpolation() {
-        let converter = LutConverter::new();
-        let lut_data = create_test_3d_lut();
-
-        // 测试中心点插值
-        let result = converter
-            .trilinear_interpolate(&lut_data, 0.5, 0.5, 0.5)
-            .unwrap();
-
-        // 中心点应该是所有角点的平均值
-        assert!((result[0] - 0.5).abs() < 0.01);
-        assert!((result[1] - 0.5).abs() < 0.01);
-        assert!((result[2] - 0.5).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_linear_interpolation_1d() {
-        let converter = LutConverter::new();
-        let lut_data = create_test_1d_lut();
-
-        // 测试中点插值
-        let result = converter.linear_interpolate_1d(&lut_data, 0.5).unwrap();
-
-        // 应该在第二和第三个点之间
-        assert!((result[0] - 0.5).abs() < 0.1);
-        assert!((result[1] - 0.5).abs() < 0.1);
-        assert!((result[2] - 0.5).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_conversion_support() {
-        let converter = LutConverter::new();
-
-        assert!(converter.is_conversion_supported(LutFormat::Cube, LutFormat::ThreeDL));
-        assert!(converter.is_conversion_supported(LutFormat::Lut, LutFormat::Mga));
-        assert!(!converter.is_conversion_supported(LutFormat::Cube, LutFormat::Lut));
-    }
-
-    #[test]
-    fn test_quality_estimation() {
-        let converter = LutConverter::new();
-
-        assert_eq!(
-            converter.estimate_conversion_quality(LutFormat::Cube, LutFormat::Cube),
-            ConversionQuality::Lossless
-        );
-
-        assert_eq!(
-            converter.estimate_conversion_quality(LutFormat::Cube, LutFormat::ThreeDL),
-            ConversionQuality::HighQuality
-        );
-    }
-
-    #[test]
-    fn test_color_distance() {
-        let converter = LutConverter::new();
-
-        let color1 = [0.0, 0.0, 0.0];
-        let color2 = [1.0, 1.0, 1.0];
-
-        let distance = converter.color_distance(&color1, &color2);
-        assert!((distance - 1.732).abs() < 0.01); // sqrt(3)
-    }
-
-    #[test]
-    fn test_average_colors() {
-        let converter = LutConverter::new();
-
-        let colors = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
-
-        let avg = converter.average_colors(&colors);
-        assert_eq!(avg, [0.5, 0.5, 0.5]);
-    }
-
-    #[test]
-    fn test_optimization() {
-        let converter = LutConverter::new();
-        let mut lut_data = create_test_3d_lut();
-        lut_data
-            .metadata
-            .insert("test".to_string(), "value".to_string());
-
-        let options = OptimizationOptions {
-            remove_metadata: true,
-            color_precision: Some(10.0),
-            ..Default::default()
-        };
-
-        let optimized = converter.optimize_lut(&lut_data, &options).unwrap();
-
-        assert!(optimized.metadata.is_empty());
-    }
-
 }
