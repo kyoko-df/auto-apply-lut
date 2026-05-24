@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ffmpeg:*)",
+      "Read(//opt/homebrew/Cellar/libvpx/1.15.2/lib/**)",
+      "Read(//opt/homebrew/Cellar/**)",
+      "Bash(npm run build:*)",
+      "Bash(cargo check:*)",
+      "Bash(tsc:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npx tsc:*)",
+      "Bash(pnpm run tauri:*)",
+      "Bash(ffprobe:*)",
+      "Bash(npm run tauri:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
