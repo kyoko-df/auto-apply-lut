@@ -1,7 +1,7 @@
 //! 系统事件模块
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// 系统事件类型
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -584,7 +584,6 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_frame_extraction_options() {

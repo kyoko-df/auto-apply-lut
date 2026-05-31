@@ -3,11 +3,9 @@
 
 use crate::types::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as AsyncCommand;
 use tokio::sync::Mutex;
 
@@ -503,7 +501,6 @@ pub struct FFmpegInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_ffmpeg_manager_creation() {

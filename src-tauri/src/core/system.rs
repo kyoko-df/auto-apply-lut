@@ -1,7 +1,7 @@
 //! 系统信息模块
 //! 提供系统资源监控和信息查询功能
 
-use crate::types::{AppError, AppResult};
+use crate::types::AppResult;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 

@@ -1118,7 +1118,6 @@ impl ProcessingStats {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use tempfile::TempDir;
 
     fn create_test_settings() -> EncodingSettings {
         EncodingSettings {

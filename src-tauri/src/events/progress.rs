@@ -1,7 +1,7 @@
 //! 进度事件模块
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// 进度事件数据
 #[derive(Debug, Clone, Serialize, Deserialize)]

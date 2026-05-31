@@ -252,6 +252,10 @@ fn command_interfaces_system() {
 
         let sys = run_async(system_manager::get_system_info()).expect("get_system_info failed");
         assert!(sys.cpu_count > 0);
+        assert_ne!(sys.system_name, "System");
+        assert_ne!(sys.system_version, "Unknown");
+        assert!(!sys.disk_usage.is_empty());
+        assert!(sys.disk_usage[0].total_space > 0);
 
         let settings = run_async(system_manager::get_app_settings(state_ref(&config_manager)))
             .expect("get_app_settings failed");
@@ -345,6 +349,8 @@ fn command_interfaces_system() {
             run_async(system_manager::get_available_codecs()).expect("get_available_codecs failed");
         assert!(!codecs.video_codecs.is_empty());
         assert!(!codecs.audio_codecs.is_empty());
+        assert!(codecs.video_codecs.iter().any(|codec| codec.name == "libx264"));
+        assert!(codecs.audio_codecs.iter().any(|codec| codec.name == "aac"));
 
         run_async(system_manager::set_ffmpeg_path_config(
             Some("/definitely/not/found/ffmpeg".to_string()),

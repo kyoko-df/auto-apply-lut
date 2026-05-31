@@ -5,9 +5,8 @@ use crate::core::ffmpeg::{EncodingSettings, Resolution, VideoInfo};
 use crate::types::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::process::Command as AsyncCommand;
 
 /// FFmpeg工具集
@@ -770,7 +769,6 @@ impl CleanupResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_version_info() {

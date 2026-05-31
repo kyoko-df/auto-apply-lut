@@ -6,7 +6,6 @@ use crate::types::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::task;
 
 /// 扫描选项
 #[derive(Debug, Clone, Serialize, Deserialize)]

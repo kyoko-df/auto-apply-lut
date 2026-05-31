@@ -2,7 +2,7 @@
 
 use crate::types::error::AppError;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// 错误事件数据
 #[derive(Debug, Clone, Serialize, Deserialize)]

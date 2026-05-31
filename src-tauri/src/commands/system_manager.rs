@@ -1,8 +1,10 @@
+use crate::core::ffmpeg::utils::FFmpegUtils;
 use crate::utils::{config::ConfigManager, logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
-use sysinfo::System;
+use sysinfo::{Disks, System};
 use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,10 +68,10 @@ pub struct AppSettings {
 #[tauri::command]
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     let mut sys = System::new_all();
+    sys.refresh_all();
 
-    // 简化实现，提供基本的系统信息
     let cpu_count = sys.cpus().len();
-    let cpu_usage = 0.0; // 简化为0，避免API兼容性问题
+    let cpu_usage = sys.global_cpu_usage();
 
     let total_memory = sys.total_memory();
     let available_memory = sys.available_memory();
@@ -79,14 +81,26 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         0.0
     };
 
-    // 简化磁盘信息，只提供基本信息
-    let disk_usage = vec![DiskInfo {
-        name: "System".to_string(),
-        mount_point: "/".to_string(),
-        total_space: total_memory, // 简化使用内存信息
-        available_space: available_memory,
-        usage_percentage: memory_usage,
-    }];
+    let disk_usage = Disks::new_with_refreshed_list()
+        .iter()
+        .map(|disk| {
+            let total_space = disk.total_space();
+            let available_space = disk.available_space();
+            let usage_percentage = if total_space > 0 {
+                ((total_space - available_space) as f64 / total_space as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            DiskInfo {
+                name: disk.name().to_string_lossy().to_string(),
+                mount_point: disk.mount_point().to_string_lossy().to_string(),
+                total_space,
+                available_space,
+                usage_percentage,
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(SystemInfo {
         cpu_usage,
@@ -95,8 +109,10 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         available_memory,
         disk_usage,
         cpu_count,
-        system_name: "System".to_string(),
-        system_version: "Unknown".to_string(),
+        system_name: System::name().unwrap_or_else(|| "Unknown".to_string()),
+        system_version: System::long_os_version()
+            .or_else(System::os_version)
+            .unwrap_or_else(|| "Unknown".to_string()),
     })
 }
 
@@ -278,51 +294,97 @@ pub async fn get_cache_size() -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
-    // 返回常用的编解码器列表
-    let video_codecs = vec![
-        CodecInfo {
-            name: "h264".to_string(),
-            description: "H.264/AVC".to_string(),
-            supported: true,
-        },
-        CodecInfo {
-            name: "h265".to_string(),
-            description: "H.265/HEVC".to_string(),
-            supported: true,
-        },
-        CodecInfo {
-            name: "vp9".to_string(),
-            description: "VP9".to_string(),
-            supported: true,
-        },
-        CodecInfo {
-            name: "av1".to_string(),
-            description: "AV1".to_string(),
-            supported: true,
-        },
-    ];
+    let fallback = AvailableCodecs {
+        video_codecs: vec![
+            CodecInfo {
+                name: "libx264".to_string(),
+                description: "H.264 (libx264)".to_string(),
+                supported: true,
+            },
+            CodecInfo {
+                name: "libx265".to_string(),
+                description: "H.265/HEVC (libx265)".to_string(),
+                supported: true,
+            },
+            CodecInfo {
+                name: "libvpx-vp9".to_string(),
+                description: "VP9 (libvpx-vp9)".to_string(),
+                supported: true,
+            },
+            CodecInfo {
+                name: "libaom-av1".to_string(),
+                description: "AV1 (libaom-av1)".to_string(),
+                supported: true,
+            },
+        ],
+        audio_codecs: vec![
+            CodecInfo {
+                name: "aac".to_string(),
+                description: "AAC".to_string(),
+                supported: true,
+            },
+            CodecInfo {
+                name: "mp3".to_string(),
+                description: "MP3".to_string(),
+                supported: true,
+            },
+            CodecInfo {
+                name: "opus".to_string(),
+                description: "Opus".to_string(),
+                supported: true,
+            },
+        ],
+    };
 
-    let audio_codecs = vec![
-        CodecInfo {
-            name: "aac".to_string(),
-            description: "AAC".to_string(),
+    let ffmpeg_path = crate::core::ffmpeg::discover_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+    let ffprobe_path = ffmpeg_path
+        .parent()
+        .map(|parent| {
+            parent.join(if cfg!(target_os = "windows") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            })
+        })
+        .unwrap_or_else(|| PathBuf::from(if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" }));
+
+    let utils = FFmpegUtils::new(ffmpeg_path, ffprobe_path);
+    let supported = match utils.get_supported_codecs().await {
+        Ok(supported) => supported,
+        Err(_) => return Ok(fallback),
+    };
+
+    let video_codecs = supported
+        .video_codecs
+        .into_iter()
+        .map(|codec| CodecInfo {
+            name: codec.name,
+            description: codec.description,
             supported: true,
-        },
-        CodecInfo {
-            name: "mp3".to_string(),
-            description: "MP3".to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    let audio_codecs = supported
+        .audio_codecs
+        .into_iter()
+        .map(|codec| CodecInfo {
+            name: codec.name,
+            description: codec.description,
             supported: true,
-        },
-        CodecInfo {
-            name: "opus".to_string(),
-            description: "Opus".to_string(),
-            supported: true,
-        },
-    ];
+        })
+        .collect::<Vec<_>>();
 
     Ok(AvailableCodecs {
-        video_codecs,
-        audio_codecs,
+        video_codecs: if video_codecs.is_empty() {
+            fallback.video_codecs
+        } else {
+            video_codecs
+        },
+        audio_codecs: if audio_codecs.is_empty() {
+            fallback.audio_codecs
+        } else {
+            audio_codecs
+        },
     })
 }
 
