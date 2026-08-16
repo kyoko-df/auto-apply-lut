@@ -356,3 +356,221 @@
   .loading-spinner { border-color: #4b5563; border-top-color: var(--color-primary); }
   .loading-text { color: var(--color-fg-subtle); }
 }
+
+/* Workbench refinements */
+.upload-block {
+  position: relative;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--surface-card), transparent 3%);
+  box-shadow: var(--shadow-soft);
+}
+
+.upload-block::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-primary), transparent 42%);
+  opacity: 0.72;
+}
+
+.upload-block-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-left: 4px;
+}
+
+.upload-block-header h4 {
+  color: var(--color-fg);
+  font-size: 0.9rem;
+  letter-spacing: -0.01em;
+}
+
+.upload-block-header p {
+  max-width: 260px;
+  color: var(--color-fg-subtle);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.upload-block-header::after {
+  content: 'DROP / BROWSE';
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--color-fg-subtle);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  opacity: 0.68;
+}
+
+.upload-toolbar {
+  gap: 8px;
+}
+
+.upload-toolbar .upload-toolbar-button {
+  height: 34px;
+  min-height: 34px;
+  border-color: var(--border-soft);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 0.76rem;
+}
+
+.upload-toolbar .upload-toolbar-button:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--color-primary), transparent 50%);
+  color: var(--color-primary);
+}
+
+.upload-scan-summary {
+  overflow: hidden;
+  color: var(--color-fg-subtle);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-area {
+  min-height: 0;
+  padding: 12px;
+  border-color: color-mix(in oklab, var(--border-soft), var(--color-primary) 14%);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface-base), transparent 20%);
+  box-shadow: none;
+}
+
+.upload-area:hover:not(.disabled) {
+  border-color: color-mix(in oklab, var(--color-primary), transparent 38%);
+  background: color-mix(in oklab, var(--surface-card), var(--color-primary) 4%);
+}
+
+.upload-area.drag-over {
+  border-style: solid;
+  background: color-mix(in oklab, var(--surface-card), var(--color-primary) 9%);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary), transparent 88%);
+  transform: none;
+}
+
+.upload-placeholder {
+  gap: 10px;
+  padding: 14px 8px;
+}
+
+.upload-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--color-primary), transparent 76%);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--color-primary), transparent 91%);
+  color: var(--color-primary);
+  opacity: 1;
+}
+
+.primary-text {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.secondary-text {
+  font-size: 0.74rem;
+}
+
+.file-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  font-size: 0;
+}
+
+.video-icon {
+  background: color-mix(in oklab, var(--color-primary), transparent 88%);
+  color: var(--color-primary);
+}
+
+.lut-icon {
+  background: color-mix(in oklab, #9c6ade, transparent 88%);
+  color: #8c5bc7;
+}
+
+.file-name {
+  margin-bottom: 3px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.file-size,
+.badge {
+  font-size: 0.65rem;
+}
+
+.video-list,
+.lut-list { gap: 7px; }
+
+.video-item,
+.lut-item {
+  gap: 10px;
+  padding: 9px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface-elevated), transparent 8%);
+  box-shadow: none;
+}
+
+.video-item:hover:not(.disabled),
+.lut-item:hover:not(.disabled) {
+  border-color: var(--border-soft);
+  background: var(--surface-elevated);
+  transform: none;
+}
+
+.video-item.active {
+  border-color: color-mix(in oklab, var(--color-primary), transparent 45%);
+  background: color-mix(in oklab, var(--color-primary), transparent 91%);
+}
+
+.video-actions,
+.lut-actions { gap: 5px; }
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.icon-button:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--color-primary), transparent 45%);
+  color: var(--color-primary);
+  transform: none;
+}
+
+.clear-button {
+  width: 25px;
+  height: 25px;
+  background: transparent;
+  color: var(--color-fg-subtle);
+  font-size: 0;
+}
+
+.clear-button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-danger), transparent 88%);
+  color: var(--color-danger);
+  transform: none;
+}
+
+@media (max-width: 520px) {
+  .upload-block-header::after { display: none; }
+  .upload-block { padding: 14px; }
+}

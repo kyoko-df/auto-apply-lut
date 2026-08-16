@@ -873,40 +873,75 @@ function App() {
   const hasProcessingTask = processingTasks.some(task => task.status === 'processing');
   const selectedVideoCount = videoFiles.length > 0 ? videoFiles.length : activeVideoFile ? 1 : 0;
   const canProcess = selectedVideoCount > 0 && lutFiles.length > 0 && !hasProcessingTask;
+  const hasVideoSelection = selectedVideoCount > 0;
+  const hasLutSelection = lutFiles.length > 0;
 
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-brand">
-          <h1>Auto Apply LUT</h1>
-          <p>自动化视频 LUT 批处理工作台</p>
+          <div className="brand-lockup">
+            <div className="brand-mark" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div>
+              <div className="header-kicker">COLOR WORKFLOW · BETA</div>
+              <h1>Auto Apply LUT</h1>
+            </div>
+          </div>
+          <p>把素材、LUT 与输出设置整理在一个清晰的处理流里。</p>
         </div>
         <div className="header-actions">
           <button
-            className="btn-settings"
+            className="btn-settings btn-library"
             type="button"
             onClick={() => setIsLutLibraryOpen(true)}
           >
+            <span className="button-glyph" aria-hidden="true">✦</span>
             LUT 资料库
           </button>
           <div className="header-metrics">
             <div className="metric-chip">
-              <span className="metric-label">视频</span>
+              <span className="metric-label">视频素材</span>
               <span className="metric-value">{selectedVideoCount}</span>
             </div>
             <div className="metric-chip">
-              <span className="metric-label">LUT</span>
+              <span className="metric-label">LUT 图层</span>
               <span className="metric-value">{lutFiles.length}</span>
             </div>
             <div className={`metric-chip ${hasProcessingTask ? 'is-busy' : ''}`}>
               <span className="metric-label">状态</span>
-              <span className="metric-value">{hasProcessingTask ? '处理中' : '待命'}</span>
+              <span className="metric-value">
+                <span className="metric-status-dot" aria-hidden="true" />
+                {hasProcessingTask ? '处理中' : '待命'}
+              </span>
             </div>
           </div>
         </div>
       </header>
 
       <main className="app-main">
+        <div className="workflow-rail" aria-label="处理流程">
+          <div className={`workflow-step ${hasVideoSelection ? 'is-complete' : 'is-current'}`}>
+            <span className="workflow-index">01</span>
+            <span>素材</span>
+          </div>
+          <span className={`workflow-connector ${hasVideoSelection ? 'is-complete' : ''}`} aria-hidden="true" />
+          <div className={`workflow-step ${hasLutSelection ? 'is-complete' : hasVideoSelection ? 'is-current' : ''}`}>
+            <span className="workflow-index">02</span>
+            <span>色彩</span>
+          </div>
+          <span className={`workflow-connector ${hasLutSelection ? 'is-complete' : ''}`} aria-hidden="true" />
+          <div className={`workflow-step ${canProcess || hasProcessingTask ? 'is-current' : ''}`}>
+            <span className="workflow-index">03</span>
+            <span>输出</span>
+          </div>
+          <div className="workflow-summary">
+            {hasProcessingTask ? '正在处理队列中的素材' : canProcess ? '工作区已就绪' : '从左侧导入素材开始'}
+          </div>
+        </div>
         <div className="app-grid">
           <FileUpload
             onVideoSelect={handleVideoSelect}
@@ -926,10 +961,15 @@ function App() {
 
           <div className="settings-section card">
             <div className="settings-summary">
+              <span className="section-eyebrow">STEP 03 / OUTPUT</span>
               <h3>处理控制</h3>
               <p>{canProcess ? '已就绪，可开始处理' : '请先选择视频文件和 LUT 文件'}</p>
             </div>
             <div className="settings-actions">
+              <span className={`readiness-indicator ${canProcess ? 'is-ready' : ''}`}>
+                <span className="readiness-dot" aria-hidden="true" />
+                {canProcess ? '就绪' : '等待素材'}
+              </span>
               <button
                 className="btn-settings"
                 onClick={() => setIsSettingsOpen(true)}
@@ -956,6 +996,13 @@ function App() {
           </div>
 
           <div className="status-section card">
+            <div className="status-section-heading">
+              <div>
+                <span className="section-eyebrow">ACTIVITY</span>
+                <h3>处理队列</h3>
+              </div>
+              <span className="status-section-caption">实时更新</span>
+            </div>
             <ProcessingStatus
               tasks={processingTasks}
               onCancelTask={handleCancelTask}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { ChevronDown, ChevronUp, FolderOpen, Palette, Play, ScanLine, Video, X } from 'lucide-react';
 import './FileUpload.css';
 
 interface FileUploadProps {
@@ -387,7 +388,8 @@ const FileUpload: React.FC<FileUploadProps> = ({
               onClick={importProjectDirectory}
               disabled={disabled || loading}
             >
-              📂 扫描目录
+              <ScanLine size={16} strokeWidth={2} aria-hidden="true" />
+              扫描目录
             </button>
             {scanSummary && <div className="upload-scan-summary">{scanSummary}</div>}
           </div>
@@ -415,7 +417,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                       role="button"
                       tabIndex={0}
                     >
-                      <div className="file-icon video-icon">🎬</div>
+                      <div className="file-icon video-icon" aria-hidden="true"><Video size={19} strokeWidth={1.9} /></div>
                       <div className="file-details">
                         <div className="file-name">{videoFile.name}</div>
                         <div className="file-meta">
@@ -437,7 +439,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                           disabled={disabled || activeVideoPath === videoFile.path}
                           aria-label="设为预览"
                         >
-                          ▶
+                          <Play size={13} fill="currentColor" strokeWidth={1.8} />
                         </button>
                         <button
                           className="clear-button"
@@ -448,7 +450,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                           disabled={disabled}
                           aria-label="移除"
                         >
-                          ✕
+                          <X size={15} strokeWidth={2} />
                         </button>
                       </div>
                     </div>
@@ -456,7 +458,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                 </div>
               ) : (
                 <div className="upload-placeholder">
-                  <div className="upload-icon">📹</div>
+                  <div className="upload-icon" aria-hidden="true"><Video size={34} strokeWidth={1.5} /></div>
                   <div className="upload-text">
                     <div className="primary-text">选择视频文件</div>
                     <div className="secondary-text">
@@ -489,7 +491,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                 <div className="lut-list">
                   {lutFiles.map((lutFile, index) => (
                     <div className="lut-item" key={lutFile.path}>
-                      <div className="file-icon lut-icon">🎨</div>
+                      <div className="file-icon lut-icon" aria-hidden="true"><Palette size={19} strokeWidth={1.9} /></div>
                       <div className="file-details">
                         <div className="file-name">{lutFile.name}</div>
                         <div className="file-meta">
@@ -508,7 +510,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                           disabled={disabled || index === 0}
                           aria-label="上移"
                         >
-                          ↑
+                          <ChevronUp size={15} strokeWidth={2} />
                         </button>
                         <button
                           className="icon-button"
@@ -519,7 +521,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                           disabled={disabled || index === lutFiles.length - 1}
                           aria-label="下移"
                         >
-                          ↓
+                          <ChevronDown size={15} strokeWidth={2} />
                         </button>
                         <button
                           className="clear-button"
@@ -530,7 +532,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                           disabled={disabled}
                           aria-label="移除"
                         >
-                          ✕
+                          <X size={15} strokeWidth={2} />
                         </button>
                       </div>
                     </div>
@@ -538,7 +540,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
                 </div>
               ) : (
                 <div className="upload-placeholder">
-                  <div className="upload-icon">📁</div>
+                  <div className="upload-icon" aria-hidden="true"><FolderOpen size={34} strokeWidth={1.5} /></div>
                   <div className="upload-text">
                     <div className="primary-text">选择LUT文件</div>
                     <div className="secondary-text">

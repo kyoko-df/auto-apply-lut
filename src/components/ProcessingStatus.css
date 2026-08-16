@@ -336,3 +336,89 @@
     justify-content: flex-end;
   }
 }
+
+/* Workbench refinements */
+.status-section .processing-status {
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.status-section .processing-status .status-header {
+  display: none;
+}
+
+.status-section .processing-status .overall-progress {
+  padding: 13px 0 14px;
+  border-bottom-color: var(--border-soft);
+}
+
+.status-section .processing-status .tasks-container {
+  padding: 14px 0 0;
+}
+
+.status-section .processing-status .active-tasks,
+.status-section .processing-status .completed-tasks {
+  margin-bottom: 14px;
+}
+
+.status-section .processing-status .active-tasks h4,
+.status-section .processing-status .completed-tasks h4 {
+  margin-bottom: 8px;
+  color: var(--color-fg-subtle);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.status-section .processing-status .task-item {
+  margin-bottom: 7px;
+  padding: 10px 11px;
+  border-color: var(--border-soft);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface-elevated), transparent 12%);
+  box-shadow: none;
+}
+
+.status-section .processing-status .task-item:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.status-section .processing-status .task-item.active {
+  border-color: color-mix(in oklab, var(--color-primary), transparent 52%);
+  background: color-mix(in oklab, var(--color-primary), transparent 93%);
+}
+
+.status-section .processing-status .task-name {
+  font-size: 0.78rem;
+}
+
+.status-section .processing-status .task-status {
+  padding: 2px 7px;
+  font-size: 0.64rem;
+}
+
+.status-section .processing-status .task-details,
+.status-section .processing-status .progress-text {
+  font-size: 0.68rem;
+}
+
+.status-section .processing-status .action-button {
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+}
+
+.status-section .processing-status.empty {
+  padding: 20px 0 8px;
+}
+
+.status-section .processing-status.empty .empty-icon {
+  font-size: 2.1rem;
+}

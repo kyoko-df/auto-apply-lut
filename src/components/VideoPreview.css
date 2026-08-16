@@ -457,3 +457,136 @@
     transition: none;
   }
 }
+
+/* Workbench refinements */
+.video-preview {
+  gap: 12px;
+}
+
+.preview-header {
+  margin-bottom: 2px;
+}
+
+.preview-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 0.94rem;
+  letter-spacing: -0.01em;
+}
+
+.preview-header h3::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary), transparent 86%);
+}
+
+.preview-controls {
+  gap: 2px;
+  padding: 3px;
+  border-color: var(--border-soft);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--surface-base), transparent 10%);
+}
+
+.mode-button {
+  padding: 7px 11px;
+  border-radius: 7px;
+  color: var(--color-fg-subtle);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.mode-button:hover {
+  background: color-mix(in oklab, var(--surface-card), var(--color-primary) 5%);
+  color: var(--color-fg);
+}
+
+.mode-button.active {
+  background: var(--color-fg);
+  color: var(--surface-base);
+  box-shadow: none;
+}
+
+.preview-content {
+  min-height: 320px;
+  border-color: color-mix(in oklab, var(--color-fg), transparent 76%);
+  background: #0e1517;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), inset 0 18px 46px rgba(0,0,0,0.18);
+}
+
+.video-container {
+  border-radius: 10px;
+  box-shadow: 0 16px 36px rgba(0,0,0,0.28);
+}
+
+.empty-state {
+  gap: 12px;
+}
+
+.empty-icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 1px solid rgba(137, 225, 229, 0.18);
+  border-radius: 18px;
+  background: rgba(79, 208, 222, 0.08);
+  color: #71dce2;
+  font-size: 2.4rem;
+  filter: none;
+  opacity: 0.9;
+}
+
+.empty-text {
+  color: rgba(235, 247, 246, 0.78);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.video-info {
+  min-height: 0;
+  padding: 14px 0 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.video-info h4,
+.processing-progress h4 {
+  margin-bottom: 10px;
+  color: var(--color-fg);
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.info-grid {
+  gap: 0 18px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.info-item {
+  padding: 7px 0;
+}
+
+.info-label,
+.info-value {
+  font-size: 0.74rem;
+}
+
+@media (max-width: 520px) {
+  .preview-header {
+    align-items: stretch;
+  }
+
+  .preview-controls {
+    width: 100%;
+  }
+
+  .preview-content { min-height: 240px; }
+}
