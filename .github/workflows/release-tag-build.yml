@@ -1,61 +1,174 @@
-name: Release Build
+name: Standalone Release Build
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing version tag to build (for example v0.1.0)"
+        required: true
+        type: string
+      platform:
+        description: "Windows requires audited FFMPEG_WINDOWS_VENDOR_URL and FFMPEG_WINDOWS_VENDOR_SHA256 repository variables"
+        required: true
+        default: mac-arm64
+        type: choice
+        options:
+          - mac-arm64
+          - windows-x64
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-          - os: ubuntu-22.04
-          - os: windows-latest
-    runs-on: ${{ matrix.os }}
+  mac-arm64:
+    if: github.event_name == 'push' || inputs.platform == 'mac-arm64'
+    runs-on: macos-15
+    env:
+      LUTLAB_REQUIRE_MEDIA_TESTS: "1"
+      FFMPEG_BUNDLE_TARGET: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: "pnpm"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build and publish Tauri app
-        uses: tauri-apps/tauri-action@v0
+      - name: Fetch pinned standalone FFmpeg and ffprobe
+        run: pnpm fetch:ffmpeg
+
+      - name: Verify binaries and enable actual media tests
+        run: |
+          pnpm prepare:ffmpeg --target aarch64-apple-darwin
+          echo "$PWD/src-tauri/resources/bin/macos/aarch64" >> "$GITHUB_PATH"
+
+      - name: Verify release tooling and app
+        run: |
+          pnpm test:release
+          pnpm test
+          pnpm build
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build standalone macOS application
+        run: pnpm tauri build --target aarch64-apple-darwin --config src-tauri/tauri.full.conf.json --bundles app,dmg
+
+      - name: Verify packaged and relocated application before upload
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/LUTlab.app"
+          node scripts/verify-macos-release.mjs "$app_path"
+          relocated_dir="$(mktemp -d "$RUNNER_TEMP/lutlab-relocation.XXXXXX")"
+          ditto "$app_path" "$relocated_dir/LUTlab.app"
+          node scripts/verify-macos-release.mjs "$relocated_dir/LUTlab.app"
+
+      - name: Upload verified application to draft release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/lutlab-release.json" 2>/dev/null; then
+            node -e "if (!JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).isDraft) throw Error('Refusing to overwrite a published release')" "$RUNNER_TEMP/lutlab-release.json"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "LUTlab $RELEASE_TAG" --notes "Standalone macOS Apple Silicon build. Packaged and relocated application verification passed. Review Developer ID signing, notarization and complete GPL source delivery before public publication."
+          fi
+          gh release upload "$RELEASE_TAG" src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg --clobber
+
+  windows-x64:
+    if: github.event_name == 'workflow_dispatch' && inputs.platform == 'windows-x64'
+    runs-on: windows-latest
+    env:
+      LUTLAB_REQUIRE_MEDIA_TESTS: "1"
+      FFMPEG_BUNDLE_TARGET: x86_64-pc-windows-msvc
+      FFMPEG_VENDOR_DIR: ${{ github.workspace }}/.release-vendor
+      FFMPEG_WINDOWS_VENDOR_URL: ${{ vars.FFMPEG_WINDOWS_VENDOR_URL }}
+      FFMPEG_WINDOWS_VENDOR_SHA256: ${{ vars.FFMPEG_WINDOWS_VENDOR_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Auto Apply LUT ${{ github.ref_name }}"
-          releaseBody: "Release generated by GitHub Actions."
-          releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          args: --config src-tauri/tauri.lite.conf.json
+          ref: ${{ inputs.release_tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Fetch explicitly configured and audited Windows vendor archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:FFMPEG_WINDOWS_VENDOR_URL -notmatch '^https://') {
+            throw 'Set FFMPEG_WINDOWS_VENDOR_URL to an audited HTTPS ZIP archive containing windows/x86_64/ffmpeg.exe and ffprobe.exe.'
+          }
+          if ($env:FFMPEG_WINDOWS_VENDOR_SHA256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'Set FFMPEG_WINDOWS_VENDOR_SHA256 to the independently verified archive SHA256.'
+          }
+          $archive = Join-Path $env:RUNNER_TEMP 'lutlab-ffmpeg-vendor.zip'
+          Invoke-WebRequest -Uri $env:FFMPEG_WINDOWS_VENDOR_URL -OutFile $archive
+          $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash
+          if ($actual -ne $env:FFMPEG_WINDOWS_VENDOR_SHA256) { throw 'FFmpeg vendor archive SHA256 mismatch.' }
+          Expand-Archive -Path $archive -DestinationPath $env:FFMPEG_VENDOR_DIR
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify standalone binaries and enable actual media tests
+        shell: pwsh
+        run: |
+          pnpm prepare:ffmpeg --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Join-Path $env:GITHUB_WORKSPACE 'src-tauri/resources/bin/windows/x86_64' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify release tooling and app
+        shell: pwsh
+        run: |
+          pnpm test:release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build standalone Windows installer
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.full.conf.json --bundles nsis
+
+      - name: Upload validated Windows installer to draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $existing = gh release view $env:RELEASE_TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) { throw 'Refusing to overwrite a published release.' }
+          } else {
+            gh release create $env:RELEASE_TAG --verify-tag --draft --title "LUTlab $env:RELEASE_TAG" --notes "Windows installer with validated standalone engines and offline WebView2. Review native installer behavior, signing and GPL source delivery before public publication."
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $installers = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe' | ForEach-Object { $_.FullName })
+          if ($installers.Count -eq 0) { throw 'No installer was produced.' }
+          gh release upload $env:RELEASE_TAG @installers --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

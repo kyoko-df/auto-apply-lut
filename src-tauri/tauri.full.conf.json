@@ -1,11 +1,22 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "auto-apply-lut-full",
+  "productName": "LUTlab",
   "identifier": "com.kyokodf.auto-apply-lut.full",
   "build": {
     "beforeBundleCommand": "node scripts/prepare-ffmpeg.mjs"
   },
   "bundle": {
-    "resources": ["resources/**/*"]
+    "resources": {
+      "resources/bin/": "bin/",
+      "resources/licenses/": "licenses/",
+      "resources/ffmpeg-manifest.json": "ffmpeg-manifest.json"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "offlineInstaller" }
+    }
   }
 }

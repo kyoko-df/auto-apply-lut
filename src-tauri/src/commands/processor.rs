@@ -41,7 +41,7 @@ fn apply_lut_error_strategy(
             Ok((valid_lut_paths, invalid_lut_messages))
         }
         LutErrorStrategy::SkipOnError => {
-            if valid_lut_paths.is_empty() {
+            if valid_lut_paths.is_empty() && !invalid_lut_messages.is_empty() {
                 return Err(invalid_lut_messages.join("\n"));
             }
             Ok((valid_lut_paths, invalid_lut_messages))
@@ -80,6 +80,7 @@ pub async fn start_video_processing(
     task_manager: State<'_, TaskManager>,
     video_processor: State<'_, VideoProcessor>,
     lut_manager: State<'_, LutManager>,
+    config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<ProcessResponse, String> {
     logger::log_info(&format!("Starting video processing: {:?}", request));
 
@@ -92,9 +93,10 @@ pub async fn start_video_processing(
         }
     }
     lut_paths.retain(|p| !p.trim().is_empty());
-    if lut_paths.is_empty() {
-        return Err("No LUT files provided".to_string());
+    if !request.intensity.is_finite() || !(0.0..=1.0).contains(&request.intensity) {
+        return Err("LUT intensity must be between 0 and 1".to_string());
     }
+    let settings = build_encoding_settings(&request.options)?;
 
     // Validate input file (async)
     if fs::metadata(&request.input_path).await.is_err() {
@@ -131,26 +133,6 @@ pub async fn start_video_processing(
         valid_lut_paths,
         invalid_lut_messages,
     )?;
-
-    // Create output directory if it doesn't exist (async)
-    if let Some(parent) = Path::new(&request.output_path).parent() {
-        if let Err(e) = fs::create_dir_all(parent).await {
-            return Err(format!("Failed to create output directory: {}", e));
-        }
-    }
-
-    // Create task
-    let task_id = match task_manager.create_task(
-        TaskType::VideoProcessing,
-        format!("Processing video: {}", request.input_path),
-    ) {
-        Ok(id) => id,
-        Err(e) => return Err(format!("Failed to create task: {}", e)),
-    };
-    // Start the task lifecycle
-    if let Err(e) = task_manager.start_task(&task_id) {
-        logger::log_error(&format!("Failed to start task {}: {}", task_id, e));
-    }
 
     // 生成最终输出路径（如未提供）
     let final_output_path = if request.output_path.is_empty() {
@@ -202,16 +184,40 @@ pub async fn start_video_processing(
     if let Err(e) = fs::create_dir_all(&out_parent).await {
         return Err(format!("Failed to create output directory: {}", e));
     }
-    // 写权限快速检测
-    let test_file = out_parent.join(".write_test.tmp");
-    match fs::File::create(&test_file).await {
-        Ok(_) => {
-            let _ = fs::remove_file(&test_file).await;
-        }
-        Err(e) => {
-            return Err(format!("Output directory not writable: {}", e));
-        }
+    if Path::new(&final_output_path).exists()
+        && std::fs::canonicalize(&final_output_path).ok()
+            == std::fs::canonicalize(&request.input_path).ok()
+    {
+        return Err("Output path must differ from input video".to_string());
     }
+    let final_output_path = super::batch_manager::available_output_path(
+        Path::new(&final_output_path),
+        &mut std::collections::HashSet::new(),
+    )?
+    .to_string_lossy()
+    .to_string();
+    let configured_path = config_manager
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {}", e))?
+        .get_config()
+        .ffmpeg_path
+        .clone();
+    let ffmpeg_path = match configured_path.filter(|path| !path.trim().is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => crate::core::ffmpeg::discover_ffmpeg_path().map_err(|e| e.to_string())?,
+    };
+    let mut vp = video_processor.clone_for_task();
+    vp.set_ffmpeg_path(ffmpeg_path);
+    let task_id = task_manager
+        .create_task(
+            TaskType::VideoProcessing,
+            format!("Processing video: {}", request.input_path),
+        )
+        .map_err(|e| e.to_string())?;
+    task_manager
+        .start_task(&task_id)
+        .map_err(|e| e.to_string())?;
+    let _ = task_manager.set_output_path(&task_id, final_output_path.clone());
 
     // 后台启动真实 FFmpeg 处理
     let task_id_clone = task_id.clone();
@@ -220,9 +226,7 @@ pub async fn start_video_processing(
     let lut_clones = valid_lut_paths.clone();
     let tm = task_manager.inner().clone();
 
-    // Extract FFmpeg path from VideoProcessor
-    let ffmpeg_path = video_processor.ffmpeg_path().to_path_buf();
-    let settings = build_encoding_settings(&request.options)?;
+    // Share cancellation registry with the application-managed processor.
     let intensity = request.intensity;
 
     tokio::spawn(async move {
@@ -230,8 +234,7 @@ pub async fn start_video_processing(
             "Starting real FFmpeg processing for task: {}",
             task_id_clone
         ));
-        // 为后台任务创建独立的处理器实例，并接入进度事件
-        let mut vp = crate::core::ffmpeg::processor::VideoProcessor::new(ffmpeg_path);
+        // Per-job progress sender; shared cancellation and task state.
         let (tx, mut rx) = mpsc::unbounded_channel::<ProcessingProgress>();
         vp.set_progress_sender(tx);
 
@@ -278,7 +281,11 @@ pub async fn start_video_processing(
                         .unwrap_or("Unknown error")
                         .to_string();
                     let _ = tm.update_description(&task_id_clone, first_line);
-                    let _ = tm.fail_task(&task_id_clone, err_msg);
+                    if err_msg == "Cancelled" {
+                        let _ = tm.cancel_task(&task_id_clone);
+                    } else {
+                        let _ = tm.fail_task(&task_id_clone, err_msg);
+                    }
                 }
             }
             Err(e) => {
@@ -455,7 +462,10 @@ pub async fn get_video_info(
             ffprobe_path.to_string_lossy().to_string(),
         )
     } else {
-        match crate::core::video::VideoManager::new() {
+        match tokio::task::spawn_blocking(crate::core::video::VideoManager::new)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             Ok(m) => m,
             Err(e) => return Err(e.to_string()),
         }

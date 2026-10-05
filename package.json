@@ -11,25 +11,26 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs --target aarch64-apple-darwin",
+    "test:release": "node --test scripts/*.test.mjs",
+    "release:mac:arm64": "pnpm fetch:ffmpeg && pnpm tauri:build:full:mac:arm64",
     "tauri:build:lite": "tauri build --config src-tauri/tauri.lite.conf.json",
     "tauri:build:full:win": "tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.full.conf.json",
-    "tauri:build:full:mac": "tauri build --target universal-apple-darwin --config src-tauri/tauri.full.conf.json"
+    "tauri:build:full:mac": "tauri build --config src-tauri/tauri.full.conf.json",
+    "tauri:build:full:mac:arm64": "tauri build --target aarch64-apple-darwin --config src-tauri/tauri.full.conf.json",
+    "tauri:build:full:mac:universal": "tauri build --target universal-apple-darwin --config src-tauri/tauri.full.conf.json",
+    "benchmark:media": "node scripts/benchmark-media.mjs"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "^4.1.12",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@types/node": "^24.3.0",
     "autoprefixer": "^10.4.21",
-    "clsx": "^2.1.1",
     "lucide-react": "^0.542.0",
     "postcss": "^8.5.6",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "tailwind-merge": "^3.3.1",
-    "tailwindcss": "^4.1.12",
-    "zustand": "^5.0.8"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

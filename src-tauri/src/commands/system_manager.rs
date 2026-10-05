@@ -63,6 +63,43 @@ pub struct AppSettings {
     pub color_space: String,
     pub two_pass_encoding: bool,
     pub preserve_metadata: bool,
+    #[serde(default = "default_output_bit_depth")]
+    pub output_bit_depth: String,
+    #[serde(default = "default_input_color_space")]
+    pub input_color_space: String,
+    #[serde(default = "default_preview_quality")]
+    pub preview_quality: String,
+}
+
+fn default_output_bit_depth() -> String {
+    "8".into()
+}
+fn default_input_color_space() -> String {
+    "auto".into()
+}
+fn default_preview_quality() -> String {
+    "fast".into()
+}
+
+fn validate_color_settings(settings: &AppSettings) -> Result<(), String> {
+    if !matches!(settings.output_bit_depth.as_str(), "8" | "10") {
+        return Err("输出位深必须为 8 或 10".into());
+    }
+    if settings.output_bit_depth == "10"
+        && !matches!(settings.video_codec.as_str(), "libx265" | "prores_ks")
+    {
+        return Err("10-bit 输出仅支持 HEVC 和 ProRes HQ".into());
+    }
+    if !matches!(
+        settings.input_color_space.as_str(),
+        "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg"
+    ) {
+        return Err("不支持的输入色彩空间".into());
+    }
+    if !matches!(settings.preview_quality.as_str(), "fast" | "accurate") {
+        return Err("不支持的预览质量".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -146,6 +183,9 @@ pub async fn get_app_settings(
         color_space: config.color_space.clone(),
         two_pass_encoding: config.two_pass_encoding,
         preserve_metadata: config.preserve_metadata,
+        output_bit_depth: config.output_bit_depth.clone(),
+        input_color_space: config.input_color_space.clone(),
+        preview_quality: config.preview_quality.clone(),
     })
 }
 
@@ -154,9 +194,14 @@ pub async fn update_app_settings(
     settings: AppSettings,
     config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<String, String> {
+    validate_color_settings(&settings)?;
     let mut cfg = config_manager
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
+
+    let next_ffmpeg_path =
+        (!settings.ffmpeg_path.trim().is_empty()).then(|| settings.ffmpeg_path.clone());
+    let engine_changed = cfg.get_config().ffmpeg_path != next_ffmpeg_path;
 
     cfg.update_config(|config| {
         config.default_output_dir = if settings.default_output_dir.trim().is_empty() {
@@ -187,8 +232,15 @@ pub async fn update_app_settings(
         config.color_space = settings.color_space.clone();
         config.two_pass_encoding = settings.two_pass_encoding;
         config.preserve_metadata = settings.preserve_metadata;
+        config.output_bit_depth = settings.output_bit_depth.clone();
+        config.input_color_space = settings.input_color_space.clone();
+        config.preview_quality = settings.preview_quality.clone();
     })
     .map_err(|e| format!("Failed to update settings: {}", e))?;
+
+    if engine_changed {
+        crate::core::ffmpeg::invalidate_discovery_cache();
+    }
 
     logger::log_info("App settings update requested");
     Ok("Settings updated successfully".to_string())
@@ -231,16 +283,47 @@ pub async fn read_log_file(file_name: String) -> Result<String, String> {
         .map_err(|e| format!("Failed to get app data dir: {}", e))?
         .join("logs");
 
-    let log_file = log_dir.join(&file_name);
+    read_log_file_in(&log_dir, &file_name)
+}
 
-    if !log_file.exists() {
-        return Err("Log file not found".to_string());
+fn read_log_file_in(log_dir: &std::path::Path, file_name: &str) -> Result<String, String> {
+    use std::io::Read;
+    const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+    let name = std::path::Path::new(file_name);
+    if file_name.is_empty()
+        || !file_name.ends_with(".log")
+        || file_name.contains(['/', '\\'])
+        || name.file_name().and_then(|value| value.to_str()) != Some(file_name)
+    {
+        return Err("日志名称必须是日志目录内的 .log 文件名".into());
     }
-
-    match std::fs::read_to_string(&log_file) {
-        Ok(content) => Ok(content),
-        Err(e) => Err(format!("Failed to read log file: {}", e)),
+    let root = log_dir
+        .canonicalize()
+        .map_err(|error| format!("无法读取日志目录：{error}"))?;
+    let candidate = root.join(file_name);
+    if !std::fs::symlink_metadata(&candidate)
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_file()
+    {
+        return Err("日志路径必须是普通文件".into());
     }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err("日志文件不在应用日志目录内".into());
+    }
+    let mut content = Vec::new();
+    std::fs::File::open(canonical)
+        .map_err(|error| error.to_string())?
+        .take(MAX_LOG_BYTES + 1)
+        .read_to_end(&mut content)
+        .map_err(|error| error.to_string())?;
+    if content.len() as u64 > MAX_LOG_BYTES {
+        return Err("日志文件超过 2 MB，请在日志目录中直接查看".into());
+    }
+    String::from_utf8(content).map_err(|error| format!("日志内容不是 UTF-8：{error}"))
 }
 
 #[tauri::command]
@@ -336,7 +419,8 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
         ],
     };
 
-    let ffmpeg_path = crate::core::ffmpeg::discover_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+    let ffmpeg_path =
+        crate::core::ffmpeg::discover_ffmpeg_path().unwrap_or_else(|_| PathBuf::from("ffmpeg"));
     let ffprobe_path = ffmpeg_path
         .parent()
         .map(|parent| {
@@ -346,7 +430,13 @@ pub async fn get_available_codecs() -> Result<AvailableCodecs, String> {
                 "ffprobe"
             })
         })
-        .unwrap_or_else(|| PathBuf::from(if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" }));
+        .unwrap_or_else(|| {
+            PathBuf::from(if cfg!(target_os = "windows") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            })
+        });
 
     let utils = FFmpegUtils::new(ffmpeg_path, ffprobe_path);
     let supported = match utils.get_supported_codecs().await {
@@ -395,12 +485,89 @@ pub struct FfmpegInfo {
     pub library_versions: Option<HashMap<String, String>>, // 本地链接库版本（native 时）
     pub binary_version: Option<String>,                    // 外部可执行版本（external 时）
     pub binary_path: Option<String>,                       // 外部可执行路径（external 时）
+    pub probe_path: Option<String>,
+    pub probe_version: Option<String>,
+}
+
+async fn read_tool_version(
+    path: &std::path::Path,
+    name: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let mut command = tokio::process::Command::new(path);
+    command
+        .arg("-version")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| format!("{name} 检查超时，请检查可执行文件：{}", path.display()))?
+        .map_err(|error| format!("无法执行 {name} {}：{error}", path.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{name} 版本检查失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let version = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if !version
+        .to_ascii_lowercase()
+        .starts_with(&format!("{} version", name.to_ascii_lowercase()))
+    {
+        return Err(format!("所选程序不是有效的 {name}：{}", path.display()));
+    }
+    Ok(version)
+}
+
+#[cfg(all(test, unix))]
+mod engine_probe_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn version_checks_validate_the_tool_and_bound_unresponsive_processes() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tool");
+        tokio::fs::write(&executable, "#!/bin/sh\nprintf 'ffmpeg version test\\n'\n")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .await
+            .unwrap();
+        let limit = std::time::Duration::from_secs(1);
+        assert_eq!(
+            read_tool_version(&executable, "FFmpeg", limit)
+                .await
+                .unwrap(),
+            "ffmpeg version test"
+        );
+        assert!(read_tool_version(&executable, "FFprobe", limit)
+            .await
+            .is_err());
+        tokio::fs::write(&executable, "#!/bin/sh\nexec sleep 20\n")
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert!(
+            read_tool_version(&executable, "FFmpeg", std::time::Duration::from_millis(50))
+                .await
+                .unwrap_err()
+                .contains("超时")
+        );
+        assert!(started.elapsed() < limit);
+    }
 }
 
 #[tauri::command]
 pub async fn get_ffmpeg_info(
     config_manager: State<'_, Mutex<ConfigManager>>,
 ) -> Result<FfmpegInfo, String> {
+    // Diagnostics are an explicit recheck, including after replacing a binary.
+    crate::core::ffmpeg::invalidate_discovery_cache();
     // 如果启用了 ffmpeg_native 特性，则读取已链接库的版本信息
     #[cfg(feature = "ffmpeg_native")]
     {
@@ -449,51 +616,61 @@ pub async fn get_ffmpeg_info(
             library_versions: Some(libs),
             binary_version: None,
             binary_path: None,
+            probe_path: None,
+            probe_version: None,
         });
     }
 
     // 未启用 ffmpeg_native 特性时，回退到外部可执行文件版本信息
     #[cfg(not(feature = "ffmpeg_native"))]
     {
-        let cfg = config_manager
+        // Never retain the settings lock while discovering or running binaries.
+        let configured = config_manager
             .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        let ffmpeg_bin = if let Some(p) = cfg
+            .map_err(|e| format!("Config lock poisoned: {}", e))?
             .get_config()
             .ffmpeg_path
             .clone()
-            .filter(|s| !s.trim().is_empty())
-        {
-            p
+            .filter(|s| !s.trim().is_empty());
+        let (ffmpeg_bin, ffprobe_bin) = if let Some(path) = configured {
+            let ffmpeg = PathBuf::from(path);
+            let probe_name = if cfg!(target_os = "windows") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            };
+            let probe = ffmpeg
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| parent.join(probe_name))
+                .unwrap_or_else(|| PathBuf::from(probe_name));
+            (ffmpeg, probe)
         } else {
-            crate::core::ffmpeg::discover_ffmpeg_path()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string()
+            tokio::task::spawn_blocking(|| {
+                Ok::<_, String>((
+                    crate::core::ffmpeg::discover_ffmpeg_path()
+                        .map_err(|error| error.to_string())?,
+                    crate::core::ffmpeg::discover_ffprobe_path()
+                        .map_err(|error| error.to_string())?,
+                ))
+            })
+            .await
+            .map_err(|error| error.to_string())??
         };
-
-        let output = std::process::Command::new(&ffmpeg_bin)
-            .arg("-version")
-            .output()
-            .map_err(|e| format!("无法执行 '{}' 获取版本信息: {}", ffmpeg_bin, e))?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "执行 '{}' -version 失败，退出码: {:?}",
-                ffmpeg_bin,
-                output.status.code()
-            ));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let first_line = stdout.lines().next().unwrap_or("").to_string();
+        let limit = std::time::Duration::from_secs(10);
+        let (version, probe_version) = tokio::try_join!(
+            read_tool_version(&ffmpeg_bin, "FFmpeg", limit),
+            read_tool_version(&ffprobe_bin, "FFprobe", limit),
+        )?;
 
         Ok(FfmpegInfo {
             mode: "external".to_string(),
             static_linked: false,
             library_versions: None,
-            binary_version: Some(first_line),
-            binary_path: Some(ffmpeg_bin),
+            binary_version: Some(version),
+            binary_path: Some(ffmpeg_bin.to_string_lossy().into()),
+            probe_path: Some(ffprobe_bin.to_string_lossy().into()),
+            probe_version: Some(probe_version),
         })
     }
 }
@@ -523,5 +700,49 @@ pub async fn set_ffmpeg_path_config(
     let mut cfg = config_manager
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    cfg.set_ffmpeg_path(path).map_err(|e| e.to_string())
+    cfg.set_ffmpeg_path(path).map_err(|e| e.to_string())?;
+    crate::core::ffmpeg::invalidate_discovery_cache();
+    Ok(())
+}
+
+#[cfg(test)]
+mod bounded_log_tests {
+    use super::*;
+
+    #[test]
+    fn log_reads_require_a_basename_and_reject_large_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("app.log"), "hello").unwrap();
+        assert_eq!(
+            read_log_file_in(directory.path(), "app.log").unwrap(),
+            "hello"
+        );
+        for invalid in [
+            "../secret.log",
+            "/tmp/secret.log",
+            "sub/app.log",
+            "sub\\app.log",
+            "app.txt",
+            "",
+        ] {
+            assert!(read_log_file_in(directory.path(), invalid).is_err());
+        }
+        std::fs::write(
+            directory.path().join("large.log"),
+            vec![0; 2 * 1024 * 1024 + 1],
+        )
+        .unwrap();
+        assert!(read_log_file_in(directory.path(), "large.log")
+            .unwrap_err()
+            .contains("2 MB"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_reads_reject_symlinks_even_if_the_suffix_matches() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), directory.path().join("outside.log")).unwrap();
+        assert!(read_log_file_in(directory.path(), "outside.log").is_err());
+    }
 }

@@ -25,6 +25,12 @@ pub struct VideoInfo {
     pub codec: Option<String>,
     /// 比特率
     pub bitrate: Option<u64>,
+    pub pixel_format: Option<String>,
+    pub bit_depth: Option<u8>,
+    pub color_primaries: Option<String>,
+    pub color_transfer: Option<String>,
+    pub color_matrix: Option<String>,
+    pub color_range: Option<String>,
     /// 创建时间
     pub created_at: Option<DateTime<Utc>>,
     /// 修改时间

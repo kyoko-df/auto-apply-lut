@@ -6,13 +6,37 @@ use crate::types::LutFormat;
 use crate::utils::config::ConfigManager;
 use crate::utils::logger;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::State;
 use tokio::fs;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use uuid::Uuid;
+
+static UNFINISHED_BATCHES: AtomicUsize = AtomicUsize::new(0);
+
+pub fn has_unfinished_batches() -> bool {
+    UNFINISHED_BATCHES.load(Ordering::SeqCst) != 0
+}
+
+/// Shared by the coordinator and every spawned item. If the coordinator
+/// unwinds, detached items continue to protect shutdown until their own cleanup.
+struct BatchLifetime;
+
+impl BatchLifetime {
+    fn new() -> Self {
+        UNFINISHED_BATCHES.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for BatchLifetime {
+    fn drop(&mut self) {
+        UNFINISHED_BATCHES.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BatchItem {
@@ -29,7 +53,10 @@ pub struct BatchItem {
 pub struct BatchRequest {
     pub items: Vec<BatchItem>,
     pub output_directory: String,
+    #[serde(default)]
     pub preserve_structure: bool,
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
     #[serde(flatten)]
     pub options: ProcessingOptions,
 }
@@ -63,6 +90,10 @@ pub struct BatchItemProgress {
     pub status: String,
     pub progress: f32,
     pub error: Option<String>,
+    pub encoder: Option<String>,
+    pub speed: Option<f64>,
+    pub eta_seconds: Option<f64>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -123,6 +154,10 @@ struct BatchItemRuntime {
     progress: f32,
     task_id: Option<String>,
     error: Option<String>,
+    encoder: Option<String>,
+    speed: Option<f64>,
+    eta_seconds: Option<f64>,
+    message: Option<String>,
 }
 
 struct BatchRuntime {
@@ -140,7 +175,12 @@ fn batch_states() -> &'static AsyncMutex<BatchStateMap> {
     BATCH_STATES.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
 
-fn resolve_output_path(item: &BatchItem, output_directory: &str) -> String {
+fn resolve_output_path(
+    item: &BatchItem,
+    output_directory: &str,
+    extension: &str,
+    structure_root: Option<&Path>,
+) -> String {
     if !item.output_path.trim().is_empty() {
         return item.output_path.clone();
     }
@@ -150,12 +190,7 @@ fn resolve_output_path(item: &BatchItem, output_directory: &str) -> String {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
-    let extension = input_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("mp4");
-
-    let target_dir = if !output_directory.trim().is_empty() {
+    let mut target_dir = if !output_directory.trim().is_empty() {
         PathBuf::from(output_directory)
     } else {
         input_path
@@ -164,10 +199,67 @@ fn resolve_output_path(item: &BatchItem, output_directory: &str) -> String {
             .unwrap_or_else(|| PathBuf::from("."))
     };
 
+    if let (Some(root), Some(parent)) = (structure_root, input_path.parent()) {
+        if let Ok(relative) = parent.strip_prefix(root) {
+            target_dir = target_dir.join(relative);
+        }
+    }
     target_dir
         .join(format!("{}_lut_applied.{}", file_stem, extension))
         .to_string_lossy()
         .to_string()
+}
+
+/// Resolve collisions before launch, including identical filenames imported from
+/// different folders. The processor still publishes atomically without overwrite.
+pub(super) fn available_output_path(
+    path: &Path,
+    reserved: &mut HashSet<PathBuf>,
+) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let parent =
+        std::fs::canonicalize(parent).map_err(|e| format!("Invalid output directory: {}", e))?;
+    let file_name = path.file_name().ok_or("Invalid output filename")?;
+    let initial = parent.join(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .unwrap_or("output");
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("mp4");
+    let mut candidate = initial.clone();
+    let mut index = 2;
+    while candidate.exists() || reserved.contains(&collision_key(&candidate)) {
+        candidate = parent.join(format!("{} ({}).{}", stem, index, extension));
+        index += 1;
+    }
+    reserved.insert(collision_key(&candidate));
+    Ok(candidate)
+}
+
+fn collision_key(path: &Path) -> PathBuf {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn common_input_parent(items: &[BatchItem]) -> Option<PathBuf> {
+    let mut common = Path::new(&items.first()?.input_path)
+        .parent()?
+        .to_path_buf();
+    for item in items.iter().skip(1) {
+        let parent = Path::new(&item.input_path).parent()?;
+        while !parent.starts_with(&common) {
+            if !common.pop() {
+                return None;
+            }
+        }
+    }
+    Some(common)
 }
 
 async fn ensure_output_parent_exists(output_path: &str) -> Result<(), String> {
@@ -197,8 +289,12 @@ fn scan_recursive(
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         let entry_path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
 
-        if entry_path.is_dir() {
+        if file_type.is_dir() {
             scan_recursive(&entry_path, video_exts, lut_exts, videos, luts, size)?;
             continue;
         }
@@ -276,24 +372,23 @@ fn finalize_batch_status(runtime: &mut BatchRuntime) {
     let (completed, failed, cancelled) = batch_counts(&runtime.item_states);
     let total = runtime.item_states.len();
 
-    runtime.status = if runtime.cancel_requested && cancelled > 0 {
-        BatchRuntimeStatus::Cancelled
-    } else if completed == total && total > 0 {
-        BatchRuntimeStatus::Completed
-    } else if failed == total && total > 0 {
-        BatchRuntimeStatus::Failed
-    } else if runtime.item_states.iter().any(|state| {
+    let active = runtime.item_states.iter().any(|state| {
         matches!(
             state.status,
             BatchItemRuntimeStatus::Running | BatchItemRuntimeStatus::Pending
         )
-    }) {
+    });
+    runtime.status = if active {
         if runtime.cancel_requested {
             BatchRuntimeStatus::Cancelling
         } else {
             BatchRuntimeStatus::Running
         }
-    } else if completed > 0 {
+    } else if runtime.cancel_requested && cancelled > 0 {
+        BatchRuntimeStatus::Cancelled
+    } else if failed > 0 {
+        BatchRuntimeStatus::Failed
+    } else if completed == total && total > 0 {
         BatchRuntimeStatus::Completed
     } else if cancelled > 0 {
         BatchRuntimeStatus::Cancelled
@@ -369,9 +464,30 @@ pub async fn start_batch_processing(
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
+    let mut settings = build_encoding_settings(&request.options)?;
+    let format = request
+        .options
+        .output_format
+        .as_deref()
+        .unwrap_or("mp4")
+        .trim_start_matches('.');
+    let structure_root = if request.preserve_structure {
+        common_input_parent(&request.items)
+    } else {
+        None
+    };
+    let mut reserved = HashSet::new();
+    let mut validated_luts = HashSet::new();
     let mut normalized_items = Vec::with_capacity(request.items.len());
     for item in request.items {
-        if fs::metadata(&item.input_path).await.is_err() {
+        if !item.intensity.is_finite() || !(0.0..=1.0).contains(&item.intensity) {
+            return Err("LUT intensity must be between 0 and 1".to_string());
+        }
+        if !fs::metadata(&item.input_path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+        {
             return Err(format!("Input file does not exist: {}", item.input_path));
         }
 
@@ -384,14 +500,10 @@ pub async fn start_batch_processing(
             }
         }
         lut_paths.retain(|path| !path.trim().is_empty());
-        if lut_paths.is_empty() {
-            return Err(format!(
-                "No LUT files provided for input: {}",
-                item.input_path
-            ));
-        }
-
         for lut_path in &lut_paths {
+            if validated_luts.contains(lut_path) {
+                continue;
+            }
             if fs::metadata(lut_path).await.is_err() {
                 return Err(format!("LUT file does not exist: {}", lut_path));
             }
@@ -407,10 +519,25 @@ pub async fn start_batch_processing(
                     validation.errors.join("; ")
                 ));
             }
+            validated_luts.insert(lut_path.clone());
         }
 
-        let output_path = resolve_output_path(&item, &request.output_directory);
+        let output_path = resolve_output_path(
+            &item,
+            &request.output_directory,
+            format,
+            structure_root.as_deref(),
+        );
         ensure_output_parent_exists(&output_path).await?;
+        if Path::new(&output_path).exists()
+            && std::fs::canonicalize(&output_path).ok()
+                == std::fs::canonicalize(&item.input_path).ok()
+        {
+            return Err("Output path must differ from input video".to_string());
+        }
+        let output_path = available_output_path(Path::new(&output_path), &mut reserved)?
+            .to_string_lossy()
+            .to_string();
 
         normalized_items.push(BatchItem {
             lut_paths,
@@ -421,15 +548,33 @@ pub async fn start_batch_processing(
 
     let batch_id = Uuid::new_v4().to_string();
     let total_items = normalized_items.len();
-    let max_concurrent = config_manager
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?
-        .get_config()
-        .max_concurrent_tasks
-        .max(1);
-    let settings = build_encoding_settings(&request.options)?;
+    let (configured_concurrent, configured_ffmpeg) = {
+        let manager = config_manager
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        (
+            manager.get_config().max_concurrent_tasks,
+            manager.get_config().ffmpeg_path.clone(),
+        )
+    };
+    let ffmpeg_path = match configured_ffmpeg.filter(|path| !path.trim().is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => tokio::task::spawn_blocking(crate::core::ffmpeg::discover_ffmpeg_path)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?,
+    };
+    let max_concurrent = request
+        .max_concurrent
+        .unwrap_or(configured_concurrent)
+        .clamp(1, 4);
+    settings.extra_params.insert(
+        "__threads__".into(),
+        (num_cpus::get() / max_concurrent).clamp(1, 8).to_string(),
+    );
 
-    let mut processor = VideoProcessor::new(video_processor.ffmpeg_path().to_path_buf());
+    let mut processor = video_processor.clone_for_task();
+    processor.set_ffmpeg_path(ffmpeg_path);
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProcessingProgress>();
     processor.set_progress_sender(progress_tx);
     let processor = Arc::new(processor);
@@ -447,11 +592,16 @@ pub async fn start_batch_processing(
                 progress: 0.0,
                 task_id: None,
                 error: None,
+                encoder: None,
+                speed: None,
+                eta_seconds: None,
+                message: None,
             })
             .collect(),
         processor: Some(processor.clone()),
     }));
 
+    let batch_lifetime = Arc::new(BatchLifetime::new());
     {
         let mut states = batch_states().lock().await;
         states.insert(batch_id.clone(), runtime.clone());
@@ -463,8 +613,8 @@ pub async fn start_batch_processing(
     tokio::spawn(async move {
         while let Some(progress) = progress_rx.recv().await {
             let percent = (progress.progress * 100.0) as f64;
-            let _ =
-                task_manager_for_progress.update_description(&progress.task_id, progress.message);
+            let _ = task_manager_for_progress
+                .update_description(&progress.task_id, progress.message.clone());
             let _ = task_manager_for_progress.update_progress(&progress.task_id, percent);
 
             let mut rt = runtime_for_progress.lock().await;
@@ -473,7 +623,17 @@ pub async fn start_batch_processing(
                 .iter_mut()
                 .find(|state| state.task_id.as_deref() == Some(progress.task_id.as_str()))
             {
-                state.progress = ((progress.progress * 100.0) as f32).clamp(0.0, 99.0);
+                if state.status == BatchItemRuntimeStatus::Pending
+                    || state.status == BatchItemRuntimeStatus::Running
+                {
+                    state.progress = ((progress.progress * 100.0) as f32).clamp(0.0, 99.0);
+                    if progress.encoder.is_some() {
+                        state.encoder = progress.encoder;
+                    }
+                    state.speed = progress.speed;
+                    state.eta_seconds = progress.eta_seconds;
+                    state.message = Some(progress.message);
+                }
                 if state.status == BatchItemRuntimeStatus::Pending {
                     state.status = BatchItemRuntimeStatus::Running;
                 }
@@ -488,6 +648,7 @@ pub async fn start_batch_processing(
     let settings_for_worker = settings.clone();
 
     tokio::spawn(async move {
+        let batch_lifetime = batch_lifetime;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
         let mut handles = Vec::with_capacity(normalized_items.len());
 
@@ -498,8 +659,10 @@ pub async fn start_batch_processing(
             let processor_for_item = processor_for_worker.clone();
             let settings_for_item = settings_for_worker.clone();
             let batch_label = batch_id_for_worker.clone();
+            let item_lifetime = batch_lifetime.clone();
 
             handles.push(tokio::spawn(async move {
+                let _item_lifetime = item_lifetime;
                 let permit = match permit_pool.acquire_owned().await {
                     Ok(permit) => permit,
                     Err(_) => return,
@@ -595,9 +758,6 @@ pub async fn start_batch_processing(
                             state.status = BatchItemRuntimeStatus::Cancelled;
                             state.progress = 100.0;
                             state.error = None;
-                            if let Some(processor) = &rt.processor {
-                                let _ = processor.cancel_task(&task_id).await;
-                            }
                             let _ = processing_result;
                         }
                         Ok(processing_result) => {
@@ -615,9 +775,6 @@ pub async fn start_batch_processing(
                             state.status = BatchItemRuntimeStatus::Cancelled;
                             state.progress = 100.0;
                             state.error = None;
-                            if let Some(processor) = &rt.processor {
-                                let _ = processor.cancel_task(&task_id).await;
-                            }
                             let _ = error;
                         }
                         Err(error) => {
@@ -637,17 +794,30 @@ pub async fn start_batch_processing(
         }
 
         for handle in handles {
-            let _ = handle.await;
+            if let Err(error) = handle.await {
+                let mut rt = runtime_for_worker.lock().await;
+                rt.errors.push(format!("Export worker failed: {}", error));
+            }
         }
 
         let mut rt = runtime_for_worker.lock().await;
-        if rt.cancel_requested {
-            for state in &mut rt.item_states {
-                if state.status == BatchItemRuntimeStatus::Pending {
-                    state.status = BatchItemRuntimeStatus::Cancelled;
-                    state.progress = 100.0;
-                    state.error = None;
-                }
+        let cancelled = rt.cancel_requested;
+        for state in &mut rt.item_states {
+            if matches!(
+                state.status,
+                BatchItemRuntimeStatus::Pending | BatchItemRuntimeStatus::Running
+            ) {
+                state.status = if cancelled {
+                    BatchItemRuntimeStatus::Cancelled
+                } else {
+                    BatchItemRuntimeStatus::Failed
+                };
+                state.progress = 100.0;
+                state.error = if cancelled {
+                    None
+                } else {
+                    Some("Export worker ended unexpectedly".to_string())
+                };
             }
         }
         finalize_batch_status(&mut rt);
@@ -655,7 +825,7 @@ pub async fn start_batch_processing(
 
         let cleanup_batch_id = batch_id_for_worker.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             let mut states = batch_states().lock().await;
             states.remove(&cleanup_batch_id);
         });
@@ -698,6 +868,14 @@ pub async fn get_batch_progress(batch_id: String) -> Result<BatchProgress, Strin
                 | BatchItemRuntimeStatus::Cancelled => 100.0,
             },
             error: state.error.clone(),
+            encoder: state.encoder.clone(),
+            speed: (state.status == BatchItemRuntimeStatus::Running)
+                .then_some(state.speed)
+                .flatten(),
+            eta_seconds: (state.status == BatchItemRuntimeStatus::Running)
+                .then_some(state.eta_seconds)
+                .flatten(),
+            message: state.message.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -793,4 +971,116 @@ pub async fn generate_batch_from_directory(
     }
 
     Ok(batch_items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(input: &Path) -> BatchItem {
+        BatchItem {
+            input_path: input.to_string_lossy().into(),
+            output_path: String::new(),
+            lut_paths: vec![],
+            lut_path: None,
+            intensity: 1.0,
+        }
+    }
+
+    #[test]
+    fn outputs_preserve_requested_format_structure_and_resolve_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("input");
+        let output = dir.path().join("output");
+        std::fs::create_dir_all(output.join("day-1")).unwrap();
+        let clip = item(&source.join("day-1/clip.mov"));
+        let resolved = resolve_output_path(&clip, output.to_str().unwrap(), "mp4", Some(&source));
+        assert_eq!(
+            Path::new(&resolved),
+            output.join("day-1/clip_lut_applied.mp4")
+        );
+        std::fs::write(&resolved, b"existing export").unwrap();
+        let mut reserved = HashSet::new();
+        let first = available_output_path(Path::new(&resolved), &mut reserved).unwrap();
+        let second = available_output_path(Path::new(&resolved), &mut reserved).unwrap();
+        assert!(first
+            .to_string_lossy()
+            .ends_with("clip_lut_applied (2).mp4"));
+        assert!(second
+            .to_string_lossy()
+            .ends_with("clip_lut_applied (3).mp4"));
+        assert_eq!(std::fs::read(&resolved).unwrap(), b"existing export");
+    }
+
+    #[test]
+    fn cancellation_remains_in_progress_until_running_encoder_exits() {
+        let mut runtime = BatchRuntime {
+            status: BatchRuntimeStatus::Running,
+            cancel_requested: true,
+            errors: vec![],
+            processor: None,
+            item_states: vec![
+                BatchItemRuntime {
+                    input_path: "a".into(),
+                    output_path: "a-out".into(),
+                    status: BatchItemRuntimeStatus::Cancelled,
+                    progress: 100.0,
+                    task_id: None,
+                    error: None,
+                    encoder: None,
+                    speed: None,
+                    eta_seconds: None,
+                    message: None,
+                },
+                BatchItemRuntime {
+                    input_path: "b".into(),
+                    output_path: "b-out".into(),
+                    status: BatchItemRuntimeStatus::Running,
+                    progress: 20.0,
+                    task_id: None,
+                    error: None,
+                    encoder: None,
+                    speed: None,
+                    eta_seconds: None,
+                    message: None,
+                },
+            ],
+        };
+        finalize_batch_status(&mut runtime);
+        assert_eq!(runtime.status, BatchRuntimeStatus::Cancelling);
+        runtime.item_states[1].status = BatchItemRuntimeStatus::Cancelled;
+        finalize_batch_status(&mut runtime);
+        assert_eq!(runtime.status, BatchRuntimeStatus::Cancelled);
+        assert_eq!(overall_progress(&runtime.item_states), 100.0);
+        runtime.cancel_requested = false;
+        runtime.item_states[0].status = BatchItemRuntimeStatus::Completed;
+        runtime.item_states[1].status = BatchItemRuntimeStatus::Failed;
+        finalize_batch_status(&mut runtime);
+        assert_eq!(
+            runtime.status,
+            BatchRuntimeStatus::Failed,
+            "partial failures must not report all-success"
+        );
+    }
+
+    #[test]
+    fn common_directory_keeps_relative_subfolders() {
+        let items = vec![
+            item(Path::new("/shoot/day-1/clip.mov")),
+            item(Path::new("/shoot/day-2/clip.mov")),
+        ];
+        assert_eq!(common_input_parent(&items), Some(PathBuf::from("/shoot")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_scanning_does_not_follow_symlink_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("clip.mp4"), b"video").unwrap();
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("cycle")).unwrap();
+        let (mut videos, mut luts, mut size) = (Vec::new(), Vec::new(), 0);
+        scan_recursive(dir.path(), &["mp4"], &[], &mut videos, &mut luts, &mut size).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(size, 5);
+    }
 }

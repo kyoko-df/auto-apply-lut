@@ -255,6 +255,7 @@ impl LutManager {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut grid_size: Option<u32> = None;
+        let mut one_dimensional = false;
         let mut domain_min: Option<(f32, f32, f32)> = None;
         let mut domain_max: Option<(f32, f32, f32)> = None;
         let mut data_points = 0;
@@ -268,12 +269,16 @@ impl LutManager {
             }
 
             // 解析LUT_3D_SIZE
-            if line.starts_with("LUT_3D_SIZE") {
+            if line.starts_with("LUT_3D_SIZE") || line.starts_with("LUT_1D_SIZE") {
+                if grid_size.is_some() {
+                    errors.push("CUBE must contain one 1D or one 3D table; combined tables are not supported".to_string());
+                }
+                one_dimensional = line.starts_with("LUT_1D_SIZE");
                 if let Some(size_str) = line.split_whitespace().nth(1) {
                     match size_str.parse::<u32>() {
                         Ok(size) => {
-                            if size < 2 || size > 256 {
-                                warnings.push(format!(
+                            if size < 2 || size > if one_dimensional { 65536 } else { 256 } {
+                                errors.push(format!(
                                     "Line {}: Unusual grid size: {}",
                                     line_num + 1,
                                     size
@@ -289,7 +294,9 @@ impl LutManager {
             }
             // 解析DOMAIN_MIN
             else if line.starts_with("DOMAIN_MIN") {
-                if let Some(values) = Self::parse_rgb_values(line) {
+                if let Some(values) =
+                    Self::parse_rgb_values(line.trim_start_matches("DOMAIN_MIN").trim())
+                {
                     domain_min = Some(values);
                 } else {
                     errors.push(format!("Line {}: Invalid DOMAIN_MIN format", line_num + 1));
@@ -297,29 +304,49 @@ impl LutManager {
             }
             // 解析DOMAIN_MAX
             else if line.starts_with("DOMAIN_MAX") {
-                if let Some(values) = Self::parse_rgb_values(line) {
+                if let Some(values) =
+                    Self::parse_rgb_values(line.trim_start_matches("DOMAIN_MAX").trim())
+                {
                     domain_max = Some(values);
                 } else {
                     errors.push(format!("Line {}: Invalid DOMAIN_MAX format", line_num + 1));
                 }
             }
             // 解析数据行
-            else if Self::parse_rgb_values(line).is_some() {
+            else if let Some((r, g, b)) = Self::parse_rgb_values(line) {
+                if !(r.is_finite() && g.is_finite() && b.is_finite()) {
+                    errors.push(format!("Line {}: Non-finite LUT value", line_num + 1));
+                }
                 data_points += 1;
             } else {
                 warnings.push(format!("Line {}: Unrecognized line format", line_num + 1));
             }
         }
 
+        if let (Some(min), Some(max)) = (domain_min, domain_max) {
+            if ![min.0, min.1, min.2, max.0, max.1, max.2]
+                .iter()
+                .all(|v| v.is_finite())
+                || min.0 >= max.0
+                || min.1 >= max.1
+                || min.2 >= max.2
+            {
+                errors.push("DOMAIN_MAX must be greater than DOMAIN_MIN on each channel".into());
+            }
+        }
         // 验证必需的元素
         if grid_size.is_none() {
-            errors.push("Missing LUT_3D_SIZE declaration".to_string());
+            errors.push("Missing LUT_3D_SIZE or LUT_1D_SIZE declaration".to_string());
         }
 
         // 验证数据点数量
         if let Some(size) = grid_size {
-            let expected_points = (size * size * size) as usize;
-            if data_points != expected_points {
+            let expected_points = if one_dimensional {
+                size as u64
+            } else {
+                (size as u64).saturating_pow(3)
+            };
+            if data_points as u64 != expected_points {
                 errors.push(format!(
                     "Data point count mismatch: expected {}, found {}",
                     expected_points, data_points
@@ -337,7 +364,11 @@ impl LutManager {
 
         Ok(LutValidationResult {
             is_valid: errors.is_empty(),
-            lut_type: LutType::ThreeDimensional,
+            lut_type: if one_dimensional {
+                LutType::OneDimensional
+            } else {
+                LutType::ThreeDimensional
+            },
             format: LutFormat::Cube,
             errors,
             warnings,
@@ -540,6 +571,24 @@ LUT_3D_SIZE 2
                 .validate_lut(&m3d_file)
                 .await
                 .expect("validate m3d")
+                .is_valid
+        );
+    }
+    #[tokio::test]
+    async fn cube_validation_accepts_1d_and_domain_headers_but_rejects_combined_tables() {
+        let manager = LutManager::new();
+        let one_d = "LUT_1D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n0 0 0\n1 1 1\n";
+        let result = manager.validate_cube_lut(one_d).await.unwrap();
+        assert!(result.is_valid, "{:?}", result.errors);
+        assert_eq!(result.lut_type, LutType::OneDimensional);
+        let combined = format!("LUT_3D_SIZE 2\n{}", one_d);
+        assert!(!manager.validate_cube_lut(&combined).await.unwrap().is_valid);
+        let invalid_domain = one_d.replace("DOMAIN_MAX 1 1 1", "DOMAIN_MAX 0 1 1");
+        assert!(
+            !manager
+                .validate_cube_lut(&invalid_domain)
+                .await
+                .unwrap()
                 .is_valid
         );
     }

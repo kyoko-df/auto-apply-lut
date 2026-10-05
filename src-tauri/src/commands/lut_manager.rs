@@ -8,7 +8,10 @@ use crate::database::models::Lut as DbLut;
 use crate::database::queries::lut as lut_queries;
 use crate::database::runtime::upsert_lut_info;
 use crate::database::DatabaseManager;
-use crate::types::{BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse, LutInfo, LutValidationResult};
+use crate::types::{
+    BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse, LutInfo,
+    LutValidationResult,
+};
 use crate::utils::logger;
 use crate::utils::path_utils::get_cache_dir;
 use chrono::Utc;
@@ -94,7 +97,11 @@ fn recursive_scan_luts(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Stri
     {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let entry_path = entry.path();
-        if entry_path.is_dir() {
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             recursive_scan_luts(&entry_path, files)?;
             continue;
         }
@@ -470,7 +477,24 @@ LUT_3D_SIZE 2
         assert_eq!(response.failure_count, 0);
         assert_eq!(
             response.results[0].target_path.as_deref(),
-            Some(dir.path().join("sample.converted.csp").to_string_lossy().as_ref())
+            Some(
+                dir.path()
+                    .join("sample.converted.csp")
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
     }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn lut_directory_scan_ignores_recursive_symlinks() {
+    let directory = tempfile::tempdir().unwrap();
+    let lut = directory.path().join("film.cube");
+    std::fs::write(&lut, "LUT_3D_SIZE 2").unwrap();
+    std::os::unix::fs::symlink(directory.path(), directory.path().join("loop")).unwrap();
+    let mut files = Vec::new();
+    recursive_scan_luts(directory.path(), &mut files).unwrap();
+    assert_eq!(files, vec![lut]);
 }

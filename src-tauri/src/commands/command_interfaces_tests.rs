@@ -9,7 +9,6 @@ use crate::core::task::{TaskManager, TaskType};
 use crate::database::DatabaseManager;
 use crate::utils::config::ConfigManager;
 use crate::utils::path_utils::{get_app_data_dir, get_cache_dir};
-use crate::FfplayState;
 use std::env;
 use std::ffi::OsString;
 use std::future::Future;
@@ -91,6 +90,8 @@ fn default_processing_options() -> ProcessingOptions {
         fps: None,
         bitrate: None,
         color_space: None,
+        output_bit_depth: None,
+        input_color_space: None,
         two_pass_encoding: false,
         preserve_metadata: true,
     }
@@ -226,26 +227,6 @@ fn command_interfaces_file() {
 }
 
 #[test]
-fn command_interfaces_file_ffplay() {
-    with_temp_home(|_| {
-        let config_manager = Mutex::new(ConfigManager::new().expect("config init failed"));
-        let ffplay_state = FfplayState(Mutex::new(None));
-
-        let err = run_async(file_manager::play_with_ffplay(
-            "/definitely/missing/video.mp4".to_string(),
-            state_ref(&config_manager),
-            state_ref(&ffplay_state),
-        ))
-        .expect_err("play_with_ffplay should fail for non-existent file");
-        assert_eq!(err, "File does not exist");
-
-        let stopped = run_async(file_manager::stop_ffplay(state_ref(&ffplay_state)))
-            .expect("stop_ffplay failed");
-        assert_eq!(stopped, "ffplay not running");
-    });
-}
-
-#[test]
 fn command_interfaces_system() {
     with_temp_home(|_| {
         let config_manager = Mutex::new(ConfigManager::new().expect("config init failed"));
@@ -283,6 +264,9 @@ fn command_interfaces_system() {
             lut_intensity: 82.5,
             lut_error_strategy: "SkipOnError".to_string(),
             color_space: "rec2020".to_string(),
+            output_bit_depth: "8".into(),
+            input_color_space: "auto".into(),
+            preview_quality: "fast".into(),
             two_pass_encoding: true,
             preserve_metadata: false,
         };
@@ -349,7 +333,10 @@ fn command_interfaces_system() {
             run_async(system_manager::get_available_codecs()).expect("get_available_codecs failed");
         assert!(!codecs.video_codecs.is_empty());
         assert!(!codecs.audio_codecs.is_empty());
-        assert!(codecs.video_codecs.iter().any(|codec| codec.name == "libx264"));
+        assert!(codecs
+            .video_codecs
+            .iter()
+            .any(|codec| codec.name == "libx264"));
         assert!(codecs.audio_codecs.iter().any(|codec| codec.name == "aac"));
 
         run_async(system_manager::set_ffmpeg_path_config(
@@ -418,6 +405,7 @@ fn command_interfaces_batch() {
             }],
             output_directory: output_dir.to_string_lossy().to_string(),
             preserve_structure: false,
+            max_concurrent: None,
             options: default_processing_options(),
         };
         let start_result = run_async(batch_manager::start_batch_processing(
@@ -442,6 +430,8 @@ fn command_interfaces_batch() {
 
 #[test]
 fn command_interfaces_processor() {
+    let config_manager =
+        with_temp_home(|_| Mutex::new(ConfigManager::new().expect("config init failed")));
     let task_manager = TaskManager::default();
     let video_processor = VideoProcessor::new(PathBuf::from("ffmpeg"));
     let lut_manager = LutManager::new();
@@ -460,6 +450,7 @@ fn command_interfaces_processor() {
         state_ref(&task_manager),
         state_ref(&video_processor),
         state_ref(&lut_manager),
+        state_ref(&config_manager),
     ));
     assert!(start_res.is_err());
 

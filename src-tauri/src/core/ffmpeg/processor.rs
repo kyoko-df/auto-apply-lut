@@ -1,22 +1,57 @@
 //! FFmpeg视频处理器
 //! 提供视频处理的核心功能
 
-use crate::core::ffmpeg::{BatchResult, BatchTask, EncodingSettings, VideoInfo};
+use crate::core::ffmpeg::{BatchTask, EncodingSettings};
 use crate::types::{AppError, AppResult};
 use crate::utils::logger;
-use crate::utils::path_utils::get_app_data_dir;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as AsyncCommand;
 use tokio::sync::{mpsc, Mutex};
 
 const INTERNAL_TWO_PASS_KEY: &str = "__two_pass__";
+const INTERNAL_HARDWARE_KEY: &str = "__hardware__";
+
+enum CancellationSlot {
+    Requested,
+    Running(tokio::sync::oneshot::Sender<()>),
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct EncoderAvailabilityKey {
+    executable: PathBuf,
+    bytes: Option<u64>,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    identity: Option<(u64, u64)>,
+    codec: String,
+}
+
+fn encoder_availability_key(executable: &Path, codec: &str) -> EncoderAvailabilityKey {
+    // Explicit configuration may use a command name resolved through PATH.
+    let path = crate::core::ffmpeg::resolve_executable_path(executable);
+    let executable = path.canonicalize().unwrap_or(path);
+    let metadata = std::fs::metadata(&executable).ok();
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    EncoderAvailabilityKey {
+        executable,
+        bytes: metadata.as_ref().map(std::fs::Metadata::len),
+        modified: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok()),
+        #[cfg(unix)]
+        identity: metadata
+            .as_ref()
+            .map(|metadata| (metadata.dev(), metadata.ino())),
+        codec: codec.to_owned(),
+    }
+}
 
 /// 视频处理器
 pub struct VideoProcessor {
@@ -27,65 +62,75 @@ pub struct VideoProcessor {
     /// 进度发送器
     progress_sender: Option<mpsc::UnboundedSender<ProcessingProgress>>,
     /// 取消信号发送器映射（task_id -> oneshot sender）
-    cancel_senders: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_senders: Arc<Mutex<HashMap<String, CancellationSlot>>>,
+    unavailable_encoders: Arc<Mutex<HashSet<EncoderAvailabilityKey>>>,
 }
 
 impl VideoProcessor {
-    fn escape_filter_path(path: &Path) -> String {
-        path.to_string_lossy().replace('\'', "\\'")
-    }
-
-    fn build_lut_filter(lut_paths: &[PathBuf], intensity: f32) -> AppResult<String> {
-        if lut_paths.is_empty() {
-            return Err(AppError::InvalidInput("No LUT files provided".to_string()));
-        }
-
-        let mut lut_chain: Vec<String> = Vec::with_capacity(lut_paths.len());
-        for lut_path in lut_paths {
-            let escaped = Self::escape_filter_path(lut_path.as_path());
-            lut_chain.push(format!("lut3d=file='{}'", escaped));
-        }
-
-        let clamped = intensity.clamp(0.0, 1.0);
-        if clamped >= 1.0 {
-            lut_chain.push("format=yuv422p".to_string());
-            Ok(lut_chain.join(","))
-        } else {
-            // Use split + lut3d + mix to blend original with LUT-applied at the given intensity
-            let lut_part = lut_chain.join(",");
-            Ok(format!(
-                "split[orig][lut];[lut]{},format=yuv422p[lutted];[orig]format=yuv422p[origfmt];[origfmt][lutted]mix=weights={:.4} {:.4}",
-                lut_part,
-                1.0 - clamped,
-                clamped
-            ))
-        }
+    pub(crate) fn build_lut_filter(lut_paths: &[PathBuf], intensity: f32) -> AppResult<String> {
+        crate::core::ffmpeg::lut::build_lut_filter(lut_paths, intensity)
     }
 
     fn add_encoding_args(cmd: &mut AsyncCommand, settings: &EncodingSettings) {
-        cmd.args(["-c:v", &settings.video_codec]);
-        cmd.args(["-c:a", &settings.audio_codec]);
-        cmd.args(["-preset", &settings.preset]);
+        let codec = settings.video_codec.as_str();
+        cmd.args(["-c:v", codec, "-c:a", &settings.audio_codec]);
+        if matches!(codec, "libx264" | "libx265") {
+            cmd.args(["-preset", &settings.preset]);
+        } else if codec.ends_with("_nvenc") {
+            cmd.args(["-preset", "p4"]);
+        } else if codec == "libvpx-vp9" {
+            cmd.args(["-deadline", "good", "-cpu-used", "3", "-row-mt", "1"]);
+        } else if codec == "prores_ks" {
+            cmd.args(["-profile:v", "3"]);
+        }
 
         if let Some(bitrate) = &settings.bitrate {
             cmd.args(["-b:v", bitrate]);
-        } else {
+        } else if codec.ends_with("_videotoolbox") {
+            // Apple quality mode is 1–100, unlike x264 CRF (lower is better).
+            let quality = (100 - settings.crf * 2).clamp(1, 100).to_string();
+            cmd.args(["-q:v", &quality]);
+        } else if codec.ends_with("_nvenc") {
+            cmd.args(["-rc", "vbr", "-cq", &settings.crf.to_string(), "-b:v", "0"]);
+        } else if codec.ends_with("_qsv") {
+            cmd.args(["-global_quality", &settings.crf.to_string()]);
+        } else if codec != "prores_ks" {
             cmd.args(["-crf", &settings.crf.to_string()]);
+            if codec == "libvpx-vp9" {
+                cmd.args(["-b:v", "0"]);
+            }
         }
-
-        if let Some(resolution) = &settings.resolution {
-            cmd.args(["-s", &format!("{}x{}", resolution.width, resolution.height)]);
+        cmd.args([
+            "-pix_fmt",
+            if codec == "prores_ks" {
+                "yuv422p10le"
+            } else if settings
+                .extra_params
+                .get("__bit_depth__")
+                .is_some_and(|v| v == "10")
+            {
+                if codec.ends_with("_videotoolbox")
+                    || codec.ends_with("_qsv")
+                    || codec.ends_with("_nvenc")
+                {
+                    "p010le"
+                } else {
+                    "yuv420p10le"
+                }
+            } else {
+                "yuv420p"
+            },
+        ]);
+        if codec.starts_with("hevc") || codec == "libx265" {
+            cmd.args(["-tag:v", "hvc1"]);
         }
-
         if let Some(fps) = settings.fps {
             cmd.args(["-r", &fps.to_string()]);
         }
-
         for (key, value) in &settings.extra_params {
-            if key.starts_with("__") {
-                continue;
+            if !key.starts_with("__") {
+                cmd.args([key, value]);
             }
-            cmd.args([key, value]);
         }
     }
 
@@ -108,7 +153,9 @@ impl VideoProcessor {
             .filter(|p| p.exists())
             .unwrap_or_else(|| PathBuf::from(ffprobe_name));
 
-        let output = AsyncCommand::new(ffprobe_path)
+        let mut command = AsyncCommand::new(ffprobe_path);
+        command
+            .kill_on_drop(true)
             .args([
                 "-v",
                 "error",
@@ -116,10 +163,11 @@ impl VideoProcessor {
                 "format=duration",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
-                input_path.to_str().unwrap_or_default(),
             ])
-            .output()
+            .arg(input_path);
+        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
             .await
+            .ok()?
             .ok()?;
 
         if !output.status.success() {
@@ -142,12 +190,17 @@ impl VideoProcessor {
             current_tasks: Arc::new(Mutex::new(Vec::new())),
             progress_sender: None,
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
+            unavailable_encoders: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     /// 获取FFmpeg路径
     pub fn ffmpeg_path(&self) -> &Path {
         &self.ffmpeg_path
+    }
+
+    pub fn set_ffmpeg_path(&mut self, path: PathBuf) {
+        self.ffmpeg_path = path;
     }
 
     /// 设置进度发送器
@@ -185,9 +238,21 @@ impl VideoProcessor {
         intensity: f32,
     ) -> AppResult<ProcessingResult> {
         let start_time = Instant::now();
-        let mut cancelled = false;
-
-        let task = ProcessingTask {
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            // Register before any I/O. A cancel request arriving before launch is
+            // retained, so the queued task cannot escape cancellation.
+            let mut map = self.cancel_senders.lock().await;
+            match map.remove(&task_id) {
+                Some(CancellationSlot::Requested) => {
+                    let _ = cancel_tx.send(());
+                }
+                _ => {
+                    map.insert(task_id.clone(), CancellationSlot::Running(cancel_tx));
+                }
+            }
+        }
+        self.current_tasks.lock().await.push(ProcessingTask {
             id: task_id.clone(),
             task_type: TaskType::ApplyLut,
             input_path: input_path.to_path_buf(),
@@ -196,355 +261,401 @@ impl VideoProcessor {
             settings: settings.clone(),
             start_time,
             status: TaskStatus::Running,
-        };
-        {
-            let mut tasks = self.current_tasks.lock().await;
-            tasks.push(task);
-        }
-
+        });
         self.send_progress(ProcessingProgress {
             task_id: task_id.clone(),
             progress: 0.0,
             stage: ProcessingStage::Starting,
-            message: format!("开始应用 LUT（{} 个）", lut_paths.len()),
-            elapsed: Duration::from_secs(0),
+            message: "正在准备导出".to_string(),
+            elapsed: start_time.elapsed(),
+            encoder: None,
+            speed: None,
+            eta_seconds: None,
         })
         .await;
 
-        let lut_filter = Self::build_lut_filter(lut_paths, intensity)?;
-        let total_duration_sec = Self::probe_duration_seconds(&self.ffmpeg_path, input_path).await;
-        let two_pass_requested = settings
+        let result = self
+            .run_lut_export(
+                input_path,
+                output_path,
+                lut_paths,
+                settings,
+                &task_id,
+                intensity,
+                start_time,
+                &mut cancel_rx,
+            )
+            .await;
+        self.cancel_senders.lock().await.remove(&task_id);
+        let cancelled = matches!(&result, Err(AppError::FFmpeg(message)) if message == "Cancelled");
+        let success = result.is_ok();
+        if let Some(task) = self
+            .current_tasks
+            .lock()
+            .await
+            .iter_mut()
+            .find(|task| task.id == task_id)
+        {
+            task.status = if cancelled {
+                TaskStatus::Cancelled
+            } else if success {
+                TaskStatus::Completed
+            } else {
+                TaskStatus::Failed
+            };
+        }
+        let error = result.err().map(|e| {
+            if cancelled {
+                "Cancelled".to_string()
+            } else {
+                e.to_string()
+            }
+        });
+        self.send_progress(ProcessingProgress {
+            task_id: task_id.clone(),
+            progress: if success { 1.0 } else { 0.0 },
+            stage: if success {
+                ProcessingStage::Completed
+            } else {
+                ProcessingStage::Failed
+            },
+            message: if success {
+                "导出完成".to_string()
+            } else if cancelled {
+                "导出已取消".to_string()
+            } else {
+                error.clone().unwrap_or_default()
+            },
+            elapsed: start_time.elapsed(),
+            encoder: None,
+            speed: None,
+            eta_seconds: None,
+        })
+        .await;
+        Ok(ProcessingResult {
+            task_id,
+            success,
+            output_path: success.then(|| output_path.to_path_buf()),
+            error,
+            elapsed: start_time.elapsed(),
+            file_size: if success {
+                self.get_file_size(output_path).await.unwrap_or(0)
+            } else {
+                0
+            },
+        })
+    }
+
+    async fn run_lut_export(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        lut_paths: &[PathBuf],
+        settings: &EncodingSettings,
+        task_id: &str,
+        intensity: f32,
+        start_time: Instant,
+        cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    ) -> AppResult<()> {
+        Self::check_cancel(cancel_rx)?;
+        if !input_path.is_file() {
+            return Err(AppError::InvalidInput(
+                "Input video does not exist".to_string(),
+            ));
+        }
+        if output_path.exists() {
+            return Err(AppError::InvalidInput(format!(
+                "Output already exists: {}",
+                output_path.display()
+            )));
+        }
+        let parent = output_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(AppError::from)?;
+        // Temp files live on the destination volume. Dropping them on errors or
+        // cancellation removes incomplete output. persist_noclobber publishes only
+        // completed files and cannot overwrite a file created during encoding.
+        let extension = output_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4");
+        let temporary_output = tempfile::Builder::new()
+            .prefix(".lut-export-")
+            .suffix(&format!(".{}", extension))
+            .tempfile_in(parent)
+            .map_err(AppError::from)?;
+        let workspace = tempfile::Builder::new()
+            .prefix("lut-work-")
+            .tempdir()
+            .map_err(AppError::from)?;
+        let prepared_luts =
+            crate::core::ffmpeg::lut::prepare_luts(lut_paths, workspace.path()).await?;
+        let input_space = settings
+            .extra_params
+            .get("__input_color_space__")
+            .map(String::as_str)
+            .unwrap_or("auto");
+        let color = crate::core::ffmpeg::color::input_filter(input_space)?;
+        let mut filter = format!(
+            "{},{}",
+            color,
+            Self::build_lut_filter(&prepared_luts, intensity)?
+        );
+        if let Some(resolution) = &settings.resolution {
+            // Fit the display dimensions, not stored pixels: anamorphic footage
+            // must become square pixels before padding, without an intermediate
+            // full-resolution upscale (same geometry as the preview pipeline).
+            let scale = format!(
+                "min({}/(iw*sar),{}/ih)",
+                resolution.width, resolution.height
+            );
+            filter.push_str(&format!(
+                ",scale=w='max(2,trunc(iw*sar*({scale})/2)*2)':h='max(2,trunc(ih*({scale})/2)*2)',setsar=1,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
+                resolution.width, resolution.height
+            ));
+        } else {
+            // 4:2:0 encoders need even dimensions, including portrait/odd source frames.
+            filter.push_str(",pad=ceil(iw/2)*2:ceil(ih/2)*2");
+        }
+        let duration = tokio::select! {
+            biased;
+            _ = &mut *cancel_rx => return Err(AppError::FFmpeg("Cancelled".to_string())),
+            duration = Self::probe_duration_seconds(&self.ffmpeg_path, input_path) => duration,
+        };
+        Self::check_cancel(cancel_rx)?;
+        let two_pass = settings
             .extra_params
             .get(INTERNAL_TWO_PASS_KEY)
-            .map(|v| Self::is_truthy(v))
-            .unwrap_or(false);
-        let use_two_pass =
-            two_pass_requested && settings.bitrate.is_some() && settings.video_codec != "copy";
-
-        let mut log_dir = get_app_data_dir()?;
-        log_dir.push("logs");
-        let _ = std::fs::create_dir_all(&log_dir);
-        let log_file_path = log_dir.join(format!("ffmpeg_{}.log", task_id));
-        let open_log_file = |append: bool| -> AppResult<std::fs::File> {
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(append)
-                .truncate(!append)
-                .open(&log_file_path)
-                .map_err(|e| AppError::Io(format!("Failed to open FFmpeg log file: {}", e)))
-        };
-
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        {
-            let mut map = self.cancel_senders.lock().await;
-            map.insert(task_id.clone(), cancel_tx);
+            .is_some_and(|v| Self::is_truthy(v));
+        let accelerated = settings
+            .extra_params
+            .get(INTERNAL_HARDWARE_KEY)
+            .is_some_and(|v| Self::is_truthy(v))
+            && !two_pass;
+        let mut codecs: Vec<String> = Vec::new();
+        if accelerated && matches!(settings.video_codec.as_str(), "libx264" | "libx265") {
+            let family = if settings.video_codec == "libx265" {
+                "hevc"
+            } else {
+                "h264"
+            };
+            if cfg!(target_os = "macos") {
+                codecs.push(format!("{}_videotoolbox", family));
+            } else {
+                codecs.push(format!("{}_nvenc", family));
+                codecs.push(format!("{}_qsv", family));
+            }
         }
-
-        if two_pass_requested && !use_two_pass {
-            logger::log_warn(
-                "two_pass_encoding requested but ignored (requires bitrate and non-copy video codec)",
-            );
-        }
-
-        let status = if use_two_pass {
+        codecs.push(settings.video_codec.clone());
+        let mut last_error = None;
+        for (attempt, codec) in codecs.iter().enumerate() {
+            let availability_key = encoder_availability_key(&self.ffmpeg_path, codec);
+            if codec != &settings.video_codec
+                && self
+                    .unavailable_encoders
+                    .lock()
+                    .await
+                    .contains(&availability_key)
+            {
+                continue;
+            }
+            Self::check_cancel(cancel_rx)?;
+            let mut active_settings = settings.clone();
+            active_settings.video_codec = codec.clone();
             self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 0.02,
+                task_id: task_id.to_string(),
+                progress: 0.0,
                 stage: ProcessingStage::Processing,
-                message: "双通道编码：第一遍分析中...".to_string(),
-                elapsed: start_time.elapsed(),
-            })
-            .await;
-
-            let passlog_file = log_dir.join(format!("ffmpeg_passlog_{}", task_id));
-            let passlog_str = passlog_file.to_string_lossy().to_string();
-            let null_sink = if cfg!(target_os = "windows") {
-                "NUL"
-            } else {
-                "/dev/null"
-            };
-
-            let mut pass1_cmd = AsyncCommand::new(&self.ffmpeg_path);
-            pass1_cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
-            Self::add_encoding_args(&mut pass1_cmd, settings);
-            pass1_cmd.args([
-                "-pass",
-                "1",
-                "-passlogfile",
-                &passlog_str,
-                "-an",
-                "-f",
-                "null",
-                "-y",
-                null_sink,
-            ]);
-            let pass1_log = open_log_file(false)?;
-            let mut pass1_child = pass1_cmd
-                .stdout(Stdio::null())
-                .stderr(Stdio::from(pass1_log))
-                .spawn()
-                .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg pass 1: {}", e)))?;
-
-            let pass1_status = tokio::select! {
-                res = pass1_child.wait() => {
-                    res.map_err(|e| AppError::FFmpeg(format!("FFmpeg pass 1 failed: {}", e)))?
-                }
-                _ = &mut cancel_rx => {
-                    cancelled = true;
-                    let _ = pass1_child.kill().await;
-                    pass1_child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
-                }
-            };
-
-            let status = if cancelled || !pass1_status.success() {
-                pass1_status
-            } else if cancel_rx.try_recv().is_ok() {
-                // Cancel arrived between pass 1 completing and pass 2 starting
-                cancelled = true;
-                pass1_status
-            } else {
-                self.send_progress(ProcessingProgress {
-                    task_id: task_id.clone(),
-                    progress: 0.1,
-                    stage: ProcessingStage::Processing,
-                    message: "双通道编码：第二遍处理中...".to_string(),
-                    elapsed: start_time.elapsed(),
-                })
-                .await;
-
-                let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-                cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
-                Self::add_encoding_args(&mut cmd, settings);
-                cmd.args([
-                    "-pass",
-                    "2",
-                    "-passlogfile",
-                    &passlog_str,
-                    "-loglevel",
-                    "debug",
-                    "-progress",
-                    "pipe:1",
-                    "-y",
-                    output_path.to_str().unwrap(),
-                ]);
-
-                let log_file = open_log_file(true)?;
-                let mut child = cmd
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::from(log_file))
-                    .spawn()
-                    .map_err(|e| {
-                        AppError::FFmpeg(format!("Failed to start ffmpeg pass 2: {}", e))
-                    })?;
-
-                let task_id_clone = task_id.clone();
-                let progress_sender = self.progress_sender.clone();
-                let start_time_clone = start_time;
-                let duration_for_progress = total_duration_sec;
-                let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
-                if let Some(stdout) = child.stdout.take() {
-                    let reader = BufReader::new(stdout);
-                    let mut lines = reader.lines();
-                    let handle = tokio::spawn(async move {
-                        while let Ok(Some(line)) = lines.next_line().await {
-                            if let Some(progress) =
-                                Self::parse_ffmpeg_progress(&line, duration_for_progress)
-                            {
-                                if let Some(sender) = &progress_sender {
-                                    let _ = sender.send(ProcessingProgress {
-                                        task_id: task_id_clone.clone(),
-                                        progress,
-                                        stage: ProcessingStage::Processing,
-                                        message: format!("处理中... {:.1}%", progress * 100.0),
-                                        elapsed: start_time_clone.elapsed(),
-                                    });
-                                }
-                            }
-                        }
-                    });
-                    progress_handle = Some(handle);
-                }
-
-                let status = tokio::select! {
-                    res = child.wait() => {
-                        res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
-                    }
-                    _ = &mut cancel_rx => {
-                        cancelled = true;
-                        let _ = child.kill().await;
-                        child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
-                    }
-                };
-
-                if let Some(handle) = progress_handle.take() {
-                    handle.abort();
-                }
-                status
-            };
-
-            let _ = std::fs::remove_file(passlog_file.clone());
-            let _ = std::fs::remove_file(passlog_file.with_extension("log"));
-            let _ = std::fs::remove_file(passlog_file.with_extension("mbtree"));
-            status
-        } else {
-            let mut cmd = AsyncCommand::new(&self.ffmpeg_path);
-            cmd.args(["-i", input_path.to_str().unwrap(), "-vf", &lut_filter]);
-            Self::add_encoding_args(&mut cmd, settings);
-            cmd.args([
-                "-loglevel",
-                "debug",
-                "-progress",
-                "pipe:1",
-                "-y",
-                output_path.to_str().unwrap(),
-            ]);
-
-            let log_file = open_log_file(false)?;
-            let mut child = cmd
-                .stdout(Stdio::piped())
-                .stderr(Stdio::from(log_file))
-                .spawn()
-                .map_err(|e| AppError::FFmpeg(format!("Failed to start ffmpeg: {}", e)))?;
-
-            let task_id_clone = task_id.clone();
-            let progress_sender = self.progress_sender.clone();
-            let start_time_clone = start_time;
-            let duration_for_progress = total_duration_sec;
-            let mut progress_handle: Option<tokio::task::JoinHandle<()>> = None;
-            if let Some(stdout) = child.stdout.take() {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                let handle = tokio::spawn(async move {
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        if let Some(progress) =
-                            Self::parse_ffmpeg_progress(&line, duration_for_progress)
-                        {
-                            if let Some(sender) = &progress_sender {
-                                let _ = sender.send(ProcessingProgress {
-                                    task_id: task_id_clone.clone(),
-                                    progress,
-                                    stage: ProcessingStage::Processing,
-                                    message: format!("处理中... {:.1}%", progress * 100.0),
-                                    elapsed: start_time_clone.elapsed(),
-                                });
-                            }
-                        }
-                    }
-                });
-                progress_handle = Some(handle);
-            }
-
-            let status = tokio::select! {
-                res = child.wait() => {
-                    res.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed: {}", e)))?
-                }
-                _ = &mut cancel_rx => {
-                    cancelled = true;
-                    let _ = child.kill().await;
-                    child.wait().await.map_err(|e| AppError::FFmpeg(format!("FFmpeg process failed after cancel: {}", e)))?
-                }
-            };
-
-            if let Some(handle) = progress_handle.take() {
-                handle.abort();
-            }
-            status
-        };
-
-        {
-            let mut map = self.cancel_senders.lock().await;
-            map.remove(&task_id);
-        }
-
-        let elapsed = start_time.elapsed();
-
-        {
-            let mut tasks = self.current_tasks.lock().await;
-            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                task.status = if cancelled {
-                    TaskStatus::Cancelled
-                } else if status.success() {
-                    TaskStatus::Completed
+                message: if attempt == 0 {
+                    format!("正在导出 · {}", codec)
                 } else {
-                    TaskStatus::Failed
-                };
+                    format!("硬件编码回退，使用 {} 重试", codec)
+                },
+                elapsed: start_time.elapsed(),
+                encoder: Some(codec.clone()),
+                speed: None,
+                eta_seconds: None,
+            })
+            .await;
+            let passlog = workspace.path().join("pass");
+            let mut result = Ok(());
+            for pass in 0..if two_pass { 2 } else { 1 } {
+                result = self
+                    .encode_pass(
+                        input_path,
+                        temporary_output.path(),
+                        &filter,
+                        &active_settings,
+                        task_id,
+                        start_time,
+                        duration,
+                        cancel_rx,
+                        if two_pass {
+                            Some((pass + 1, &passlog))
+                        } else {
+                            None
+                        },
+                        workspace.path(),
+                    )
+                    .await;
+                if result.is_err() {
+                    break;
+                }
+            }
+            match result {
+                Ok(()) => {
+                    Self::check_cancel(cancel_rx)?;
+                    temporary_output
+                        .persist_noclobber(output_path)
+                        .map_err(|e| {
+                            AppError::Io(format!(
+                                "Cannot publish output without overwriting: {}",
+                                e.error
+                            ))
+                        })?;
+                    return Ok(());
+                }
+                Err(AppError::FFmpeg(message)) if message == "Cancelled" => {
+                    return Err(AppError::FFmpeg(message))
+                }
+                Err(error) => {
+                    logger::log_warn(&format!("Encoder {} failed: {}", codec, error));
+                    let message = error.to_string();
+                    let hardware = codec != &settings.video_codec;
+                    if hardware && permanently_unavailable_encoder(&message) {
+                        let mut unavailable = self.unavailable_encoders.lock().await;
+                        if unavailable.len() >= 64 {
+                            unavailable.clear();
+                        }
+                        unavailable.insert(availability_key);
+                    } else if !hardware || !retryable_hardware_error(&message) {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
             }
         }
+        Err(last_error.unwrap_or_else(|| AppError::FFmpeg("No encoder available".to_string())))
+    }
 
-        if status.success() && !cancelled {
-            self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 1.0,
-                stage: ProcessingStage::Completed,
-                message: "LUT应用完成".to_string(),
-                elapsed,
-            })
-            .await;
-
-            Ok(ProcessingResult {
-                task_id,
-                success: true,
-                output_path: Some(output_path.to_path_buf()),
-                error: None,
-                elapsed,
-                file_size: self.get_file_size(output_path).await.unwrap_or(0),
-            })
-        } else if cancelled {
-            self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 0.0,
-                stage: ProcessingStage::Failed,
-                message: "LUT处理已取消".to_string(),
-                elapsed,
-            })
-            .await;
-            Ok(ProcessingResult {
-                task_id,
-                success: false,
-                output_path: None,
-                error: Some("Cancelled".to_string()),
-                elapsed,
-                file_size: 0,
-            })
+    fn check_cancel(cancel_rx: &mut tokio::sync::oneshot::Receiver<()>) -> AppResult<()> {
+        if cancel_rx.try_recv().is_ok() {
+            Err(AppError::FFmpeg("Cancelled".to_string()))
         } else {
-            let mut err_summary = String::new();
-            let exit_code = status.code().unwrap_or(-1);
-            err_summary.push_str(&format!("FFmpeg 失败，退出码: {}", exit_code));
-            let log_snippet = std::fs::read_to_string(&log_file_path)
-                .map(|content| {
-                    let max_chars = 2000usize;
-                    if content.len() > max_chars {
-                        content[content.len() - max_chars..].to_string()
-                    } else {
-                        content
-                    }
-                })
-                .unwrap_or_else(|_| "(无法读取FFmpeg日志)".to_string());
-            err_summary.push_str("\n日志片段：\n");
-            err_summary.push_str(&log_snippet);
-
-            self.send_progress(ProcessingProgress {
-                task_id: task_id.clone(),
-                progress: 0.0,
-                stage: ProcessingStage::Failed,
-                message: format!(
-                    "LUT应用失败：{}",
-                    err_summary.lines().next().unwrap_or("未知错误")
-                ),
-                elapsed,
-            })
-            .await;
-
-            Ok(ProcessingResult {
-                task_id,
-                success: false,
-                output_path: None,
-                error: Some(err_summary),
-                elapsed,
-                file_size: 0,
-            })
+            Ok(())
         }
+    }
+
+    async fn encode_pass(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        filter: &str,
+        settings: &EncodingSettings,
+        task_id: &str,
+        start_time: Instant,
+        duration: Option<f64>,
+        cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+        pass: Option<(usize, &Path)>,
+        workspace: &Path,
+    ) -> AppResult<()> {
+        Self::check_cancel(cancel_rx)?;
+        let log_path = workspace.join("ffmpeg.log");
+        let log_file = std::fs::File::create(&log_path).map_err(AppError::from)?;
+        let mut command = AsyncCommand::new(&self.ffmpeg_path);
+        command.kill_on_drop(true).args([
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-nostats",
+            "-stats_period",
+            "0.25",
+        ]);
+        let threads = settings
+            .extra_params
+            .get("__threads__")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(4)
+            .clamp(1, 16)
+            .to_string();
+        command.args(["-threads", &threads, "-filter_threads", &threads]);
+        command
+            .arg("-i")
+            .arg(input_path)
+            .args(["-map", "0:v:0", "-map", "0:a?", "-vf", filter]);
+        Self::add_encoding_args(&mut command, settings);
+        command.args(["-threads", &threads]);
+        if let Some((number, passlog)) = pass {
+            command
+                .args(["-pass", &number.to_string(), "-passlogfile"])
+                .arg(passlog);
+            if number == 1 {
+                command.args(["-an", "-f", "null"]);
+            }
+        }
+        command.args(["-progress", "pipe:1", "-y"]).arg(output_path);
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(log_file))
+            .spawn()
+            .map_err(|e| AppError::FFmpeg(format!("Cannot start FFmpeg: {}", e)))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::FFmpeg("FFmpeg progress pipe unavailable".to_string()))?;
+        let mut lines = BufReader::new(stdout).lines();
+        let mut lines_open = true;
+        let mut progress_value = 0.0;
+        let mut speed: Option<f64> = None;
+        let status = loop {
+            tokio::select! {
+                biased;
+                _ = &mut *cancel_rx => {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Err(AppError::FFmpeg("Cancelled".to_string()));
+                }
+                status = child.wait() => { break status.map_err(|e| AppError::FFmpeg(format!("FFmpeg wait failed: {}", e)))?; }
+                line = lines.next_line(), if lines_open => {
+                    match line {
+                        Ok(Some(line)) => {
+                            if let Some(value) = Self::parse_ffmpeg_progress(&line, duration) {
+                                progress_value = if let Some((number, _)) = pass { ((number - 1) as f64 + value) / 2.0 } else { value };
+                            }
+                            if let Some(sample) = line.strip_prefix("speed=").and_then(|v| v.trim().trim_end_matches('x').parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0) {
+                                speed = Some(speed.map_or(sample, |previous| previous * 0.7 + sample * 0.3));
+                            }
+                            if line.starts_with("progress=") {
+                                let eta = duration.zip(speed).map(|(seconds, rate)| seconds * (if pass.is_some() {2.0} else {1.0}) * (1.0-progress_value) / rate).filter(|v| v.is_finite());
+                                self.send_progress(ProcessingProgress {
+                                    task_id: task_id.to_string(), progress: progress_value,
+                                    stage: ProcessingStage::Processing,
+                                    message: format!("正在导出 · {}", settings.video_codec),
+                                    elapsed: start_time.elapsed(), encoder: Some(settings.video_codec.clone()), speed, eta_seconds: eta,
+                                }).await;
+                            }
+                        },
+                        _ => lines_open = false,
+                    }
+                }
+            }
+        };
+        if !status.success() {
+            let log = tokio::fs::read(&log_path).await.unwrap_or_default();
+            let tail = String::from_utf8_lossy(&log[log.len().saturating_sub(3000)..]);
+            return Err(AppError::FFmpeg(format!(
+                "{} 编码失败（{}）：{}",
+                settings.video_codec,
+                status,
+                tail.trim()
+            )));
+        }
+        Ok(())
     }
 
     /// 应用LUT到视频（使用外部提供的 task_id）
@@ -575,7 +686,9 @@ impl VideoProcessor {
         video_path: Option<&Path>,
         intensity: f32,
     ) -> AppResult<()> {
-        let lut_filter = Self::build_lut_filter(lut_paths, intensity)?;
+        let workspace = tempfile::tempdir().map_err(AppError::from)?;
+        let prepared = crate::core::ffmpeg::lut::prepare_luts(lut_paths, workspace.path()).await?;
+        let lut_filter = Self::build_lut_filter(&prepared, intensity)?;
 
         if let Some(parent) = output_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -624,7 +737,7 @@ impl VideoProcessor {
         settings: &EncodingSettings,
         max_concurrent: usize,
     ) -> AppResult<Vec<ProcessingResult>> {
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1)));
         let mut handles = Vec::new();
 
         for task in tasks {
@@ -685,6 +798,9 @@ impl VideoProcessor {
             stage: ProcessingStage::Starting,
             message: "开始格式转换".to_string(),
             elapsed: Duration::from_secs(0),
+            encoder: None,
+            speed: None,
+            eta_seconds: None,
         })
         .await;
 
@@ -735,6 +851,9 @@ impl VideoProcessor {
                 stage: ProcessingStage::Completed,
                 message: "格式转换完成".to_string(),
                 elapsed,
+                encoder: None,
+                speed: None,
+                eta_seconds: None,
             })
             .await;
 
@@ -753,6 +872,9 @@ impl VideoProcessor {
                 stage: ProcessingStage::Failed,
                 message: "格式转换失败".to_string(),
                 elapsed,
+                encoder: None,
+                speed: None,
+                eta_seconds: None,
             })
             .await;
 
@@ -898,23 +1020,27 @@ impl VideoProcessor {
 
     /// 取消任务
     pub async fn cancel_task(&self, task_id: &str) -> AppResult<bool> {
-        // 向任务发送取消信号
-        let sender_opt = {
-            let mut map = self.cancel_senders.lock().await;
-            map.remove(task_id)
-        };
-
-        if let Some(sender) = sender_opt {
-            let _ = sender.send(());
-            // 同时更新当前任务状态
-            let mut tasks = self.current_tasks.lock().await;
-            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+        let mut map = self.cancel_senders.lock().await;
+        match map.remove(task_id) {
+            Some(CancellationSlot::Running(sender)) => {
+                let _ = sender.send(());
+            }
+            _ => {
+                map.insert(task_id.to_string(), CancellationSlot::Requested);
+            }
+        }
+        if let Some(task) = self
+            .current_tasks
+            .lock()
+            .await
+            .iter_mut()
+            .find(|t| t.id == task_id)
+        {
+            if matches!(task.status, TaskStatus::Running | TaskStatus::Pending) {
                 task.status = TaskStatus::Cancelled;
             }
-            Ok(true)
-        } else {
-            Ok(false)
         }
+        Ok(true)
     }
 
     /// 清理完成的任务
@@ -940,20 +1066,14 @@ impl VideoProcessor {
             }
         }
 
-        // Fallback: out_time_ms (note: FFmpeg labels this "ms" but older builds
-        // output microseconds; newer builds output milliseconds. We try both
-        // heuristics: if the value yields > 10x total duration when treated as
-        // milliseconds, assume microseconds instead.)
-        if let Some(ms_str) = line.strip_prefix("out_time_ms=") {
-            let raw = ms_str.trim().parse::<f64>().ok()?;
-            let seconds_as_ms = raw / 1_000.0;
-            let seconds_as_us = raw / 1_000_000.0;
-            let seconds = if seconds_as_ms > total * 10.0 {
-                seconds_as_us
-            } else {
-                seconds_as_ms
-            };
-            if seconds >= 0.0 {
+        // FFmpeg's historical out_time_ms key is microseconds (same as out_time_us).
+        // Treating early microsecond samples as milliseconds made long exports jump to 99%.
+        if let Some(raw) = line
+            .strip_prefix("out_time_us=")
+            .or_else(|| line.strip_prefix("out_time_ms="))
+        {
+            let seconds = raw.trim().parse::<f64>().ok()? / 1_000_000.0;
+            if seconds.is_finite() && seconds >= 0.0 {
                 return Some((seconds / total).clamp(0.0, 0.99));
             }
         }
@@ -997,6 +1117,7 @@ impl VideoProcessor {
             current_tasks: self.current_tasks.clone(),
             progress_sender: self.progress_sender.clone(),
             cancel_senders: self.cancel_senders.clone(),
+            unavailable_encoders: self.unavailable_encoders.clone(),
         }
     }
 }
@@ -1053,6 +1174,9 @@ pub struct ProcessingProgress {
     pub stage: ProcessingStage,
     pub message: String,
     pub elapsed: Duration,
+    pub encoder: Option<String>,
+    pub speed: Option<f64>,
+    pub eta_seconds: Option<f64>,
 }
 
 /// 处理阶段
@@ -1117,7 +1241,7 @@ impl ProcessingStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn create_test_settings() -> EncodingSettings {
         EncodingSettings {
@@ -1157,15 +1281,13 @@ mod tests {
             1.0,
         )
         .unwrap();
-        assert_eq!(
-            filter,
-            "lut3d=file='/luts/a.cube',lut3d=file='/luts/b.cube',format=yuv422p"
-        );
+        assert!(filter.find("a.cube").unwrap() < filter.find("b.cube").unwrap());
+        assert!(filter.contains("tetrahedral"));
 
         // Test partial intensity produces a mix filter
         let filter_half =
             VideoProcessor::build_lut_filter(&[PathBuf::from("/luts/a.cube")], 0.5).unwrap();
-        assert!(filter_half.contains("mix="));
+        assert!(filter_half.contains("blend="));
         assert!(filter_half.contains("split"));
     }
 
@@ -1193,6 +1315,9 @@ mod tests {
             stage: ProcessingStage::Processing,
             message: "Processing...".to_string(),
             elapsed: Duration::from_secs(5),
+            encoder: None,
+            speed: None,
+            eta_seconds: None,
         };
 
         assert_eq!(progress.progress, 0.5);
@@ -1284,7 +1409,7 @@ mod tests {
         let line_ms = "out_time_ms=5000";
         let progress_ms = VideoProcessor::parse_ffmpeg_progress(line_ms, Some(20.0));
         assert!(progress_ms.is_some());
-        assert!((progress_ms.unwrap() - 0.25).abs() < 0.001);
+        assert!((progress_ms.unwrap() - 0.00025).abs() < 0.00001);
 
         let line2 =
             "frame=  123 fps= 25 q=28.0 size=    1024kB time=00:00:10.00 bitrate=1677.7kbits/s";
@@ -1295,5 +1420,705 @@ mod tests {
         let line3 = "invalid line";
         let progress3 = VideoProcessor::parse_ffmpeg_progress(line3, Some(20.0));
         assert!(progress3.is_none());
+    }
+    fn integration_ffmpeg() -> Option<PathBuf> {
+        crate::core::ffmpeg::discover_ffmpeg_path().ok()
+    }
+
+    async fn fixture(ffmpeg: &Path, path: &Path) {
+        let result = AsyncCommand::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x48:rate=12:duration=0.5",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.5",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=880:duration=0.5",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map",
+                "2:a",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-y",
+            ])
+            .arg(path)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn export_blends_lut_preserves_audio_and_never_overwrites() {
+        let Some(ffmpeg) = integration_ffmpeg() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("source.mp4");
+        fixture(&ffmpeg, &input).await;
+        let lut = temp.path().join("cinema ' tone,[1].cube");
+        // CUBE order: red changes fastest. Inversion makes the halfway blend neutral.
+        std::fs::write(
+            &lut,
+            "LUT_3D_SIZE 2\n1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n",
+        )
+        .unwrap();
+        let output = temp.path().join("finished.mp4");
+        let processor = VideoProcessor::new(ffmpeg.clone());
+        let result = processor
+            .apply_luts_with_task_id(
+                &input,
+                &output,
+                &[lut],
+                &create_test_settings(),
+                "blend-test".into(),
+                0.5,
+            )
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.file_size > 0);
+        let decoded = AsyncCommand::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&output)
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(decoded.status.success());
+        assert_eq!(decoded.stdout.len(), 64 * 48 * 3);
+        let mean_error: f64 = decoded
+            .stdout
+            .iter()
+            .map(|sample| (*sample as f64 - 128.0).abs())
+            .sum::<f64>()
+            / decoded.stdout.len() as f64;
+        assert!(
+            mean_error < 5.0,
+            "half-strength inversion must be neutral: mean error {mean_error}"
+        );
+        let ffprobe = crate::core::ffmpeg::discover_ffprobe_path().unwrap();
+        let audio = AsyncCommand::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output)
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&audio.stdout).lines().count(),
+            2,
+            "all audio tracks must survive"
+        );
+        let original = std::fs::read(&output).unwrap();
+        let rejected = processor
+            .apply_luts_with_task_id(
+                &input,
+                &output,
+                &[],
+                &create_test_settings(),
+                "collision-test".into(),
+                1.0,
+            )
+            .await
+            .unwrap();
+        assert!(!rejected.success);
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".lut-export-")));
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_registration_is_not_lost() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("cancelled.mp4");
+        let processor = VideoProcessor::new(PathBuf::from("missing-ffmpeg"));
+        processor.cancel_task("cancel-first").await.unwrap();
+        let result = processor
+            .apply_luts_with_task_id(
+                Path::new("missing.mp4"),
+                &output,
+                &[],
+                &create_test_settings(),
+                "cancel-first".into(),
+                1.0,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Cancelled"));
+        assert!(!output.exists());
+        assert!(matches!(
+            processor.get_current_tasks().await[0].status,
+            TaskStatus::Cancelled
+        ));
+        assert!(processor.cancel_senders.lock().await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hardware_failure_retries_software_and_running_cancel_stops_process() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(ffmpeg) = integration_ffmpeg() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("source.mp4");
+        fixture(&ffmpeg, &input).await;
+        let wrapper = temp.path().join("ffmpeg-wrapper");
+        let script = format!("#!/bin/sh\ncase \"$*\" in *videotoolbox*|*nvenc*|*qsv*) echo 'Cannot create compression session' >&2; exit 1;; esac\nexec '{}' \"$@\"\n", ffmpeg.to_string_lossy().replace('\'', "'\\''"));
+        std::fs::write(&wrapper, script).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let processor = VideoProcessor::new(wrapper.clone());
+        let mut settings = create_test_settings();
+        settings
+            .extra_params
+            .insert(INTERNAL_HARDWARE_KEY.into(), "1".into());
+        let output = temp.path().join("fallback.mp4");
+        let result = processor
+            .apply_luts_with_task_id(&input, &output, &[], &settings, "fallback-test".into(), 1.0)
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        // A stand-in encoder blocks until killed. Its parent process gets an exec,
+        // so termination cannot leave a shell child working in the background.
+        std::fs::write(&wrapper, "#!/bin/sh\necho 'out_time_us=1'\nexec sleep 30\n").unwrap();
+        let processor = Arc::new(VideoProcessor::new(wrapper));
+        let worker = processor.clone();
+        let cancelled_output = temp.path().join("cancelled.mp4");
+        let worker_output = cancelled_output.clone();
+        let handle = tokio::spawn(async move {
+            worker
+                .apply_luts_with_task_id(
+                    &input,
+                    &worker_output,
+                    &[],
+                    &create_test_settings(),
+                    "running-cancel".into(),
+                    1.0,
+                )
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        processor.cancel_task("running-cancel").await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("cancel should terminate encoder promptly")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.error.as_deref(), Some("Cancelled"));
+        assert!(!cancelled_output.exists());
+        assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".lut-export-")));
+    }
+    #[tokio::test]
+    async fn parallel_video_exports_and_two_pass_encoding_complete() {
+        let Some(ffmpeg) = integration_ffmpeg() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.mp4");
+        fixture(&ffmpeg, &input).await;
+        let processor = Arc::new(VideoProcessor::new(ffmpeg));
+        let mut settings = create_test_settings();
+        settings.bitrate = Some("500k".into());
+        settings
+            .extra_params
+            .insert(INTERNAL_TWO_PASS_KEY.into(), "1".into());
+        let mut handles = Vec::new();
+        for index in 0..2 {
+            let processor = processor.clone();
+            let input = input.clone();
+            let settings = settings.clone();
+            let output = temp.path().join(format!("output-{index}.mp4"));
+            handles.push(tokio::spawn(async move {
+                processor
+                    .apply_luts_with_task_id(
+                        &input,
+                        &output,
+                        &[],
+                        &settings,
+                        format!("parallel-{index}"),
+                        1.0,
+                    )
+                    .await
+                    .unwrap()
+            }));
+        }
+        for handle in handles {
+            let result = handle.await.unwrap();
+            assert!(result.success, "{:?}", result.error);
+            assert!(result.output_path.unwrap().exists());
+        }
+    }
+    #[tokio::test]
+    async fn anamorphic_export_uses_display_aspect_ratio_without_pillarboxing() {
+        let Some(ffmpeg) = integration_ffmpeg() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("anamorphic.mp4");
+        let fixture = AsyncCommand::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:size=1440x1080:rate=10:duration=0.1",
+                "-vf",
+                "setsar=4/3",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(&input)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            fixture.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fixture.stderr)
+        );
+        let mut settings = create_test_settings();
+        settings.resolution = Some(crate::core::ffmpeg::Resolution {
+            width: 1920,
+            height: 1080,
+        });
+        let output = temp.path().join("square-pixels.mp4");
+        let processor = VideoProcessor::new(ffmpeg.clone());
+        let result = processor
+            .apply_luts_with_task_id(
+                &input,
+                &output,
+                &[],
+                &settings,
+                "anamorphic-test".into(),
+                1.0,
+            )
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        let decoded = AsyncCommand::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&output)
+            .args([
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(decoded.status.success());
+        assert_eq!(decoded.stdout.len(), 1920 * 1080 * 3);
+        // The old 1440/1080 calculation introduced 240px black bars on each side.
+        // Sample all four near-corners and the center to verify full-frame content.
+        for (x, y) in [(2, 2), (1917, 2), (2, 1077), (1917, 1077), (960, 540)] {
+            let offset = (y * 1920 + x) * 3;
+            assert!(
+                decoded.stdout[offset] > 200
+                    && decoded.stdout[offset + 1] < 20
+                    && decoded.stdout[offset + 2] < 20,
+                "red source must fill 16:9 output at ({x}, {y}), got {:?}",
+                &decoded.stdout[offset..offset + 3]
+            );
+        }
+        let ffprobe = crate::core::ffmpeg::discover_ffprobe_path().unwrap();
+        let probe = AsyncCommand::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=sample_aspect_ratio,display_aspect_ratio",
+                "-of",
+                "json",
+            ])
+            .arg(&output)
+            .output()
+            .await
+            .unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        assert_eq!(metadata["streams"][0]["sample_aspect_ratio"], "1:1");
+        assert_eq!(metadata["streams"][0]["display_aspect_ratio"], "16:9");
+    }
+}
+
+/// Retry only hardware initialization/capability failures; corrupt input, bad
+/// filters, incompatible audio and full disks must not restart the entire job.
+fn non_encoder_failure(text: &str) -> bool {
+    [
+        "no space left",
+        "permission denied",
+        "read-only file system",
+        "disk quota exceeded",
+        "input/output error",
+        "invalid data found",
+        "moov atom not found",
+        "error opening input",
+        "error reinitializing filters",
+        "error while filtering",
+        "no such filter",
+        "error initializing filter",
+        "error applying option",
+        "error parsing a filter",
+        "error initializing complex filters",
+        "could not find tag for codec",
+        "codec not currently supported in container",
+    ]
+    .iter()
+    .any(|failure| text.contains(failure))
+}
+
+fn permanently_unavailable_encoder(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    if non_encoder_failure(&text) {
+        return false;
+    }
+    [
+        "unknown encoder",
+        "no nvenc capable devices",
+        "cannot load libcuda",
+        "cannot load nvcuda",
+        "no device available",
+        "no capable devices",
+        "failed to initialise vaapi connection",
+    ]
+    .iter()
+    .any(|value| text.contains(value))
+}
+fn retryable_hardware_error(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    if non_encoder_failure(&text) {
+        return false;
+    }
+    permanently_unavailable_encoder(message)
+        || [
+            "error while opening encoder",
+            "error initializing output stream",
+            "cannot create compression session",
+            "unsupported device",
+            "unsupported pixel format",
+            "mfx session",
+            "failed to open nvenc",
+        ]
+        .iter()
+        .any(|value| text.contains(value))
+}
+
+#[cfg(test)]
+mod color_depth_integration_tests {
+    use super::*;
+    use crate::commands::encoding_options::{build_encoding_settings, ProcessingOptions};
+
+    #[tokio::test]
+    async fn hevc_ten_bit_hdr_transform_preserves_audio_and_encodes_sdr_pixels() {
+        let Ok((ffmpeg, ffprobe)) = crate::core::ffmpeg::discover_ffmpeg_pair() else {
+            eprintln!("FFmpeg unavailable; skipping HEVC 10-bit integration test");
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        for (input_space, transfer) in
+            [("rec2020-pq", "smpte2084"), ("rec2020-hlg", "arib-std-b67")]
+        {
+            let source = directory.path().join(format!("{input_space}.mkv"));
+            let generated = AsyncCommand::new(&ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=0x804020:s=64x48:r=10:d=0.5",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=0.5",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "1:a",
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-color_primaries",
+                    "bt2020",
+                    "-color_trc",
+                    transfer,
+                    "-colorspace",
+                    "bt2020nc",
+                    "-c:v",
+                    "ffv1",
+                    "-threads",
+                    "1",
+                    "-c:a",
+                    "aac",
+                ])
+                .arg(&source)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                generated.status.success(),
+                "{}",
+                String::from_utf8_lossy(&generated.stderr)
+            );
+            let options: ProcessingOptions = serde_json::from_value(serde_json::json!({
+                "video_codec": "libx265", "output_format": "mp4", "output_bit_depth": "10",
+                "input_color_space": input_space, "hardware_acceleration": false,
+                "audio_codec": "aac", "quality_preset": "high"
+            }))
+            .unwrap();
+            let mut settings = build_encoding_settings(&options).unwrap();
+            settings.preset = "ultrafast".into();
+            settings.extra_params.insert(
+                "-x265-params".into(),
+                "lossless=1:pools=1:frame-threads=1".into(),
+            );
+            let output = directory.path().join(format!("{input_space}-sdr.mp4"));
+            let mut processor = VideoProcessor::new(ffmpeg.clone());
+            let (sender, mut progress) = mpsc::unbounded_channel();
+            processor.set_progress_sender(sender);
+            let result = processor
+                .apply_luts_with_task_id(&source, &output, &[], &settings, input_space.into(), 1.0)
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.error);
+            let mut encoder_seen = false;
+            while let Ok(update) = progress.try_recv() {
+                encoder_seen |= update.encoder.as_deref() == Some("libx265");
+            }
+            assert!(
+                encoder_seen,
+                "progress must identify the encoder actually used"
+            );
+            let probed = AsyncCommand::new(&ffprobe)
+                .args(["-v", "error", "-show_streams", "-of", "json"])
+                .arg(&output)
+                .output()
+                .await
+                .unwrap();
+            assert!(probed.status.success());
+            let probe: serde_json::Value = serde_json::from_slice(&probed.stdout).unwrap();
+            let streams = probe["streams"].as_array().unwrap();
+            let video = streams
+                .iter()
+                .find(|stream| stream["codec_type"] == "video")
+                .unwrap();
+            assert_eq!(video["codec_name"], "hevc");
+            assert_eq!(video["pix_fmt"], "yuv420p10le");
+            assert_eq!(video["profile"], "Main 10");
+            assert_eq!(video["color_primaries"], "bt709");
+            assert_eq!(video["color_transfer"], "bt709");
+            assert_eq!(video["color_space"], "bt709");
+            assert!(streams.iter().any(|stream| stream["codec_type"] == "audio"));
+            let encoded = AsyncCommand::new(&ffmpeg)
+                .args(["-v", "error", "-i"])
+                .arg(&output)
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
+                .output()
+                .await
+                .unwrap();
+            let reference = AsyncCommand::new(&ffmpeg)
+                .args(["-v", "error", "-i"])
+                .arg(&source)
+                .arg("-vf")
+                .arg(crate::core::ffmpeg::color::input_filter(input_space).unwrap())
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
+                .output()
+                .await
+                .unwrap();
+            assert!(encoded.status.success() && reference.status.success());
+            assert_eq!(encoded.stdout.len(), reference.stdout.len());
+            let error = encoded
+                .stdout
+                .iter()
+                .zip(&reference.stdout)
+                .map(|(a, b)| (*a as f64 - *b as f64).abs())
+                .sum::<f64>()
+                / encoded.stdout.len() as f64;
+            assert!(error < 4.0, "{input_space}: SDR tags must describe the actual RGB pixels; mean roundtrip error={error}");
+        }
+    }
+
+    #[test]
+    fn hardware_failures_are_classified_without_restarting_bad_input_or_full_disks() {
+        for message in [
+            "Unknown encoder 'h264_nvenc'",
+            "Cannot load libcuda.1",
+            "No NVENC capable devices found",
+        ] {
+            assert!(permanently_unavailable_encoder(message));
+            assert!(retryable_hardware_error(message));
+        }
+        for message in [
+            "Cannot create compression session",
+            "Error while opening encoder: MFX session failed",
+        ] {
+            assert!(retryable_hardware_error(message));
+            assert!(!permanently_unavailable_encoder(message));
+        }
+        for failure in [
+            "No space left on device", "Permission denied", "Invalid data found when processing input",
+            "Error reinitializing filters", "No such filter: missing", "Error applying option to filter lut3d",
+            "Could not find tag for codec pcm_s16le in stream #1, codec not currently supported in container",
+        ] {
+            let message = format!("{failure}\nError while opening encoder: unknown encoder");
+            assert!(!retryable_hardware_error(&message), "must fail immediately: {failure}");
+            assert!(!permanently_unavailable_encoder(&message), "must not poison engine cache: {failure}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unavailable_encoder_cache_tracks_executable_and_retries_transient_sessions() {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(ffmpeg) = crate::core::ffmpeg::discover_ffmpeg_path() else {
+            eprintln!("FFmpeg unavailable; skipping hardware cache integration test");
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.mp4");
+        let generated = AsyncCommand::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:size=64x48:rate=10:duration=0.2",
+                "-c:v",
+                "libx264",
+                "-threads",
+                "1",
+            ])
+            .arg(&source)
+            .output()
+            .await
+            .unwrap();
+        assert!(generated.status.success());
+        let log = directory.path().join("attempts.txt");
+        let first = directory.path().join("ffmpeg-first");
+        let second = directory.path().join("ffmpeg-second");
+        let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+        let wrapper = |path: &Path, error: &str| {
+            std::fs::write(path, format!("#!/bin/sh\ncase \"$*\" in *videotoolbox*|*nvenc*|*qsv*) echo attempted >> {}; echo '{}' >&2; exit 1;; esac\nexec {} \"$@\"\n", quote(&log), error, quote(&ffmpeg))).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        wrapper(&first, "Unknown encoder");
+        wrapper(&second, "Cannot create compression session");
+        let mut settings = EncodingSettings::default();
+        settings.video_codec = "libx264".into();
+        settings.preset = "ultrafast".into();
+        settings
+            .extra_params
+            .insert(INTERNAL_HARDWARE_KEY.into(), "1".into());
+        let mut processor = VideoProcessor::new(first.clone());
+        let hardware_count = if cfg!(target_os = "macos") { 1 } else { 2 };
+        for (index, expected) in [
+            hardware_count,
+            hardware_count,
+            hardware_count * 2,
+            hardware_count * 3,
+            hardware_count * 4,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index == 2 {
+                processor.set_ffmpeg_path(second.clone());
+            }
+            if index == 4 {
+                // Replacing an executable at the same path must invalidate its failures.
+                wrapper(&first, "Unknown encoder after engine update");
+                processor.set_ffmpeg_path(first.clone());
+            }
+            let output = directory.path().join(format!("output-{index}.mp4"));
+            let result = processor
+                .apply_luts_with_task_id(
+                    &source,
+                    &output,
+                    &[],
+                    &settings,
+                    format!("cache-{index}"),
+                    1.0,
+                )
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.error);
+            assert_eq!(
+                std::fs::read_to_string(&log).unwrap().lines().count(),
+                expected,
+                "run {index}: cache only permanent errors for the same executable version"
+            );
+        }
     }
 }

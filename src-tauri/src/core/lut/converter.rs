@@ -375,7 +375,11 @@ impl LutConverter {
     }
 
     /// 转换文件
-    fn build_output_path(&self, source_path: &Path, target_format: LutFormat) -> AppResult<PathBuf> {
+    fn build_output_path(
+        &self,
+        source_path: &Path,
+        target_format: LutFormat,
+    ) -> AppResult<PathBuf> {
         let parent = source_path.parent().ok_or_else(|| {
             AppError::InvalidInput("Source path has no parent directory".to_string())
         })?;
@@ -449,7 +453,9 @@ impl LutConverter {
             return Err(AppError::Validation("源格式与目标格式不兼容".to_string()));
         }
 
-        let converted = self.convert(&lut_data, target_format, options.clone()).await?;
+        let converted = self
+            .convert(&lut_data, target_format, options.clone())
+            .await?;
         let output_path = self.build_output_path(file_path, target_format)?;
         self.write_lut_file(&converted, &output_path).await?;
 
@@ -481,11 +487,7 @@ impl LutConverter {
     }
 
     /// 获取转换方法
-    fn get_conversion_method(
-        &self,
-        from: LutFormat,
-        to: LutFormat,
-    ) -> Option<ConversionMethod> {
+    fn get_conversion_method(&self, from: LutFormat, to: LutFormat) -> Option<ConversionMethod> {
         self.conversion_map.get(&(from, to)).copied()
     }
 

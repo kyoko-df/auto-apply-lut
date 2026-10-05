@@ -2,14 +2,10 @@
 //! 提供文件操作相关的Tauri命令
 
 use crate::core::file::{FileInfo as CoreFileInfo, FileManager as CoreFileManager};
-use crate::utils::config::ConfigManager;
 use crate::utils::logger;
-use crate::FfplayState;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
-use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryListing {
@@ -149,7 +145,7 @@ pub async fn open_file(path: String) -> Result<String, String> {
 pub async fn open_folder(path: String) -> Result<String, String> {
     logger::log_info(&format!("Opening folder: {}", path));
 
-    if !Path::new(&path).exists() {
+    if !Path::new(&path).is_dir() {
         return Err("Folder does not exist".to_string());
     }
 
@@ -219,104 +215,4 @@ pub async fn open_file_location(path: String) -> Result<String, String> {
     }
 
     Ok("File location opened successfully".to_string())
-}
-
-fn resolve_ffplay_executable(cfg_ffmpeg_path: Option<String>) -> Result<String, String> {
-    let ffplay_name = if cfg!(target_os = "windows") {
-        "ffplay.exe"
-    } else {
-        "ffplay"
-    };
-
-    // 1) If user configured an ffmpeg path, try to resolve ffplay in the same directory first.
-    if let Some(ffmpeg_path) = cfg_ffmpeg_path.filter(|s| !s.trim().is_empty()) {
-        let pb = PathBuf::from(&ffmpeg_path);
-        if pb.is_absolute() {
-            let ffplay_candidate = if pb.is_file() {
-                pb.parent()
-                    .map(|p| p.join(ffplay_name))
-                    .unwrap_or_else(|| PathBuf::from(ffplay_name))
-            } else {
-                pb.join(ffplay_name)
-            };
-            if ffplay_candidate.exists() {
-                return Ok(ffplay_candidate.to_string_lossy().to_string());
-            }
-        } else {
-            // Relative path means "use PATH". ffplay should also be in PATH.
-            if Command::new(ffplay_name).arg("-version").output().is_ok() {
-                return Ok(ffplay_name.to_string());
-            }
-        }
-    }
-
-    // 2) Use shared discovery (bundled resources for Full builds, or system paths for Lite builds).
-    if let Ok(p) = crate::core::ffmpeg::discover_ffplay_path() {
-        return Ok(p.to_string_lossy().to_string());
-    }
-
-    // 3) Final fallback: PATH
-    if Command::new(ffplay_name).arg("-version").output().is_ok() {
-        return Ok(ffplay_name.to_string());
-    }
-
-    Err("ffplay not found. Please install FFmpeg with ffplay or add it to PATH.".to_string())
-}
-
-#[tauri::command]
-pub async fn play_with_ffplay(
-    path: String,
-    config_manager: State<'_, Mutex<ConfigManager>>,
-    ffplay_state: State<'_, FfplayState>,
-) -> Result<String, String> {
-    logger::log_info(&format!("Playing with ffplay: {}", path));
-
-    if !Path::new(&path).exists() {
-        return Err("File does not exist".to_string());
-    }
-
-    let cfg_ffmpeg_path = config_manager
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?
-        .get_config()
-        .ffmpeg_path
-        .clone();
-
-    let ffplay = resolve_ffplay_executable(cfg_ffmpeg_path)?;
-
-    let mut guard = ffplay_state
-        .0
-        .lock()
-        .map_err(|e| format!("ffplay state lock poisoned: {}", e))?;
-
-    if let Some(mut prev) = guard.take() {
-        let _ = prev.kill();
-        let _ = prev.wait();
-    }
-
-    let child = Command::new(ffplay)
-        .args(["-autoexit", "-loglevel", "warning"])
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("Failed to launch ffplay: {}", e))?;
-
-    *guard = Some(child);
-
-    Ok("ffplay launched".to_string())
-}
-
-#[tauri::command]
-pub async fn stop_ffplay(ffplay_state: State<'_, FfplayState>) -> Result<String, String> {
-    let mut guard = ffplay_state
-        .0
-        .lock()
-        .map_err(|e| format!("ffplay state lock poisoned: {}", e))?;
-
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Ok("ffplay stopped".to_string());
-    }
-
-    Ok("ffplay not running".to_string())
 }

@@ -6,8 +6,11 @@ pub(crate) mod encoding_options;
 pub mod file_manager;
 pub mod gpu_manager;
 pub mod lut_manager;
+pub mod preview;
 pub mod processor;
+pub mod startup;
 pub mod system_manager;
+pub mod workspace;
 
 // 重新导出命令函数
 pub use system_manager::get_available_codecs;

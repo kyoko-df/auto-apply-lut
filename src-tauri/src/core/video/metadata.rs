@@ -22,6 +22,10 @@ pub struct VideoMetadata {
     pub pixel_format: Option<String>,
     /// 色彩空间
     pub color_space: Option<String>,
+    pub bit_depth: Option<u8>,
+    pub color_primaries: Option<String>,
+    pub color_transfer: Option<String>,
+    pub color_range: Option<String>,
     /// 音频流信息
     pub audio_streams: Vec<AudioStreamInfo>,
     /// 视频流信息
@@ -70,6 +74,10 @@ impl VideoMetadata {
             bitrate: None,
             pixel_format: None,
             color_space: None,
+            bit_depth: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_range: None,
             audio_streams: Vec::new(),
             video_streams: Vec::new(),
         };
@@ -100,6 +108,21 @@ impl VideoMetadata {
                             metadata.frame_rate = video_stream.frame_rate;
                             metadata.codec = Some(video_stream.codec.clone());
                             metadata.pixel_format = video_stream.pixel_format.clone();
+                            let tag = |key| {
+                                stream
+                                    .get(key)
+                                    .and_then(Value::as_str)
+                                    .filter(|v| !matches!(*v, "unknown" | "unspecified"))
+                                    .map(str::to_owned)
+                            };
+                            metadata.color_space = tag("color_space");
+                            metadata.color_primaries = tag("color_primaries");
+                            metadata.color_transfer = tag("color_transfer");
+                            metadata.color_range = tag("color_range");
+                            metadata.bit_depth = tag("bits_per_raw_sample")
+                                .and_then(|v| v.parse().ok())
+                                .filter(|v| *v > 0)
+                                .or_else(|| pixel_bit_depth(metadata.pixel_format.as_deref()));
                         }
 
                         metadata.video_streams.push(video_stream);
@@ -236,5 +259,37 @@ impl VideoMetadata {
     /// 获取主要音频流
     pub fn get_primary_audio_stream(&self) -> Option<&AudioStreamInfo> {
         self.audio_streams.first()
+    }
+}
+
+fn pixel_bit_depth(format: Option<&str>) -> Option<u8> {
+    let value = format?;
+    if value.contains("p010") || value.contains("10le") || value.contains("10be") {
+        Some(10)
+    } else if value.contains("12le") || value.contains("12be") {
+        Some(12)
+    } else if value.contains("16le") || value.contains("16be") {
+        Some(16)
+    } else if value.contains("yuv")
+        || value.contains("gbrp")
+        || matches!(value, "rgb24" | "bgr24" | "nv12" | "nv21")
+    {
+        Some(8)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    #[test]
+    fn parses_hdr_tags_without_guessing_unknown_sources() {
+        let data = serde_json::json!({"streams":[{"codec_type":"video","width":64,"height":64,"pix_fmt":"yuv420p10le","color_primaries":"bt2020","color_transfer":"smpte2084","color_space":"bt2020nc","color_range":"tv"}]});
+        let info = VideoMetadata::from_ffprobe_json(&data).unwrap();
+        assert_eq!(info.bit_depth, Some(10));
+        assert_eq!(info.color_transfer.as_deref(), Some("smpte2084"));
+        assert_eq!(info.color_space.as_deref(), Some("bt2020nc"));
+        assert_eq!(pixel_bit_depth(Some("unknown")), None);
     }
 }

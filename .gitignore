@@ -22,3 +22,27 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Downloaded media engines are pinned by resources/ffmpeg-manifest.json.
+src-tauri/resources/bin/macos/
+src-tauri/resources/bin/windows/
+src-tauri/resources/bin/linux/
+
+docs/benchmarks/
+.pnpm-store/*
+tmp/*
+
+# Local environment and tool state
+.env
+.env.*
+!.env.example
+
+# Test and build artifacts
+coverage/
+*.lcov
+*.tsbuildinfo
+
+# OS metadata
+Thumbs.db
+desktop.ini
+._*

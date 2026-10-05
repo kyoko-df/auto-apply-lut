@@ -2,10 +2,12 @@ use crate::core::ffmpeg::{EncodingSettings, Resolution};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub(crate) const INTERNAL_HARDWARE_KEY: &str = "__hardware__";
 pub(crate) const INTERNAL_TWO_PASS_KEY: &str = "__two_pass__";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessingOptions {
+    #[serde(default)]
     pub hardware_acceleration: bool,
     #[serde(default)]
     pub output_format: Option<String>,
@@ -23,6 +25,10 @@ pub struct ProcessingOptions {
     pub bitrate: Option<String>,
     #[serde(default)]
     pub color_space: Option<String>,
+    #[serde(default)]
+    pub output_bit_depth: Option<String>,
+    #[serde(default)]
+    pub input_color_space: Option<String>,
     #[serde(default)]
     pub two_pass_encoding: bool,
     #[serde(default = "default_preserve_metadata")]
@@ -53,8 +59,14 @@ fn parse_resolution(value: Option<&str>) -> Result<Option<Resolution>, String> {
         .parse::<u32>()
         .map_err(|_| format!("Invalid resolution height: {}", h))?;
 
-    if width == 0 || height == 0 {
-        return Err("Resolution must be positive".to_string());
+    if width < 2
+        || height < 2
+        || width > 16384
+        || height > 16384
+        || width % 2 != 0
+        || height % 2 != 0
+    {
+        return Err("Resolution must use even dimensions between 2 and 16384".to_string());
     }
 
     Ok(Some(Resolution { width, height }))
@@ -100,36 +112,6 @@ fn apply_quality_preset(
     }
 }
 
-fn apply_color_space(color_space: Option<&str>, extra_params: &mut HashMap<String, String>) {
-    match color_space.unwrap_or("").trim() {
-        "rec2020" => {
-            extra_params.insert("-colorspace".to_string(), "bt2020nc".to_string());
-            extra_params.insert("-color_primaries".to_string(), "bt2020".to_string());
-            extra_params.insert("-color_trc".to_string(), "smpte2084".to_string());
-        }
-        "srgb" => {
-            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
-            extra_params.insert("-color_primaries".to_string(), "bt709".to_string());
-            extra_params.insert("-color_trc".to_string(), "iec61966-2-1".to_string());
-        }
-        "adobe_rgb" => {
-            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
-            extra_params.insert("-color_primaries".to_string(), "bt470bg".to_string());
-            extra_params.insert("-color_trc".to_string(), "gamma22".to_string());
-        }
-        "dci_p3" => {
-            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
-            extra_params.insert("-color_primaries".to_string(), "smpte432".to_string());
-            extra_params.insert("-color_trc".to_string(), "smpte2084".to_string());
-        }
-        _ => {
-            extra_params.insert("-colorspace".to_string(), "bt709".to_string());
-            extra_params.insert("-color_primaries".to_string(), "bt709".to_string());
-            extra_params.insert("-color_trc".to_string(), "bt709".to_string());
-        }
-    }
-}
-
 pub(crate) fn build_encoding_settings(
     options: &ProcessingOptions,
 ) -> Result<EncodingSettings, String> {
@@ -150,13 +132,36 @@ pub(crate) fn build_encoding_settings(
         options.output_format.as_deref(),
     );
 
+    let depth = options.output_bit_depth.as_deref().unwrap_or("8");
+    if !matches!(depth, "8" | "10") {
+        return Err("输出位深仅支持 8 或 10 bit".into());
+    }
+    if depth == "10" && !matches!(settings.video_codec.as_str(), "libx265" | "prores_ks") {
+        return Err("10-bit 输出请选择 HEVC 或 ProRes".into());
+    }
+    extra_params.insert("__bit_depth__".into(), depth.into());
+    let input_space = options.input_color_space.as_deref().unwrap_or("auto");
+    crate::core::ffmpeg::color::input_filter(input_space).map_err(|e| e.to_string())?;
+    extra_params.insert("__input_color_space__".into(), input_space.into());
+    if input_space != "auto" {
+        for key in ["-color_primaries", "-color_trc", "-colorspace"] {
+            extra_params.insert(key.into(), "bt709".into());
+        }
+        extra_params.insert("-color_range".into(), "tv".into());
+    }
     settings.resolution = parse_resolution(options.resolution.as_deref())?;
-    settings.fps = options.fps.filter(|v| *v > 0.0);
+    if options
+        .fps
+        .is_some_and(|fps| !fps.is_finite() || fps <= 0.0 || fps > 240.0)
+    {
+        return Err("Frame rate must be between 0 and 240".to_string());
+    }
+    settings.fps = options.fps;
     settings.bitrate =
         normalize_optional(options.bitrate.as_deref()).filter(|v| !v.eq_ignore_ascii_case("auto"));
 
     if options.hardware_acceleration {
-        extra_params.insert("-hwaccel".to_string(), "auto".to_string());
+        extra_params.insert(INTERNAL_HARDWARE_KEY.to_string(), "1".to_string());
     }
     if !options.preserve_metadata {
         extra_params.insert("-map_metadata".to_string(), "-1".to_string());
@@ -164,8 +169,99 @@ pub(crate) fn build_encoding_settings(
     if options.two_pass_encoding {
         extra_params.insert(INTERNAL_TWO_PASS_KEY.to_string(), "1".to_string());
     }
-    apply_color_space(options.color_space.as_deref(), &mut extra_params);
+    // A color tag is not a color transform. Preserve source tags unless a real,
+    // explicit conversion is implemented; never label camera Log / HDR as Rec.709.
+    if !matches!(
+        settings.video_codec.as_str(),
+        "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
+    ) {
+        return Err("Choose H.264, HEVC, VP9 or ProRes for LUT processing".to_string());
+    }
+    if !matches!(
+        settings.audio_codec.as_str(),
+        "aac" | "copy" | "libopus" | "pcm_s16le" | "pcm_s24le"
+    ) {
+        return Err("Unsupported audio encoder".to_string());
+    }
+    let format = options
+        .output_format
+        .as_deref()
+        .unwrap_or("mp4")
+        .trim_start_matches('.');
+    if !matches!(format, "mp4" | "mov" | "mkv" | "webm") {
+        return Err("Output format must be MP4, MOV, MKV or WebM".to_string());
+    }
+    if format == "webm"
+        && (settings.video_codec != "libvpx-vp9"
+            || !matches!(settings.audio_codec.as_str(), "libopus" | "copy"))
+    {
+        return Err("WebM requires VP9 video and Opus audio".to_string());
+    }
+    if settings.video_codec == "prores_ks" && !matches!(format, "mov" | "mkv") {
+        return Err("ProRes requires a MOV or MKV output".to_string());
+    }
+    if matches!(format, "mp4" | "mov") {
+        extra_params.insert("-movflags".to_string(), "+faststart".to_string());
+    }
+    if let Some(bitrate) = &settings.bitrate {
+        let numeric = bitrate.trim_end_matches(['k', 'K', 'm', 'M']);
+        if numeric
+            .parse::<f64>()
+            .map_or(true, |n| !n.is_finite() || n <= 0.0)
+        {
+            return Err("Bitrate must be positive, for example 12M or 8000k".to_string());
+        }
+    }
+    if options.two_pass_encoding
+        && (settings.bitrate.is_none() || settings.video_codec != "libx264")
+    {
+        return Err("Two-pass encoding requires H.264 and an explicit bitrate".to_string());
+    }
 
     settings.extra_params = extra_params;
     Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(value: serde_json::Value) -> ProcessingOptions {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn acceleration_is_an_encoder_request_and_source_color_tags_are_preserved() {
+        let settings =
+            build_encoding_settings(&options(serde_json::json!({"hardware_acceleration": true})))
+                .unwrap();
+        assert_eq!(
+            settings
+                .extra_params
+                .get(INTERNAL_HARDWARE_KEY)
+                .map(String::as_str),
+            Some("1")
+        );
+        assert!(!settings.extra_params.contains_key("-hwaccel"));
+        assert!(!settings.extra_params.contains_key("-color_trc"));
+        assert!(!settings.extra_params.contains_key("-colorspace"));
+    }
+
+    #[test]
+    fn incompatible_containers_and_invalid_rates_fail_before_task_creation() {
+        for invalid in [
+            serde_json::json!({"output_format":"webm"}),
+            serde_json::json!({"video_codec":"prores_ks", "output_format":"mp4"}),
+            serde_json::json!({"fps": -1}),
+            serde_json::json!({"bitrate":"-10M"}),
+            serde_json::json!({"two_pass_encoding":true}),
+        ] {
+            assert!(build_encoding_settings(&options(invalid)).is_err());
+        }
+        assert!(build_encoding_settings(&options(serde_json::json!({"output_format":"webm", "video_codec":"libvpx-vp9", "audio_codec":"libopus"}))).is_ok());
+        assert!(build_encoding_settings(&options(
+            serde_json::json!({"two_pass_encoding":true,"bitrate":"8M"})
+        ))
+        .is_ok());
+    }
 }

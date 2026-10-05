@@ -1,1084 +1,1073 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
-import FileUpload from './components/FileUpload';
-import LutLibraryPanel from './components/LutLibraryPanel';
-import VideoPreview from './components/VideoPreview';
-import SettingsModal from './components/SettingsModal';
-import ProcessingStatus from './components/ProcessingStatus';
-import './App.css';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  CircleHelp,
+  Clapperboard,
+  Cpu,
+  FileVideo,
+  FolderInput,
+  FolderOpen,
+  Layers3,
+  ListVideo,
+  LoaderCircle,
+  Plus,
+  RotateCcw,
+  Search,
+  Settings2,
+  SlidersHorizontal,
+  Upload,
+  X,
+} from "lucide-react";
+import FramePreview, { timecode } from "./components/FramePreview";
+import WindowedList from "./components/WindowedList";
+import WorkspaceStatus from "./components/WorkspaceStatus";
+import ExportInspector from "./components/ExportInspector";
+import { useWorkspace } from "./workspace/useWorkspace";
+import type { Clip } from "./workspace/types";
+import "./App.css";
 
-interface ProcessingTask {
-  id: string;
-  name: string;
-  progress: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
-  stage: string;
-  sourcePath: string;
-  backendTaskId?: string;
-  batchId?: string;
-  outputPath?: string;
-  eta?: number;
-  speed?: number;
-  error?: string;
-}
-
-interface ProcessingSettings {
-  output_format: string;
-  video_codec: string;
-  audio_codec: string;
-  quality_preset: string;
-  resolution: string;
-  fps: number | null;
-  bitrate: string;
-  lut_intensity: number;
-  lut_error_strategy: 'StopOnError' | 'SkipOnError';
-  color_space: string;
-  hardware_acceleration: boolean;
-  two_pass_encoding: boolean;
-  preserve_metadata: boolean;
-  output_directory: string;
-}
-
-interface PersistedAppSettings {
-  default_output_dir: string;
-  ffmpeg_path: string;
-  max_concurrent_tasks: number;
-  cache_size_mb: number;
-  hardware_acceleration: boolean;
-  log_level: string;
-  ui_theme: string;
-  language: string;
-  output_format: string;
-  video_codec: string;
-  audio_codec: string;
-  quality_preset: string;
-  resolution: string;
-  fps: number | null;
-  bitrate: string;
-  lut_intensity: number;
-  lut_error_strategy: 'StopOnError' | 'SkipOnError' | string;
-  color_space: string;
-  two_pass_encoding: boolean;
-  preserve_metadata: boolean;
-}
-
-interface StartProcessResponse {
-  task_id: string;
-  output_path?: string;
-}
-
-interface TaskProgressResponse {
-  progress: number;
-  status_message?: string;
-  status?: string;
-  error?: string;
-  output_path?: string;
-}
-
-interface BatchItemRequest {
-  input_path: string;
-  output_path: string;
-  lut_paths: string[];
-  lut_path: string | null;
-  intensity: number;
-}
-
-interface BatchStartResponse {
-  batch_id: string;
-  total_items: number;
-  status: string;
-  message: string;
-}
-
-interface BatchProgressResponse {
-  batch_id: string;
-  total_items: number;
-  completed_items: number;
-  failed_items: number;
-  cancelled_items?: number;
-  current_item?: string;
-  overall_progress: number;
-  status: string;
-  errors: string[];
-  items?: BatchItemProgressResponse[];
-}
-
-interface BatchItemProgressResponse {
-  input_path: string;
-  output_path: string;
-  status: string;
-  progress: number;
-  error?: string;
-}
-
-const DEFAULT_APP_SETTINGS: PersistedAppSettings = {
-  default_output_dir: '',
-  ffmpeg_path: '',
-  max_concurrent_tasks: 4,
-  cache_size_mb: 1024,
-  hardware_acceleration: false,
-  log_level: 'info',
-  ui_theme: 'light',
-  language: 'zh-CN',
-  output_format: 'mp4',
-  video_codec: 'libx264',
-  audio_codec: 'aac',
-  quality_preset: 'balanced',
-  resolution: 'original',
-  fps: null,
-  bitrate: 'auto',
-  lut_intensity: 100,
-  lut_error_strategy: 'StopOnError',
-  color_space: 'rec709',
-  two_pass_encoding: false,
-  preserve_metadata: true
+const clipStatus: Record<Clip["status"], string> = {
+  ready: "待导出",
+  queued: "排队中",
+  processing: "导出中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "待重试",
 };
+const basename = (path: string) => path.split(/[\\/]/).pop() || path;
+const filesize = (n = 0) =>
+  n >= 1073741824
+    ? `${(n / 1073741824).toFixed(1)} GB`
+    : n >= 1048576
+      ? `${(n / 1048576).toFixed(1)} MB`
+      : `${Math.round(n / 1024)} KB`;
 
-const mapAppSettingsToProcessingSettings = (settings: PersistedAppSettings): ProcessingSettings => ({
-  output_format: settings.output_format || DEFAULT_APP_SETTINGS.output_format,
-  video_codec: settings.video_codec || DEFAULT_APP_SETTINGS.video_codec,
-  audio_codec: settings.audio_codec || DEFAULT_APP_SETTINGS.audio_codec,
-  quality_preset: settings.quality_preset || DEFAULT_APP_SETTINGS.quality_preset,
-  resolution: settings.resolution || DEFAULT_APP_SETTINGS.resolution,
-  fps: settings.fps,
-  bitrate: settings.bitrate || DEFAULT_APP_SETTINGS.bitrate,
-  lut_intensity: typeof settings.lut_intensity === 'number' ? settings.lut_intensity : DEFAULT_APP_SETTINGS.lut_intensity,
-  lut_error_strategy: settings.lut_error_strategy === 'SkipOnError' ? 'SkipOnError' : 'StopOnError',
-  color_space: settings.color_space || DEFAULT_APP_SETTINGS.color_space,
-  hardware_acceleration: settings.hardware_acceleration,
-  two_pass_encoding: settings.two_pass_encoding,
-  preserve_metadata: settings.preserve_metadata,
-  output_directory: settings.default_output_dir || ''
-});
+export default function App() {
+  const w = useWorkspace();
+  const [section, setSection] = useState<"media" | "luts">("media");
+  const [view, setView] = useState<"workspace" | "queue">("workspace");
+  const [search, setSearch] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const wRef = useRef(w);
+  wRef.current = w;
+  const exportScopeRef = useRef<"pending" | "selected">("pending");
+  const visibleIdsRef = useRef<string[]>([]);
+  const locked = w.isExporting || w.loading;
+  const active = w.activeClip;
+  const totalDuration = w.clips.reduce(
+    (sum, c) => sum + (c.info?.duration || 0),
+    0,
+  );
+  const completed = w.clips.filter((c) => c.status === "completed").length;
+  const failures = w.clips.filter(
+    (c) => c.status === "failed" || c.status === "cancelled",
+  ).length;
+  const filteredClips = w.clips.filter((c) =>
+    c.name.toLowerCase().includes(search.toLowerCase()),
+  );
+  const filteredLuts = w.luts.filter((l) =>
+    l.name.toLowerCase().includes(search.toLowerCase()),
+  );
 
-const mapProcessingSettingsToAppSettings = (
-  settings: ProcessingSettings,
-  baseSettings: PersistedAppSettings
-): PersistedAppSettings => ({
-  ...baseSettings,
-  default_output_dir: settings.output_directory,
-  hardware_acceleration: settings.hardware_acceleration,
-  output_format: settings.output_format,
-  video_codec: settings.video_codec,
-  audio_codec: settings.audio_codec,
-  quality_preset: settings.quality_preset,
-  resolution: settings.resolution,
-  fps: settings.fps,
-  bitrate: settings.bitrate,
-  lut_intensity: settings.lut_intensity,
-  lut_error_strategy: settings.lut_error_strategy,
-  color_space: settings.color_space,
-  two_pass_encoding: settings.two_pass_encoding,
-  preserve_metadata: settings.preserve_metadata
-});
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const getFileName = (path: string): string => {
-  const parts = path.split(/[\/\\]/);
-  return parts[parts.length - 1] || 'unknown';
-};
-
-const buildExpectedOutputPath = (
-  inputPath: string,
-  outputDirectory: string,
-  outputFormat: string
-): string => {
-  const slashIndex = Math.max(inputPath.lastIndexOf('/'), inputPath.lastIndexOf('\\'));
-  const sep = inputPath.lastIndexOf('\\') > inputPath.lastIndexOf('/') ? '\\' : '/';
-  const parent = slashIndex >= 0 ? inputPath.slice(0, slashIndex) : '';
-  const fileName = slashIndex >= 0 ? inputPath.slice(slashIndex + 1) : inputPath;
-  const dotIndex = fileName.lastIndexOf('.');
-  const fileStem = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
-  const inputExt = dotIndex > 0 ? fileName.slice(dotIndex + 1) : 'mp4';
-  const cleanedOutputFormat = outputFormat.trim().replace(/^\./, '');
-  const ext = cleanedOutputFormat || inputExt || 'mp4';
-  const dir = outputDirectory.trim() || parent;
-
-  if (!dir) {
-    return `${fileStem}_lut_applied.${ext}`;
-  }
-
-  const needsSep = !dir.endsWith('/') && !dir.endsWith('\\');
-  return `${dir}${needsSep ? sep : ''}${fileStem}_lut_applied.${ext}`;
-};
-
-function App() {
-  const [videoFiles, setVideoFiles] = useState<string[]>([]);
-  const [activeVideoFile, setActiveVideoFile] = useState<string | null>(null);
-  const [lutFiles, setLutFiles] = useState<string[]>([]);
-  const [processedVideoPath, setProcessedVideoPath] = useState<string | null>(null);
-  const [processingTasks, setProcessingTasks] = useState<ProcessingTask[]>([]);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isLutLibraryOpen, setIsLutLibraryOpen] = useState(false);
-  const [, setPersistedAppSettings] = useState<PersistedAppSettings>(DEFAULT_APP_SETTINGS);
-  const [settings, setSettings] = useState<ProcessingSettings>(() => mapAppSettingsToProcessingSettings(DEFAULT_APP_SETTINGS));
-
-  const processingTasksRef = useRef<ProcessingTask[]>([]);
-  const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
-  const persistedAppSettingsRef = useRef<PersistedAppSettings>(DEFAULT_APP_SETTINGS);
+  visibleIdsRef.current = filteredClips.map(c => c.id);
 
   useEffect(() => {
-    processingTasksRef.current = processingTasks;
-  }, [processingTasks]);
-
-  useEffect(() => {
-    let active = true;
-
-    const loadSettings = async () => {
-      try {
-        const loaded = await invoke<PersistedAppSettings>('get_app_settings');
-        if (!active) return;
-        const mergedSettings = { ...DEFAULT_APP_SETTINGS, ...loaded };
-        persistedAppSettingsRef.current = mergedSettings;
-        setPersistedAppSettings(mergedSettings);
-        setSettings(mapAppSettingsToProcessingSettings(mergedSettings));
-      } catch (error) {
-        console.error('加载设置失败:', error);
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || settingsOpen || helpOpen || document.querySelector("dialog[open]")) return;
+      const editing = (e.target as HTMLElement)?.matches(
+        "input, textarea, select, [contenteditable=true]",
+      );
+      if (!editing && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        wRef.current.selectAll(visibleIdsRef.current);
+      }
+      if (!editing && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        wRef.current.undo();
+      }
+      if (e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        if (!wRef.current.isExporting) void wRef.current.importVideos();
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (!wRef.current.isExporting) {
+          setView("queue");
+          if (exportScopeRef.current === "selected") void wRef.current.exportSelected();
+          else void wRef.current.startExport();
+        }
       }
     };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsOpen, helpOpen]);
 
-    void loadSettings();
-
+  useEffect(() => {
+    if (!w.isDesktop) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebviewWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter") setDragging(true);
+        if (event.payload.type === "leave") setDragging(false);
+        if (event.payload.type === "drop") {
+          setDragging(false);
+          if (!wRef.current.isExporting)
+            void wRef.current.importVideos(event.payload.paths);
+        }
+      })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
     return () => {
-      active = false;
+      disposed = true;
+      unlisten?.();
     };
-  }, []);
+  }, [w.isDesktop]);
 
   useEffect(() => {
+    if (settingsOpen || helpOpen) {
+      dialogRef.current?.showModal?.();
+      closeRef.current?.focus();
+    } else dialogRef.current?.close?.();
+  }, [settingsOpen, helpOpen]);
+
+  const openPath = useCallback(async (path: string, folder = false) => {
     try {
-      const raw = window.localStorage.getItem('auto-apply-lut:lastLuts:v1');
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-      const list = parsed.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-      if (list.length > 0) setLutFiles(list);
-    } catch {
-      return;
+      await invoke(folder ? "open_folder" : "open_file_location", { path });
+    } catch (e) {
+      wRef.current.setNotice({ kind: "error", message: String(e) });
     }
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('auto-apply-lut:lastLuts:v1', JSON.stringify(lutFiles));
-    } catch {
-      return;
-    }
-  }, [lutFiles]);
-
-  useEffect(() => {
-    if (!isLutLibraryOpen) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsLutLibraryOpen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isLutLibraryOpen]);
-
-  const handleVideoSelect = useCallback((filePaths: string[]) => {
-    setProcessedVideoPath(null);
-    setVideoFiles(filePaths);
-    setActiveVideoFile(prev => {
-      if (filePaths.length === 0) return null;
-      if (prev && filePaths.includes(prev)) return prev;
-      return filePaths[0];
-    });
-  }, []);
-
-  const handleActiveVideoChange = useCallback((filePath: string | null) => {
-    setActiveVideoFile(filePath);
-    setProcessedVideoPath(null);
-  }, []);
-
-  const handleLutSelect = useCallback((filePaths: string[]) => {
-    setLutFiles(filePaths);
-  }, []);
-
-  const runSingleTask = useCallback(async (task: ProcessingTask) => {
-    const uiTaskId = task.id;
-    const sourcePath = task.sourcePath;
-
-    if (cancelledTaskIdsRef.current.has(uiTaskId)) {
-      setProcessingTasks(prev =>
-        prev.map(t =>
-          t.id === uiTaskId
-            ? { ...t, status: 'cancelled', stage: '已取消' }
-            : t
-        )
-      );
-      return;
-    }
-
-    setProcessingTasks(prev =>
-      prev.map(t =>
-        t.id === uiTaskId
-          ? { ...t, status: 'processing', stage: '应用LUT...' }
-          : t
-      )
-    );
-
-    try {
-      const result = await invoke<StartProcessResponse>('start_video_processing', {
-        request: {
-          input_path: sourcePath,
-          output_path: '',
-          output_directory: settings.output_directory || null,
-          output_format: settings.output_format,
-          lut_paths: lutFiles,
-          intensity: settings.lut_intensity / 100.0,
-          hardware_acceleration: settings.hardware_acceleration,
-          video_codec: settings.video_codec,
-          audio_codec: settings.audio_codec,
-          quality_preset: settings.quality_preset,
-          resolution: settings.resolution,
-          fps: settings.fps,
-          bitrate: settings.bitrate,
-          color_space: settings.color_space,
-          two_pass_encoding: settings.two_pass_encoding,
-          preserve_metadata: settings.preserve_metadata,
-          lut_error_strategy: settings.lut_error_strategy,
-        }
-      });
-
-      const backendTaskId = result.task_id;
-      const expectedOutputPath = result.output_path || task.outputPath || `${sourcePath}_processed.mp4`;
-
-      setProcessingTasks(prev =>
-        prev.map(t =>
-          t.id === uiTaskId
-            ? { ...t, backendTaskId, outputPath: expectedOutputPath }
-            : t
-        )
-      );
-
-      let consecutivePollErrors = 0;
-      for (;;) {
-        if (cancelledTaskIdsRef.current.has(uiTaskId)) {
-          await invoke('cancel_task', { taskId: backendTaskId }).catch(() => undefined);
-          setProcessingTasks(prev =>
-            prev.map(t =>
-              t.id === uiTaskId
-                ? { ...t, status: 'cancelled', stage: '已取消' }
-                : t
-            )
-          );
-          break;
-        }
-
-        let progressInfo: TaskProgressResponse;
-        try {
-          progressInfo = await invoke<TaskProgressResponse>('get_task_progress', { taskId: backendTaskId });
-          consecutivePollErrors = 0;
-        } catch (error) {
-          consecutivePollErrors += 1;
-          if (consecutivePollErrors >= 3) {
-            const message = error instanceof Error ? error.message : '获取进度失败';
-            setProcessingTasks(prev =>
-              prev.map(t =>
-                t.id === uiTaskId
-                  ? { ...t, status: 'failed', stage: '处理失败', error: message }
-                  : t
-              )
-            );
-            break;
-          }
-          await sleep(1000);
-          continue;
-        }
-
-        const progress = Math.max(0, Math.min(100, Math.round(progressInfo.progress || 0)));
-        const status = (progressInfo.status || '').toLowerCase();
-        const outputPath = progressInfo.output_path || expectedOutputPath;
-
-        setProcessingTasks(prev =>
-          prev.map(t =>
-            t.id === uiTaskId
-              ? {
-                  ...t,
-                  progress,
-                  stage: progressInfo.status_message || '处理中...',
-                  outputPath,
-                }
-              : t
-          )
-        );
-
-        if (status === 'failed') {
-          setProcessingTasks(prev =>
-            prev.map(t =>
-              t.id === uiTaskId
-                ? {
-                    ...t,
-                    status: 'failed',
-                    stage: '处理失败',
-                    error: progressInfo.error || '未知错误',
-                  }
-                : t
-            )
-          );
-          break;
-        }
-
-        if (status === 'cancelled') {
-          setProcessingTasks(prev =>
-            prev.map(t =>
-              t.id === uiTaskId
-                ? { ...t, status: 'cancelled', stage: '已取消' }
-                : t
-            )
-          );
-          break;
-        }
-
-        if (status === 'completed' || progress >= 100) {
-          try {
-            await invoke('get_file_info', { path: outputPath });
-            setProcessingTasks(prev =>
-              prev.map(t =>
-                t.id === uiTaskId
-                  ? {
-                      ...t,
-                      status: 'completed',
-                      progress: 100,
-                      stage: '已完成',
-                      outputPath,
-                    }
-                  : t
-              )
-            );
-            setProcessedVideoPath(outputPath);
-          } catch {
-            setProcessingTasks(prev =>
-              prev.map(t =>
-                t.id === uiTaskId
-                  ? { ...t, status: 'failed', stage: '处理失败：未找到输出文件' }
-                  : t
-              )
-            );
-          }
-          break;
-        }
-
-        await sleep(1000);
-      }
-    } catch (error) {
-      setProcessingTasks(prev =>
-        prev.map(t =>
-          t.id === uiTaskId
-            ? {
-                ...t,
-                status: 'failed',
-                stage: '处理失败',
-                error: error instanceof Error ? error.message : '未知错误',
-              }
-            : t
-        )
-      );
-    }
-  }, [lutFiles, settings]);
-
-  const runBatchTasks = useCallback(async (queuedTasks: ProcessingTask[]) => {
-    const queuedIdSet = new Set(queuedTasks.map(task => task.id));
-
-    try {
-      const items: BatchItemRequest[] = queuedTasks.map(task => ({
-        input_path: task.sourcePath,
-        output_path: task.outputPath || '',
-        lut_paths: lutFiles,
-        lut_path: lutFiles[0] || null,
-        intensity: settings.lut_intensity / 100.0,
-      }));
-
-      const startRes = await invoke<BatchStartResponse>('start_batch_processing', {
-        request: {
-          items,
-          output_directory: settings.output_directory || '',
-          preserve_structure: false,
-          hardware_acceleration: settings.hardware_acceleration,
-          output_format: settings.output_format,
-          video_codec: settings.video_codec,
-          audio_codec: settings.audio_codec,
-          quality_preset: settings.quality_preset,
-          resolution: settings.resolution,
-          fps: settings.fps,
-          bitrate: settings.bitrate,
-          color_space: settings.color_space,
-          two_pass_encoding: settings.two_pass_encoding,
-          preserve_metadata: settings.preserve_metadata,
-        }
-      });
-
-      const batchId = startRes.batch_id;
-      setProcessingTasks(prev =>
-        prev.map(task =>
-          queuedIdSet.has(task.id)
-            ? { ...task, batchId, stage: '等待批处理调度...', status: 'pending' }
-            : task
-        )
-      );
-
-      let consecutivePollErrors = 0;
-
-      for (;;) {
-        let progress: BatchProgressResponse;
-        try {
-          progress = await invoke<BatchProgressResponse>('get_batch_progress', { batchId });
-          consecutivePollErrors = 0;
-        } catch (error) {
-          consecutivePollErrors += 1;
-          if (consecutivePollErrors >= 3) {
-            const message = error instanceof Error ? error.message : '获取批处理进度失败';
-            setProcessingTasks(prev =>
-              prev.map(task =>
-                queuedIdSet.has(task.id) && (task.status === 'pending' || task.status === 'processing')
-                  ? { ...task, status: 'failed', stage: '处理失败', error: message, batchId }
-                  : task
-              )
-            );
-            break;
-          }
-          await sleep(1000);
-          continue;
-        }
-
-        const total = Math.max(queuedTasks.length, 1);
-        const completedCount = Math.max(0, Math.min(progress.completed_items || 0, queuedTasks.length));
-        const failedCount = Math.max(0, progress.failed_items || 0);
-        const cancelledCount = Math.max(0, progress.cancelled_items || 0);
-        const currentItem = progress.current_item || '';
-        const overall = Math.max(0, Math.min(100, progress.overall_progress || 0));
-        const status = (progress.status || '').toLowerCase();
-        const errors = Array.isArray(progress.errors) ? progress.errors : [];
-        const backendItems = Array.isArray(progress.items) ? progress.items : [];
-        const backendItemMap = new Map(backendItems.map(item => [item.input_path, item] as const));
-
-        const failedByPath = new Map<string, string>();
-        for (const err of errors) {
-          const found = queuedTasks.find(task => err.includes(task.sourcePath));
-          if (found) {
-            failedByPath.set(found.sourcePath, err);
-          }
-        }
-
-        let fallbackFailed = Math.max(0, failedCount - failedByPath.size);
-        const currentIndex = currentItem
-          ? queuedTasks.findIndex(task => task.sourcePath === currentItem)
-          : -1;
-        const doneUnits = completedCount + failedCount + cancelledCount;
-        const currentFraction = Math.max(0, Math.min(1, (overall / 100) * total - doneUnits));
-
-        setProcessingTasks(prev =>
-          prev.map(task => {
-            if (!queuedIdSet.has(task.id)) return task;
-
-            const backendItem = backendItemMap.get(task.sourcePath);
-            if (backendItem) {
-              const backendStatus = (backendItem.status || '').toLowerCase();
-              const base = {
-                ...task,
-                batchId,
-                outputPath: backendItem.output_path || task.outputPath,
-                progress: Math.max(0, Math.min(100, Math.round(backendItem.progress || 0))),
-              };
-
-              if (backendStatus === 'completed') {
-                return { ...base, status: 'completed', stage: '已完成', progress: 100, error: undefined };
-              }
-              if (backendStatus === 'failed') {
-                return {
-                  ...base,
-                  status: 'failed',
-                  stage: '处理失败',
-                  progress: 100,
-                  error: backendItem.error || failedByPath.get(task.sourcePath) || '批处理任务失败',
-                };
-              }
-              if (backendStatus === 'cancelled') {
-                return { ...base, status: 'cancelled', stage: '已取消', progress: 100 };
-              }
-              if (backendStatus === 'running') {
-                return { ...base, status: 'processing', stage: '批处理中...' };
-              }
-              return { ...base, status: 'pending', stage: '等待批处理...' };
-            }
-
-            const queuedIndex = queuedTasks.findIndex(t => t.id === task.id);
-            if (queuedIndex < 0) return task;
-
-            const explicitError = failedByPath.get(task.sourcePath);
-            if (explicitError) {
-              return {
-                ...task,
-                batchId,
-                status: 'failed',
-                progress: 100,
-                stage: '处理失败',
-                error: explicitError,
-              };
-            }
-
-            if (queuedIndex < completedCount) {
-              return {
-                ...task,
-                batchId,
-                status: 'completed',
-                progress: 100,
-                stage: '已完成',
-              };
-            }
-
-            const couldBeFallbackFailed =
-              queuedIndex >= completedCount &&
-              (currentIndex < 0 || queuedIndex < currentIndex);
-            if (fallbackFailed > 0 && couldBeFallbackFailed) {
-              fallbackFailed -= 1;
-              return {
-                ...task,
-                batchId,
-                status: 'failed',
-                progress: 100,
-                stage: '处理失败',
-                error: task.error || '批处理任务失败',
-              };
-            }
-
-            if (status === 'cancelled') {
-              if (task.status === 'completed' || task.status === 'failed') {
-                return { ...task, batchId };
-              }
-              return {
-                ...task,
-                batchId,
-                status: 'cancelled',
-                stage: '已取消',
-              };
-            }
-
-            if (currentItem && task.sourcePath === currentItem) {
-              return {
-                ...task,
-                batchId,
-                status: 'processing',
-                progress: Math.max(task.progress, Math.round(currentFraction * 100)),
-                stage: '批处理中...',
-              };
-            }
-
-            return {
-              ...task,
-              batchId,
-              status: 'pending',
-              stage: '等待批处理...',
-            };
-          })
-        );
-
-        if (backendItems.length > 0) {
-          const latestCompleted = backendItems
-            .filter(item => (item.status || '').toLowerCase() === 'completed')
-            .slice(-1)[0];
-          if (latestCompleted?.output_path) {
-            setProcessedVideoPath(latestCompleted.output_path);
-          }
-        } else if (completedCount > 0) {
-          const lastCompletedTask = queuedTasks[Math.min(completedCount - 1, queuedTasks.length - 1)];
-          if (lastCompletedTask?.outputPath) {
-            setProcessedVideoPath(lastCompletedTask.outputPath);
-          }
-        }
-
-        if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-          break;
-        }
-
-        await sleep(1000);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '启动批处理失败';
-      setProcessingTasks(prev =>
-        prev.map(task =>
-          queuedIdSet.has(task.id)
-            ? {
-                ...task,
-                status: 'failed',
-                stage: '处理失败',
-                error: message,
-              }
-            : task
-        )
-      );
-    }
-  }, [lutFiles, settings]);
-
-  const handleProcessVideo = useCallback(async () => {
-    const targets = videoFiles.length > 0
-      ? videoFiles
-      : activeVideoFile
-        ? [activeVideoFile]
-        : [];
-
-    if (targets.length === 0 || lutFiles.length === 0) {
-      console.error('需要选择视频文件和LUT文件');
-      return;
-    }
-
-    const runId = Date.now();
-    const queuedTasks: ProcessingTask[] = targets.map((videoPath, index) => {
-      const outputPath = buildExpectedOutputPath(videoPath, settings.output_directory, settings.output_format);
-      const id = `task_${runId}_${index}`;
-      cancelledTaskIdsRef.current.delete(id);
-
-      return {
-        id,
-        name: `处理 ${getFileName(videoPath)}`,
-        progress: 0,
-        status: 'pending',
-        stage: '准备中...',
-        sourcePath: videoPath,
-        outputPath,
-      };
-    });
-
-    setProcessedVideoPath(null);
-    setProcessingTasks(prev => [...prev, ...queuedTasks]);
-
-    if (queuedTasks.length > 1) {
-      await runBatchTasks(queuedTasks);
-      return;
-    }
-
-    await runSingleTask(queuedTasks[0]);
-  }, [activeVideoFile, lutFiles, settings, videoFiles, runSingleTask, runBatchTasks]);
-
-  const handleCancelTask = useCallback((taskId: string) => {
-    cancelledTaskIdsRef.current.add(taskId);
-
-    const existingTask = processingTasksRef.current.find(task => task.id === taskId);
-    if (!existingTask) return;
-
-    if (existingTask.batchId) {
-      invoke('cancel_batch', { batchId: existingTask.batchId }).catch(() => undefined);
-      setProcessingTasks(prev =>
-        prev.map(task =>
-          task.batchId === existingTask.batchId && task.status !== 'completed' && task.status !== 'failed'
-            ? { ...task, status: 'cancelled', stage: '已取消' }
-            : task
-        )
-      );
-      return;
-    }
-
-    if (existingTask.backendTaskId) {
-      invoke('cancel_task', { taskId: existingTask.backendTaskId }).catch(() => undefined);
-    }
-
-    setProcessingTasks(prev =>
-      prev.map(task =>
-        task.id === taskId
-          ? { ...task, status: 'cancelled', stage: '已取消' }
-          : task
-      )
-    );
-  }, []);
-
-  const handleRetryTask = useCallback((taskId: string) => {
-    cancelledTaskIdsRef.current.delete(taskId);
-
-    const existingTask = processingTasksRef.current.find(task => task.id === taskId);
-    if (!existingTask) return;
-
-    // Create a fresh task with a new ID to avoid stale state
-    const newId = `task_${Date.now()}_retry`;
-    const retryTask: ProcessingTask = {
-      ...existingTask,
-      id: newId,
-      status: 'pending',
-      progress: 0,
-      stage: '准备重试...',
-      error: undefined,
-      backendTaskId: undefined,
-      batchId: undefined,
-    };
-
-    // Replace the old task with the new retry task
-    setProcessingTasks(prev =>
-      prev.map(task => (task.id === taskId ? retryTask : task))
-    );
-
-    // Actually re-run the task
-    runSingleTask(retryTask);
-  }, [runSingleTask]);
-
-  const handleClearCompleted = useCallback(() => {
-    setProcessingTasks(prev =>
-      prev.filter(task =>
-        task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled'
-      )
-    );
-    setProcessedVideoPath(null);
-  }, []);
-
-  const handleSettingsChange = useCallback((newSettings: ProcessingSettings) => {
-    setSettings(newSettings);
-    const nextPersistedSettings = mapProcessingSettingsToAppSettings(
-      newSettings,
-      persistedAppSettingsRef.current
-    );
-    persistedAppSettingsRef.current = nextPersistedSettings;
-    setPersistedAppSettings(nextPersistedSettings);
-
-    void invoke('update_app_settings', { settings: nextPersistedSettings }).catch(error => {
-      console.error('保存设置失败:', error);
-    });
-  }, []);
-
-  const handleOpenProcessedFile = useCallback(async () => {
-    if (!processedVideoPath) return;
-    try {
-      await invoke('open_file', { path: processedVideoPath });
-    } catch (error) {
-      console.error('打开视频文件失败:', error);
-      alert('打开视频文件失败: ' + (error instanceof Error ? error.message : '未知错误'));
-    }
-  }, [processedVideoPath]);
-
-  const handleOpenProcessedFolder = useCallback(async () => {
-    if (!processedVideoPath) return;
-    try {
-      let folderPath = '';
-      if (processedVideoPath.includes('/')) {
-        folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('/'));
-      } else if (processedVideoPath.includes('\\')) {
-        folderPath = processedVideoPath.substring(0, processedVideoPath.lastIndexOf('\\'));
-      }
-
-      if (!folderPath) {
-        throw new Error('无法提取文件夹路径');
-      }
-
-      await invoke('open_folder', { path: folderPath });
-    } catch (error) {
-      console.error('打开文件夹失败:', error);
-      alert('打开文件夹失败: ' + (error instanceof Error ? error.message : '未知错误'));
-    }
-  }, [processedVideoPath]);
-
-  const hasProcessingTask = processingTasks.some(task => task.status === 'processing');
-  const selectedVideoCount = videoFiles.length > 0 ? videoFiles.length : activeVideoFile ? 1 : 0;
-  const canProcess = selectedVideoCount > 0 && lutFiles.length > 0 && !hasProcessingTask;
-  const hasVideoSelection = selectedVideoCount > 0;
-  const hasLutSelection = lutFiles.length > 0;
+  const selectLut = (path: string | null) => {
+    if (active) w.setClipLook(active.id, { lutPath: path });
+    else
+      w.setNotice({ kind: "info", message: "先导入视频，再为素材选择 LUT。" });
+  };
+  const start = () => {
+    setView("queue");
+    void w.startExport();
+  };
 
   return (
-    <div className="app">
+    <div
+      className="studio-app"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!w.isDesktop) setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node))
+          setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        if (!w.isDesktop)
+          w.setNotice({
+            kind: "info",
+            message: "请在桌面应用中拖入素材，浏览器仅用于界面预览。",
+          });
+      }}
+    >
       <header className="app-header">
-        <div className="header-brand">
-          <div className="brand-lockup">
-            <div className="brand-mark" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div>
-              <div className="header-kicker">COLOR WORKFLOW · BETA</div>
-              <h1>Auto Apply LUT</h1>
-            </div>
-          </div>
-          <p>把素材、LUT 与输出设置整理在一个清晰的处理流里。</p>
-        </div>
+        <a
+          className="brand"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            setView("workspace");
+          }}
+          aria-label="LUT Lab 工作台"
+        >
+          <span className="brand-symbol">
+            <Layers3 size={23} strokeWidth={1.8} />
+          </span>
+          <span>
+            LUT<span className="brand-light">lab</span>
+            <small>COLOR WORKSPACE</small>
+          </span>
+        </a>
+        <nav className="main-navigation" aria-label="主导航">
+          <button
+            className={view === "workspace" ? "selected" : ""}
+            onClick={() => setView("workspace")}
+          >
+            <SlidersHorizontal size={15} />
+            调色工作台
+          </button>
+          <button
+            className={view === "queue" ? "selected" : ""}
+            onClick={() => setView("queue")}
+          >
+            <ListVideo size={16} />
+            导出队列
+            {w.clips.length > 0 && (
+              <span className="nav-count">
+                {w.isExporting ? w.clips.length - completed : completed}
+              </span>
+            )}
+          </button>
+        </nav>
         <div className="header-actions">
           <button
-            className="btn-settings btn-library"
-            type="button"
-            onClick={() => setIsLutLibraryOpen(true)}
+            className={`engine-status ${w.ffmpeg.status}`}
+            onClick={() => setSettingsOpen(true)}
           >
-            <span className="button-glyph" aria-hidden="true">✦</span>
-            LUT 资料库
+            <span className="status-dot" />
+            {w.ffmpeg.status === "ready"
+              ? "处理引擎就绪"
+              : w.ffmpeg.status === "checking"
+                ? "检测处理引擎"
+                : w.ffmpeg.status === "browser"
+                  ? "浏览器预览"
+                  : "配置处理引擎"}
           </button>
-          <div className="header-metrics">
-            <div className="metric-chip">
-              <span className="metric-label">视频素材</span>
-              <span className="metric-value">{selectedVideoCount}</span>
-            </div>
-            <div className="metric-chip">
-              <span className="metric-label">LUT 图层</span>
-              <span className="metric-value">{lutFiles.length}</span>
-            </div>
-            <div className={`metric-chip ${hasProcessingTask ? 'is-busy' : ''}`}>
-              <span className="metric-label">状态</span>
-              <span className="metric-value">
-                <span className="metric-status-dot" aria-hidden="true" />
-                {hasProcessingTask ? '处理中' : '待命'}
-              </span>
-            </div>
-          </div>
+          <span className="header-divider" />
+          <button
+            className="icon-button"
+            aria-label="使用帮助"
+            onClick={() => setHelpOpen(true)}
+          >
+            <CircleHelp size={18} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="应用设置"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 size={18} />
+          </button>
         </div>
       </header>
 
-      <main className="app-main">
-        <div className="workflow-rail" aria-label="处理流程">
-          <div className={`workflow-step ${hasVideoSelection ? 'is-complete' : 'is-current'}`}>
-            <span className="workflow-index">01</span>
-            <span>素材</span>
+      <WorkspaceStatus workspace={w} />
+      <div className="workspace-body">
+        <aside className="media-sidebar" aria-label="素材与 LUT 资料库">
+          <div className="sidebar-tabs">
+            <button
+              className={section === "media" ? "active" : ""}
+              onClick={() => {
+                setSection("media");
+                setSearch("");
+              }}
+            >
+              <Clapperboard size={15} />
+              素材<span>{w.clips.length}</span>
+            </button>
+            <button
+              className={section === "luts" ? "active" : ""}
+              onClick={() => {
+                setSection("luts");
+                setSearch("");
+              }}
+            >
+              <Layers3 size={15} />
+              LUT<span>{w.luts.length}</span>
+            </button>
           </div>
-          <span className={`workflow-connector ${hasVideoSelection ? 'is-complete' : ''}`} aria-hidden="true" />
-          <div className={`workflow-step ${hasLutSelection ? 'is-complete' : hasVideoSelection ? 'is-current' : ''}`}>
-            <span className="workflow-index">02</span>
-            <span>色彩</span>
+          <div className="sidebar-tools">
+            <label className="search-field">
+              <Search size={14} />
+              <input
+                placeholder={section === "media" ? "搜索素材…" : "搜索 LUT…"}
+                aria-label={section === "media" ? "搜索素材" : "搜索 LUT"}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <kbd>⌕</kbd>
+            </label>
+            <button
+              className="icon-button outlined"
+              aria-label={section === "media" ? "添加视频" : "添加 LUT"}
+              disabled={locked}
+              onClick={() =>
+                section === "media"
+                  ? void w.importVideos()
+                  : void w.importLuts()
+              }
+            >
+              <Plus size={17} />
+            </button>
           </div>
-          <span className={`workflow-connector ${hasLutSelection ? 'is-complete' : ''}`} aria-hidden="true" />
-          <div className={`workflow-step ${canProcess || hasProcessingTask ? 'is-current' : ''}`}>
-            <span className="workflow-index">03</span>
-            <span>输出</span>
-          </div>
-          <div className="workflow-summary">
-            {hasProcessingTask ? '正在处理队列中的素材' : canProcess ? '工作区已就绪' : '从左侧导入素材开始'}
-          </div>
-        </div>
-        <div className="app-grid">
-          <FileUpload
-            onVideoSelect={handleVideoSelect}
-            onActiveVideoChange={handleActiveVideoChange}
-            onLutSelect={handleLutSelect}
-            lutPaths={lutFiles}
-            disabled={hasProcessingTask}
-          />
-
-          <div className="preview-section card">
-            <VideoPreview
-              videoPath={activeVideoFile || undefined}
-              processedVideoPath={processedVideoPath || undefined}
-              lutPaths={lutFiles}
-            />
-          </div>
-
-          <div className="settings-section card">
-            <div className="settings-summary">
-              <span className="section-eyebrow">STEP 03 / OUTPUT</span>
-              <h3>处理控制</h3>
-              <p>{canProcess ? '已就绪，可开始处理' : '请先选择视频文件和 LUT 文件'}</p>
+          {section === "media" && (w.clips.length > 0 || w.canUndo) && (
+            <div className="selection-toolbar">
+              <span>{w.selectedIds.length} 项已选</span>
+              <button
+                title="全选当前搜索结果"
+                onClick={() => w.selectAll(filteredClips.map((c) => c.id))}
+              >
+                全选
+              </button>
+              <button
+                disabled={!w.selectedIds.length}
+                onClick={w.clearSelection}
+              >
+                清除选择
+              </button>
+              <button
+                disabled={locked || !w.selectedIds.length}
+                onClick={w.removeSelected}
+              >
+                移除
+              </button>
+              <button
+                aria-label="撤销修改"
+                title="撤销 ⌘Z"
+                disabled={locked || !w.canUndo}
+                onClick={w.undo}
+              >
+                <RotateCcw size={13} />
+              </button>
             </div>
-            <div className="settings-actions">
-              <span className={`readiness-indicator ${canProcess ? 'is-ready' : ''}`}>
-                <span className="readiness-dot" aria-hidden="true" />
-                {canProcess ? '就绪' : '等待素材'}
+          )}
+          {w.isImporting && (
+            <div className="import-progress" role="status">
+              <span>
+                读取素材 {w.importProgress.completed} / {w.importProgress.total}
               </span>
-              <button
-                className="btn-settings"
-                onClick={() => setIsSettingsOpen(true)}
-                disabled={hasProcessingTask}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                处理设置
-              </button>
-
-              <button
-                className="btn-primary"
-                onClick={handleProcessVideo}
-                disabled={!canProcess}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <path d="M9 11H5v2h4v-2zm0-4H5v2h4V7zm0 8H5v2h4v-2zm12-8h-4v2h4V7zm0 4h-4v2h4v-2zm0 4h-4v2h4v-2zM14 4H10v16h4V4z" fill="currentColor"/>
-                </svg>
-                {selectedVideoCount > 1 ? `批量应用 LUT (${selectedVideoCount})` : '应用 LUT'}
-              </button>
+              <button onClick={w.cancelImport}>停止添加</button>
             </div>
-          </div>
-
-          <div className="status-section card">
-            <div className="status-section-heading">
-              <div>
-                <span className="section-eyebrow">ACTIVITY</span>
-                <h3>处理队列</h3>
-              </div>
-              <span className="status-section-caption">实时更新</span>
-            </div>
-            <ProcessingStatus
-              tasks={processingTasks}
-              onCancelTask={handleCancelTask}
-              onRetryTask={handleRetryTask}
-              onClearCompleted={handleClearCompleted}
-            />
-
-            {processedVideoPath && (
-              <div className="processed-video-info">
-                <h4>✅ 处理完成</h4>
-                <p>
-                  输出文件: {processedVideoPath}
-                </p>
-                <div className="processed-video-actions">
-                  <button
-                    className="output-action output-action-primary"
-                    onClick={handleOpenProcessedFile}
+          )}
+          <div className="sidebar-list">
+            {section === "media" ? (
+              <>
+                {filteredClips.length > 0 && (
+                  <WindowedList
+                    items={filteredClips}
+                    rowHeight={92}
+                    itemKey={(clip) => clip.id}
+                    label="素材列表"
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                      <path d="M8 3v3a2 2 0 002 2h6a2 2 0 002-2V3m-1 8a3 3 0 100 6 3 3 0 000-6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      <rect x="3" y="6" width="18" height="15" rx="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                    打开视频文件
-                  </button>
-                  <button
-                    className="output-action output-action-success"
-                    onClick={handleOpenProcessedFolder}
+                    {(clip, i) => (
+                      <div
+                        key={clip.id}
+                        className={`clip-row ${active?.id === clip.id ? "active" : ""} ${w.selectedIds.includes(clip.id) ? "multi-selected" : ""}`}
+                      >
+                        <button
+                          className="clip-select"
+                          onClick={(event) => {
+                            w.selectClip(clip.id, {
+                              toggle: event.metaKey || event.ctrlKey,
+                              range: event.shiftKey,
+                              visibleIds: filteredClips.map((c) => c.id),
+                            });
+                            setView("workspace");
+                          }}
+                          aria-label={`预览 ${clip.name}`}
+                          aria-current={
+                            active?.id === clip.id ? "true" : undefined
+                          }
+                          aria-pressed={w.selectedIds.includes(clip.id)}
+                        >
+                          <span className="clip-thumbnail">
+                            <FileVideo size={23} strokeWidth={1.2} />
+                            <span>{String(i + 1).padStart(2, "0")}</span>
+                          </span>
+                          <span className="clip-copy">
+                            <strong title={clip.name}>{clip.name}</strong>
+                            <span>
+                              {clip.info?.width
+                                ? `${clip.info.width} × ${clip.info.height}`
+                                : "读取素材"}
+                              <i />
+                              {timecode(clip.info?.duration || 0)}
+                            </span>
+                            <span className={`clip-state ${clip.status}`}>
+                              {clip.status === "completed" ? (
+                                <Check size={10} />
+                              ) : clip.status === "processing" ? (
+                                <LoaderCircle size={10} className="spin" />
+                              ) : (
+                                <span className="tiny-dot" />
+                              )}
+                              {clipStatus[clip.status]}
+                              {clip.lutPath && (
+                                <span className="lut-indicator">LUT</span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          className="clip-remove icon-button"
+                          aria-label={`移除 ${clip.name}`}
+                          disabled={locked}
+                          onClick={() => w.removeClip(clip.id)}
+                        >
+                          <X size={12} />
+                        </button>
+                        {(clip.status === "processing" ||
+                          clip.status === "queued") && (
+                          <div
+                            className="clip-progress"
+                            style={{ width: `${clip.progress}%` }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </WindowedList>
+                )}
+                {!w.clips.length && (
+                  <div className="sidebar-empty">
+                    <div className="empty-icon">
+                      <FolderInput size={24} strokeWidth={1.3} />
+                    </div>
+                    <strong>素材，从这里开始</strong>
+                    <p>
+                      拖入多个视频或整个文件夹
+                      <br />
+                      一次完成所有素材的调色
+                    </p>
+                    <button
+                      className="text-button"
+                      disabled={locked}
+                      onClick={() => void w.importVideos()}
+                    >
+                      选择视频 <ArrowRight size={13} />
+                    </button>
+                  </div>
+                )}
+                {w.clips.length > 0 && !filteredClips.length && (
+                  <p className="no-results">没有匹配的素材</p>
+                )}
+              </>
+            ) : (
+              <>
+                <button
+                  className={`lut-row ${!active?.lutPath ? "selected" : ""}`}
+                  disabled={locked || !active}
+                  onClick={() => selectLut(null)}
+                >
+                  <span className="lut-icon neutral">
+                    <ScanIcon />
+                  </span>
+                  <span>
+                    <strong>原始色彩</strong>
+                    <small>不应用 LUT</small>
+                  </span>
+                  {!active?.lutPath && <Check size={14} />}
+                </button>
+                {filteredLuts.length > 0 && (
+                  <WindowedList
+                    items={filteredLuts}
+                    rowHeight={68}
+                    itemKey={(lut) => lut.path}
+                    label="LUT 列表"
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                      <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      <polyline points="9,22 9,12 15,12 15,22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                    打开文件夹
-                  </button>
-                </div>
-              </div>
+                    {(lut) => (
+                      <div className="lut-list-item" key={lut.path}>
+                        <button
+                          className={`lut-row ${active?.lutPath === lut.path ? "selected" : ""}`}
+                          disabled={locked || !lut.is_valid}
+                          onClick={() => selectLut(lut.path)}
+                          title={lut.error_message || lut.path}
+                        >
+                          <span
+                            className={`lut-icon ${!lut.is_valid ? "invalid" : ""}`}
+                          >
+                            <Layers3 size={18} />
+                          </span>
+                          <span>
+                            <strong>{lut.name}</strong>
+                            <small>
+                              {lut.is_valid
+                                ? `${lut.format} · ${lut.category}`
+                                : "文件不可用"}
+                            </small>
+                          </span>
+                          {active?.lutPath === lut.path && <Check size={14} />}
+                        </button>
+                        <button
+                          className="icon-button lut-remove"
+                          aria-label={`移除 LUT ${lut.name}`}
+                          disabled={locked}
+                          onClick={() => w.removeLut(lut.path)}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </WindowedList>
+                )}
+                {!w.luts.length && (
+                  <div className="sidebar-empty">
+                    <strong>建立你的风格资料库</strong>
+                    <p>
+                      导入 .cube、.3dl 等 LUT
+                      <br />
+                      在所有视频间自由复用
+                    </p>
+                    <button
+                      className="text-button"
+                      disabled={locked}
+                      onClick={() => void w.importLuts()}
+                    >
+                      导入 LUT <Plus size={13} />
+                    </button>
+                  </div>
+                )}
+                {w.luts.length > 0 && !filteredLuts.length && (
+                  <p className="no-results">没有匹配的 LUT</p>
+                )}
+              </>
             )}
           </div>
-        </div>
-      </main>
-
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        settings={settings}
-        onClose={() => setIsSettingsOpen(false)}
-        onSettingsChange={handleSettingsChange}
-        disabled={hasProcessingTask}
-      />
-      {isLutLibraryOpen && createPortal(
-        <div
-          className="modal-overlay"
-          onClick={() => setIsLutLibraryOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="modal-content lut-library-modal"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="LUT 资料库"
-          >
-            <div className="modal-body lut-library-modal-body">
-              <LutLibraryPanel
-                activeVideoPath={activeVideoFile}
-                selectedLutPaths={lutFiles}
-                onSelectedLutPathsChange={handleLutSelect}
-                disabled={hasProcessingTask}
-                onClose={() => setIsLutLibraryOpen(false)}
-              />
+          <div className="sidebar-bottom">
+            <button
+              className="button secondary full-width"
+              disabled={locked}
+              onClick={() =>
+                section === "media"
+                  ? void w.importDirectory()
+                  : void w.importLutDirectory()
+              }
+            >
+              <FolderInput size={15} />
+              导入{section === "media" ? "素材" : "LUT"}文件夹
+            </button>
+            <div className="sidebar-summary">
+              <span>
+                {section === "media"
+                  ? `${w.clips.length} 个素材 · ${timecode(totalDuration)}`
+                  : `${w.luts.length} 个 LUT`}
+              </span>
+              {section === "media" && w.clips.length > 0 && (
+                <button
+                  className="text-button subdued"
+                  disabled={locked}
+                  onClick={w.clearClips}
+                >
+                  清空
+                </button>
+              )}
             </div>
           </div>
-        </div>,
-        document.body
+        </aside>
+
+        <main className="main-workspace">
+          <div className="workspace-heading">
+            <div>
+              <div className="eyebrow">
+                {view === "workspace" ? "COLOR WORKSPACE" : "RENDER QUEUE"}
+              </div>
+              <h2>
+                {view === "workspace" ? "调色工作台" : "导出队列"}
+                <span className="heading-slash">/</span>
+                <span className="heading-detail">
+                  {view === "workspace"
+                    ? "预览、调整，统一你的影像风格"
+                    : `${completed} / ${w.clips.length} 个素材已完成`}
+                </span>
+              </h2>
+            </div>
+            <button
+              className="button secondary import-top"
+              disabled={locked}
+              onClick={() => void w.importVideos()}
+            >
+              <Plus size={15} />
+              导入素材
+            </button>
+          </div>
+          {view === "workspace" ? (
+            <>
+              <FramePreview
+                key={active?.id ?? "empty"}
+                clip={active ?? undefined}
+                isDesktop={w.isDesktop}
+                quality={w.settings.preview_quality}
+                inputColorSpace={w.settings.input_color_space}
+                onImport={() => void w.importVideos()}
+              />
+              <section className="selection-detail">
+                <div>
+                  <span className="section-overline">当前素材</span>
+                  <strong>{active?.name || "尚未选择素材"}</strong>
+                  <span
+                    className={`source-path ${active?.metadataError ? "metadata-error" : ""}`}
+                    title={active?.metadataError || active?.path}
+                  >
+                    {active?.metadataError
+                      ? `读取素材信息失败：${active.metadataError}`
+                      : active?.path ||
+                        "导入后即可预览，不需要等待整个视频处理完成"}
+                  </span>
+                </div>
+                <div className="metadata-pair">
+                  <span>编码</span>
+                  <strong>{active?.info?.codec?.toUpperCase() || "—"}</strong>
+                </div>
+                <div className="metadata-pair">
+                  <span>文件大小</span>
+                  <strong>
+                    {active?.info ? filesize(active.info.size) : "—"}
+                  </strong>
+                </div>
+                <button
+                  className="icon-button"
+                  aria-label="在文件夹中显示原视频"
+                  disabled={!active || !w.isDesktop}
+                  onClick={() => active && void openPath(active.path)}
+                >
+                  <FolderOpen size={17} />
+                </button>
+              </section>
+              {active?.info && (
+                <div className="color-information">
+                  <span>
+                    {active.info.bit_depth
+                      ? `${active.info.bit_depth}-bit`
+                      : "位深未知"}{" "}
+                    · {active.info.color_primaries || "色域未标记"} ·{" "}
+                    {active.info.color_transfer || "传递函数未标记"}
+                  </span>
+                  {(active.info.color_transfer === "smpte2084" ||
+                    active.info.color_transfer === "arib-std-b67") &&
+                    w.settings.input_color_space === "auto" && (
+                      <strong>
+                        HDR 素材：使用 SDR 风格 LUT 前，请选择对应的 HDR →
+                        Rec.709 转换。
+                      </strong>
+                    )}
+                  {!active.info.color_transfer && (
+                    <span>请确认素材与 LUT 的输入色彩空间匹配。</span>
+                  )}
+                </div>
+              )}
+              <section className="workflow-strip">
+                <div>
+                  <span
+                    className={`step-number ${w.clips.length ? "done" : ""}`}
+                  >
+                    {w.clips.length ? <Check size={12} /> : "01"}
+                  </span>
+                  <span>
+                    <strong>添加素材</strong>
+                    <small>多选视频或拖入文件夹</small>
+                  </span>
+                </div>
+                <ArrowRight size={14} />
+                <div>
+                  <span
+                    className={`step-number ${active?.lutPath ? "done" : ""}`}
+                  >
+                    {active?.lutPath ? <Check size={12} /> : "02"}
+                  </span>
+                  <span>
+                    <strong>调整风格</strong>
+                    <small>选择 LUT，实时对比画面</small>
+                  </span>
+                </div>
+                <ArrowRight size={14} />
+                <div>
+                  <span className={`step-number ${completed ? "done" : ""}`}>
+                    {completed ? <Check size={12} /> : "03"}
+                  </span>
+                  <span>
+                    <strong>批量导出</strong>
+                    <small>设置一次，处理全部素材</small>
+                  </span>
+                </div>
+              </section>
+            </>
+          ) : (
+            <section className="queue-panel">
+              <div className="queue-heading">
+                <div>
+                  <strong>
+                    {w.isExporting
+                      ? "正在处理素材"
+                      : w.clips.length
+                        ? "你的导出任务"
+                        : "队列准备就绪"}
+                  </strong>
+                  <p>
+                    {w.isExporting
+                      ? "你可以继续查看素材，导出将在后台进行。"
+                      : "每个任务独立处理，失败的素材可以单独重试。"}
+                  </p>
+                </div>
+                {failures > 0 && (
+                  <button
+                    className="button secondary"
+                    disabled={locked}
+                    onClick={() => void w.retryFailed()}
+                  >
+                    <RotateCcw size={14} />
+                    重试未完成
+                  </button>
+                )}
+              </div>
+              {w.batch && (
+                <div className="batch-summary">
+                  <div>
+                    <span>
+                      {w.isExporting
+                        ? "任务处理进度"
+                        : w.batch.status.toLowerCase() === "completed"
+                          ? "批次已完成"
+                          : w.batch.status.toLowerCase() === "cancelled"
+                            ? "批次已取消"
+                            : "批次已结束"}
+                    </span>
+                    <strong>
+                      {w.batch.completed_items +
+                        w.batch.failed_items +
+                        w.batch.cancelled_items}{" "}
+                      / {w.batch.total_items} 已结束 ·{" "}
+                      {Math.round(w.batch.overall_progress)}%
+                    </strong>
+                  </div>
+                  <progress
+                    max="100"
+                    value={w.batch.overall_progress}
+                    aria-label="批次总进度"
+                  />
+                </div>
+              )}
+              {!w.clips.length && (
+                <div className="queue-empty">
+                  <ListVideo size={38} strokeWidth={1} />
+                  <h3>还没有导出任务</h3>
+                  <p>添加素材并设置调色风格后，即可开始批量导出。</p>
+                  <button
+                    className="button secondary"
+                    onClick={() => void w.importVideos()}
+                  >
+                    <Plus size={14} />
+                    添加素材
+                  </button>
+                </div>
+              )}
+              <div className="queue-list">
+                <WindowedList
+                  items={w.clips}
+                  rowHeight={120}
+                  itemKey={(clip) => clip.id}
+                  label="导出任务列表"
+                >
+                  {(clip, i) => (
+                    <article className="queue-row" key={clip.id}>
+                      <span className="queue-index">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <div className="queue-file">
+                        <strong>{clip.name}</strong>
+                        <span>
+                          {clip.lutPath
+                            ? `${basename(clip.lutPath)} · ${clip.intensity}%`
+                            : "原始色彩"}
+                          <i />
+                          {timecode(clip.info?.duration || 0)}
+                        </span>
+                        {clip.encoder && (
+                          <span
+                            className="encoding-details"
+                            title={clip.message}
+                          >
+                            {clip.encoder}
+                            {clip.speed ? ` · ${clip.speed.toFixed(2)}×` : ""}
+                            {clip.eta_seconds != null
+                              ? ` · 预计剩余 ${timecode(clip.eta_seconds)}`
+                              : ""}
+                          </span>
+                        )}
+                        {clip.error && (
+                          <p className="queue-error">{clip.error}</p>
+                        )}
+                        {clip.outputPath && clip.status === "completed" && (
+                          <span
+                            className="queue-output"
+                            title={clip.outputPath}
+                          >
+                            {clip.outputPath}
+                          </span>
+                        )}
+                      </div>
+                      <div className={`queue-state ${clip.status}`}>
+                        <span>
+                          {clip.status === "processing" && (
+                            <LoaderCircle size={12} className="spin" />
+                          )}
+                          {clip.status === "completed" && (
+                            <CheckCircle2 size={12} />
+                          )}
+                          {clipStatus[clip.status]}
+                          {clip.status === "processing" &&
+                            ` ${Math.round(clip.progress)}%`}
+                        </span>
+                        {clip.status === "processing" && (
+                          <progress
+                            max="100"
+                            value={clip.progress}
+                            aria-label={`${clip.name} 导出进度`}
+                          />
+                        )}
+                      </div>
+                      {clip.status === "completed" && clip.outputPath ? (
+                        <button
+                          className="icon-button"
+                          aria-label={`显示导出文件 ${clip.name}`}
+                          onClick={() => void openPath(clip.outputPath!)}
+                        >
+                          <FolderOpen size={17} />
+                        </button>
+                      ) : clip.status === "failed" ||
+                        clip.status === "cancelled" ? (
+                        <button
+                          className="icon-button"
+                          aria-label={`重试 ${clip.name}`}
+                          disabled={locked}
+                          onClick={() => void w.startExport([clip.id])}
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      ) : (
+                        <span className="queue-action-space" />
+                      )}
+                    </article>
+                  )}
+                </WindowedList>
+              </div>
+              {w.history.length > 0 && (
+                <details className="batch-history">
+                  <summary>最近批次 · {w.history.length}</summary>
+                  {w.history.slice(-10).reverse().map((b) => (
+                    <div key={b.batch_id}>
+                      {b.completed_items} 成功 / {b.failed_items} 失败 /{" "}
+                      {b.cancelled_items} 待重试
+                    </div>
+                  ))}
+                </details>
+              )}
+            </section>
+          )}
+        </main>
+
+        <ExportInspector
+          workspace={w}
+          onImportLuts={() => {
+            setSection("luts");
+            void w.importLuts();
+          }}
+          onStartExport={start}
+          onExportScopeChange={scope => { exportScopeRef.current = scope; }}
+          onExportSelected={() => {
+            setView("queue");
+            void w.exportSelected();
+          }}
+        />
+      </div>
+      <footer className="status-bar">
+        <span>
+          <span className={`status-dot ${w.isExporting ? "pulsing" : ""}`} />
+          {w.loading
+            ? "正在读取素材与设置…"
+            : w.isExporting
+              ? `正在导出 · ${completed} 个已完成`
+              : w.isImporting
+                ? `正在导入 · ${w.importProgress.completed}/${w.importProgress.total}`
+                : w.isSavingSettings
+                  ? "正在保存设置…"
+                  : "准备就绪"}
+          {!w.isDesktop && (
+            <span className="browser-hint">
+              浏览器仅预览界面，视频处理请使用桌面应用
+            </span>
+          )}
+        </span>
+        <span>
+          本地工作流<span className="status-separator">/</span>
+          {w.settings.max_concurrent_tasks} 个并行任务
+          <span className="status-separator">/</span>LUTlab{" "}
+          <span className="muted">0.1.0</span>
+        </span>
+      </footer>
+      {w.notice && (
+        <div
+          className={`toast ${w.notice.kind}`}
+          role={w.notice.kind === "error" ? "alert" : "status"}
+        >
+          <span>
+            {w.notice.kind === "success" ? (
+              <CheckCircle2 size={17} />
+            ) : w.notice.kind === "error" ? (
+              <CircleHelp size={17} />
+            ) : (
+              <LoaderCircle size={17} />
+            )}
+          </span>
+          <p>{w.notice.message}</p>
+          <button
+            className="icon-button"
+            aria-label="关闭提示"
+            onClick={() => w.setNotice(null)}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      {dragging && (
+        <div className="drop-overlay">
+          <div>
+            <Upload size={44} strokeWidth={1.2} />
+            <h2>松开，加入工作台</h2>
+            <p>视频、LUT 或整个文件夹</p>
+          </div>
+        </div>
+      )}
+      {(settingsOpen || helpOpen) && (
+        <dialog
+          className="app-dialog"
+          ref={dialogRef}
+          aria-label={settingsOpen ? "应用设置" : "使用帮助"}
+          onCancel={() => {
+            setSettingsOpen(false);
+            setHelpOpen(false);
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setSettingsOpen(false);
+              setHelpOpen(false);
+            }
+          }}
+        >
+          <div className="dialog-content">
+            <div className="dialog-heading">
+              <div>
+                <span className="eyebrow">
+                  {settingsOpen ? "PREFERENCES" : "QUICK START"}
+                </span>
+                <h2>{settingsOpen ? "应用设置" : "从素材到成片"}</h2>
+              </div>
+              <button
+                ref={closeRef}
+                className="icon-button"
+                aria-label="关闭窗口"
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setHelpOpen(false);
+                }}
+              >
+                <X size={19} />
+              </button>
+            </div>
+            {settingsOpen ? (
+              <>
+                <div className="engine-detail">
+                  <Cpu size={24} />
+                  <div>
+                    <strong>FFmpeg 处理引擎</strong>
+                    <span>
+                      {w.ffmpeg.status === "ready"
+                        ? "已连接 · 可以预览与导出"
+                        : w.ffmpeg.status === "browser"
+                          ? "需要启动桌面应用"
+                          : w.ffmpeg.status === "checking"
+                            ? "正在检测…"
+                            : "处理引擎不可用"}
+                    </span>
+                  </div>
+                  <span className={`engine-status ${w.ffmpeg.status}`}>
+                    <span className="status-dot" />
+                  </span>
+                </div>
+                <p className="field-hint">
+                  优先使用应用内的媒体引擎，也可发现系统中的
+                  FFmpeg。手动选择时，同目录下需包含 ffprobe。
+                </p>
+                <div className="engine-path">
+                  {w.ffmpeg.info?.binary_path ||
+                    w.settings.ffmpeg_path ||
+                    "未配置自定义路径"}
+                </div>
+                {w.ffmpeg.error && (
+                  <p className="queue-error">{w.ffmpeg.error}</p>
+                )}
+                <div className="dialog-buttons">
+                  <button
+                    className="button secondary"
+                    disabled={locked || !w.isDesktop}
+                    onClick={() => void w.pickFfmpegPath()}
+                  >
+                    <FolderOpen size={15} />
+                    选择 FFmpeg
+                  </button>
+                  <button
+                    className="button secondary"
+                    disabled={w.ffmpeg.status === "checking" || !w.isDesktop}
+                    onClick={() => void w.refreshEngine()}
+                  >
+                    <RotateCcw size={14} />
+                    重新检测
+                  </button>
+                </div>
+                <div className="dialog-note">
+                  <strong>预览与导出</strong>
+                  <p>
+                    预览使用缩小的真实视频帧与 LUT
+                    运算；导出使用设置的完整分辨率。LUT 不会自动识别相机 Log
+                    或执行 HDR 色调映射，请使用与素材输入色彩空间匹配的 LUT。
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="help-step">
+                  <span>01</span>
+                  <div>
+                    <strong>导入素材与 LUT</strong>
+                    <p>
+                      视频支持多选，也可以拖入文件夹。切换左侧 LUT
+                      标签页，管理风格资料库。
+                    </p>
+                  </div>
+                </div>
+                <div className="help-step">
+                  <span>02</span>
+                  <div>
+                    <strong>查看真实调色效果</strong>
+                    <p>
+                      选中素材，选择 LUT
+                      并调节强度。拖动时间轴选帧，用中央分割线比较原片与调色画面。使用「应用到全部素材」统一风格。
+                    </p>
+                  </div>
+                </div>
+                <div className="help-step">
+                  <span>03</span>
+                  <div>
+                    <strong>批量导出与检查</strong>
+                    <p>
+                      选择格式、质量和输出目录，点击批量导出。导出队列可查看进度、重试失败任务，或定位已完成的文件。
+                    </p>
+                  </div>
+                </div>
+                <div className="shortcut-row">
+                  <span>导入视频</span>
+                  <kbd>⌘ / Ctrl O</kbd>
+                </div>
+                <div className="shortcut-row">
+                  <span>开始导出</span>
+                  <kbd>⌘ / Ctrl Enter</kbd>
+                </div>
+              </>
+            )}
+          </div>
+        </dialog>
       )}
     </div>
   );
 }
-
-export default App;
+function ScanIcon() {
+  return <span className="original-swatch" />;
+}

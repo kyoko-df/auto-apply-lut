@@ -1,391 +1,128 @@
-# Video LUT Processor
+# LUTlab
 
-一个基于Tauri框架的桌面应用程序，用于批量为视频文件应用LUT（Look-Up Table）色彩校正。底层使用FFmpeg进行视频处理，提供高效、用户友好的批量视频处理解决方案。
+用于批量视频 LUT 调色的本地桌面工作台。React 19 + TypeScript 构建界面，Tauri 2 / Rust 管理文件与任务，FFmpeg 执行真实视频处理。
 
-🎉 **项目状态**: 核心功能已完成，当前处于可用 Beta 阶段。
+## 工作流
 
-## 项目概述
+1. **导入素材**：多选视频、导入整个文件夹，或拖入视频、LUT 和文件夹。重复素材自动去重；元数据渐进读取，可停止继续添加。
+2. **选择风格**：在右侧选择 LUT，调节 0–100% 强度。每个视频独立设置，可用 ⌘/Ctrl 点选、Shift 连选，将当前风格应用到所选或全部素材，并撤销修改。选择「原始色彩」可进行无 LUT 转码。
+3. **对比预览**：拖动时间轴定位画面；在原片、分割对比、调色后之间切换。预览由 FFmpeg 生成，无需先导出视频，也不依赖 WebView 的视频解码能力。
+4. **批量导出**：设置格式、编码、质量和输出目录。选择导出全部待处理素材或仅所选素材。队列显示实际编码器、平滑速度和预计剩余时间，支持取消、重试失败/取消项目、定位完成文件。更改风格或输出参数后，可重新导出。
 
-### 核心功能
-- 🎬 **批量视频处理**: 支持同时处理多个视频文件
-- 🎨 **LUT色彩校正**: 支持多种LUT格式(.cube, .3dl, .lut等)
-- ⚡ **高性能处理**: 基于FFmpeg的专业视频处理引擎
-- 📊 **实时进度监控**: 详细的处理进度和状态反馈
-- 🖥️ **跨平台支持**: Windows、macOS、Linux全平台支持
-- 🎯 **用户友好界面**: 现代化的React界面设计
+界面提供中文深色工作台、素材搜索、LUT 资料库、键盘快捷键与引擎诊断。`⌘/Ctrl + O` 导入视频，`⌘/Ctrl + Enter` 开始导出，`⌘/Ctrl + A` 全选，`⌘/Ctrl + Z` 撤销。素材与队列超过 80 项时按窗口渲染。
 
-### 技术特点
-- **前端**: React 19 + TypeScript + Tailwind CSS ✅
-- **后端**: Rust + Tauri框架 ✅
-- **视频处理**: FFmpeg引擎 ✅
-- **数据存储**: SQLite + 文件系统 ✅
-- **状态管理**: Zustand ✅
-- **构建工具**: Vite ✅
+## 处理能力
 
-### 当前实现状态
-- 🏗️ **项目架构**: 完整的Tauri + React架构已搭建
-- 🎬 **视频处理**: FFmpeg集成和批量处理功能已实现
-- 🎨 **LUT管理**: LUT导入、应用、资料库管理与批量格式转换功能已完成
-- 🖥️ **用户界面**: 现代化React UI组件已开发
-- 🗄️ **数据存储**: SQLite数据库和文件管理已集成
-- ⚡ **性能优化**: 并发处理和任务调度已实现
-- 🔧 **系统功能**: 系统信息、编解码器、GPU 诊断、缓存管理和日志查看能力已接通
-- 🧪 **工程验证**: Rust 单元测试、前端测试和生产构建当前均可通过
-- 🛠️ **当前重点**: 持续清理编译 warnings、统一诊断信息与文档表述、补充 Beta 阶段回归验证
+| 功能     | 行为                                                                                                     |
+| -------- | -------------------------------------------------------------------------------------------------------- |
+| 导入视频 | MP4、MOV、MKV、AVI、WebM、M4V、WMV、FLV；实际解码能力取决于 FFmpeg                                       |
+| LUT      | 3D CUBE、纯 1D CUBE、3DL、CSP，以及现有解析器支持的 M3D / LOOK / LUT 变体；混合 1D + 3D CUBE 会明确拒绝  |
+| 导出     | MP4 / MOV / MKV，H.264 / H.265 / ProRes 422 HQ；ProRes 使用 MOV                                          |
+| 音频     | 默认 AAC；可复制原始音轨，或在兼容封装下使用 PCM；映射所有输入音轨                                       |
+| 尺寸     | 默认原始尺寸；可适配 720p / 1080p / 4K，保持比例并填充，不裁切；奇数尺寸补齐偶数                         |
+| 并发     | 1–4 个视频，FFmpeg 线程预算随并发数分配                                                                  |
+| 硬件编码 | macOS 尝试 VideoToolbox；其他平台尝试 NVENC / QSV；仅在硬件初始化/能力不支持时回退软件编码；同一引擎缓存确定不可用的编码器                                    |
+| 输出安全 | 自动添加 `_lut_applied` 后缀，重名递增；先写同卷临时文件，成功后以不覆盖方式发布；失败和取消清理临时文件 |
+| 帧预览   | 180 ms 防抖，1280 像素上限；同客户端新请求取消旧请求；32 MB / 32 项显示缓存 + 256 MiB / 8 项 16-bit 工作帧缓存 + 128 MiB / 8 项 LUT 缓存，最多 2 个预览渲染               |
 
-## 项目结构
+预览和导出共享 LUT 准备及滤镜构造逻辑，在 16 位 RGB 中混合 LUT 强度。预览 JPEG 与有损导出在压缩精度和缩放上会有差别，不应把预览当作逐像素成片验证。
 
-```
-auto-apply-lut/
-├── 📋 技术方案.md           # 详细技术架构设计
-├── 🏗️ 项目结构设计.md       # 完整项目目录结构
-├── 🔌 API设计文档.md        # 前后端通信接口定义
-├── 🗄️ 数据库设计.md         # 数据存储方案设计
-├── 📝 开发规范.md           # 代码规范和开发流程
-├── 📖 README.md            # 项目说明文档（本文件）
-├── 📄 LICENSE              # 开源许可证
-└── 🚫 .gitignore           # Git忽略文件配置
-```
+快速预览先缩小工作帧，准确预览先调色再缩放；调节强度可以复用解码帧与已解析 LUT。引擎发现会缓存成对可执行文件，并在路径、环境或文件版本变化时失效。
 
-## 设计文档说明
+**色彩范围**：默认保持输入，不做隐式色域转换；界面展示色域、传递函数和位深。可明确选择 Rec.709 解读，或将 Rec.2020 PQ / HLG 转为 Rec.709 SDR，再应用风格 LUT。此选项作用于整个批次，不同输入空间请分批处理。HEVC 支持 8/10-bit 4:2:0，H.264 为 8-bit，ProRes HQ 为 10-bit 4:2:2。不会自动识别相机 Log，也不提供 HDR / Dolby Vision 母版工作流。
 
-### 📋 [技术方案.md](./技术方案.md)
-详细的技术架构设计文档，包含：
-- 整体架构设计
-- 技术栈选择和理由
-- 核心功能模块设计
-- 用户界面设计
-- 数据流设计
-- 性能优化策略
-- 错误处理机制
-- 部署和分发方案
-- 开发计划和风险评估
+**恢复与边界**：工作区会原子保存素材、参数、选择、输出路径和最近批次。正常退出前等待保存，导出中退出需取消并等待进程结束；异常退出后的未完成任务恢复为待重试，从头重新导出，不做编码断点续传。损坏设置/资料库保留备份并提供恢复入口，保存失败有明确提示。预览仍是可定位的静态帧，不是实时调色视频播放。浏览器模式仅用于查看界面，实际文件处理需要桌面应用。
 
-### 🏗️ [项目结构设计.md](./项目结构设计.md)
-完整的项目目录结构规划，包含：
-- 详细的目录树结构
-- 前端React组件组织
-- 后端Rust模块划分
-- 配置文件说明
-- 开发工作流程
-- 代码规范要求
+## 本地开发
 
-### 🔌 [API设计文档.md](./API设计文档.md)
-前后端通信接口完整定义，包含：
-- 数据类型定义
-- 文件管理API
-- LUT管理API
-- 处理引擎API
-- 系统配置API
-- 事件系统设计
-- 错误处理规范
-- 完整使用示例
-
-### 🗄️ [数据库设计.md](./数据库设计.md)
-数据存储方案详细设计，包含：
-- 技术选型说明
-- 完整数据库表结构
-- 数据访问层设计
-- 性能优化策略
-- 数据迁移方案
-- 备份和恢复机制
-
-### 📝 [开发规范.md](./开发规范.md)
-代码规范和开发流程标准，包含：
-- Rust代码规范
-- TypeScript/React代码规范
-- Git工作流程
-- 代码审查流程
-- 测试规范
-- 质量保证标准
-- 文档规范
-
-## 快速开始
-
-### 环境要求
-
-- **Node.js**: >= 18.0.0
-- **Rust**: >= 1.70.0
-- **FFmpeg**:
-  - **Lite 版**：需要用户自行安装（>= 4.0.0）并加入 `PATH`，或在应用设置中指定 `ffmpeg` 可执行文件路径
-  - **Full 版**：安装包内置 `ffmpeg + ffprobe + ffplay`，无需用户单独安装
-- **操作系统**: Windows 10+, macOS 10.15+, Linux (Ubuntu 20.04+)
-
-### 安装依赖
+需要 Node.js、pnpm、Rust 及平台对应的 Tauri 构建工具。安装 FFmpeg 与 ffprobe，并加入 PATH；也可在应用设置中选择 FFmpeg，同目录下应包含 ffprobe。
 
 ```bash
-# 克隆项目
-git clone https://github.com/your-username/auto-apply-lut.git
-cd auto-apply-lut
-
-# 安装前端依赖
 pnpm install
-
-# 安装Rust工具链（如果未安装）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# 安装Tauri CLI
-pnpm install -g @tauri-apps/cli
+pnpm tauri dev
 ```
 
-### Windows 专用环境准备（必读）
-
-为避免 “link.exe not found” 等 MSVC 链接器错误，请先完成以下配置：
-- 安装 Visual Studio 2019/2022（或 Visual Studio 2022 Build Tools）
-  - 选择“使用 C++ 的桌面开发（Desktop development with C++）”
-  - 确保包含：MSVC v14.x、Windows 10/11 SDK、C++ CMake tools for Windows
-- 安装并启用 Rust MSVC 工具链：
-  - 安装：`rustup toolchain install stable-x86_64-pc-windows-msvc`
-  - 设为默认：`rustup default stable-x86_64-pc-windows-msvc`
-- 重新打开终端后验证链接器是否可用：
-  - `where link` 应能定位到 `link.exe`
-
-完成以上步骤后，再进行开发或构建。
-
-### 开发模式
+仅查看前端：
 
 ```bash
-# 启动开发服务器
-npm run tauri dev
-
-# 应用将在 http://localhost:1420/ 启动
-# Tauri窗口会自动打开
+pnpm dev
 ```
 
-### 构建应用
+构建：
 
 ```bash
-# 构建生产版本
-npm run tauri build
-
-# 构建产物位于 src-tauri/target/release/bundle/
+pnpm build
+pnpm tauri build
+# macOS 本地调试应用包
+pnpm tauri build --debug --bundles app
 ```
 
-### Full / Lite 两种发行版构建
+## 独立 release 应用
 
-本项目支持两种构建口味：
-- **Lite（默认）**：不内置 FFmpeg，运行时从系统 `PATH`/常见路径发现，或由用户在设置里指定
-- **Full**：内置 `ffmpeg + ffprobe + ffplay`（用于视频处理/探测/预览）
-
-#### Lite（可选改名）
+**Full 版本内置 FFmpeg 和 ffprobe，使用者不需要安装 Node.js、Rust、Homebrew 或 FFmpeg。** 当前已配置可复现下载的目标为 **Apple Silicon / macOS 12+**，固定使用 FFmpeg 9.0.2 静态构建。系统自带的 WebKit 和系统库仍是平台运行环境。
 
 ```bash
-pnpm tauri build --config src-tauri/tauri.lite.conf.json
+# 开发机首次构建：下载固定引擎、验证 SHA256、编译 release 并打包
+pnpm release:mac:arm64
+
+# 已准备引擎后的构建
+pnpm tauri:build:full:mac:arm64
+
+# 对实际 .app 做独立验收（仅系统 PATH、真实编码/预览、代码签名）
+node scripts/verify-macos-release.mjs \
+  src-tauri/target/aarch64-apple-darwin/release/bundle/macos/LUTlab.app
 ```
 
-#### Full（需要准备二进制资源）
+生成位置：
 
-将 FFmpeg 二进制放置到 `src-tauri/resources/bin/`（结构见 `src-tauri/resources/bin/README.md`），然后构建：
+- 应用：`src-tauri/target/aarch64-apple-darwin/release/bundle/macos/LUTlab.app`
+- 安装镜像：`src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/LUTlab_0.1.0_aarch64.dmg`
+
+下载 URL 和 SHA256 固定在 `src-tauri/resources/ffmpeg-manifest.json`，二进制不提交 Git。打包前会检查架构、动态依赖、必要编码器/滤镜，并真实执行 H.264 / HEVC / ProRes + 音频和 JPEG 预览以及 RGB16 FFV1/NUT 工作帧缓存。依赖 Homebrew 动态库的二进制会被拒绝，Full 检查不允许跳过。运行时优先使用应用内成对的 FFmpeg / ffprobe；应用设置中的显式路径覆盖仍有效。
+
+`tauri:build:full:mac` 构建当前 Mac 架构；`tauri:build:full:mac:universal` 需要额外提供 Intel 和 ARM 两套静态引擎及 Rust target。`tauri:build:full:win` 需要在 Windows 构建机提供经验证的 x64 静态引擎，配置已包含离线 WebView2 安装器；本次没有完成 Intel、Windows 或 Linux 实机验收。Lite 版本仍依赖外部 FFmpeg，不属于免依赖发行包。
+
+标签 CI 默认构建 macOS ARM Full **草稿发布**；Windows 是手动任务，需配置已审计的 `FFMPEG_WINDOWS_VENDOR_URL` 和 `FFMPEG_WINDOWS_VENDOR_SHA256`。本地 macOS 包使用 ad-hoc 签名，尚无 Apple Developer ID 签名与公证。对外公开分发前还需补齐对应源码交付材料，详见 [第三方许可与来源记录](THIRD_PARTY_NOTICES.md)。
+
+## 验证
 
 ```bash
-# Windows x64
-pnpm tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.full.conf.json
-
-# macOS universal（arm64 + x86_64）
-pnpm tauri build --target universal-apple-darwin --config src-tauri/tauri.full.conf.json
+pnpm test
+pnpm test:release
+pnpm build
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-> Full 构建会在打包前运行 `node scripts/prepare-ffmpeg.mjs` 校验二进制是否齐全且可执行。
+Rust 中的真实视频测试使用可发现的 FFmpeg 生成小型测试素材，覆盖强度像素、1D CUBE、特殊字符路径、多音轨、并行处理、输出不覆盖、硬件编码回退、预览缓存与子进程取消。本地没有可发现的 FFmpeg 时，相关测试会提前返回；发行 CI 通过 `LUTLAB_REQUIRE_MEDIA_TESTS=1` 将缺少引擎变为失败；完整验收应使用系统引擎或设置 `FFMPEG_PATH` / `FFPROBE_PATH` 指向已下载的内置引擎，不能把提前返回算作媒体验收。
 
-### 项目运行状态
+手动验收应包含：导入不同分辨率的两个视频与一个 CUBE → 调节强度并对比任意帧 → 应用全部 → 并行导出 → 使用 ffprobe 检查成片时长、尺寸和音轨 → 再次导出确认重名安全 → 取消长任务 → 重试 → 切换 FFmpeg 路径并重新预览。
 
-✅ **当前可用功能**:
-- 应用成功启动和运行
-- 文件上传和管理界面
-- LUT处理设置弹窗（模态弹窗模式）
-- LUT 资料库批量格式转换（输出到原文件旁，自动追加 `.converted` 后缀）
-- 设置弹窗中的 GPU 诊断、系统信息、缓存大小和日志查看
-- 视频预览功能
-- 处理状态监控
-- 系统信息查询
-- 编解码器查询API
-- 缓存清理
+## 代码结构
 
-🔧 **技术实现**:
-- Tauri + React架构完整搭建
-- Rust后端模块全部实现
-- SQLite数据库集成完成
-- FFmpeg视频处理引擎集成
-- 前后端API通信正常
+- `src/App.tsx`：工作台布局、导航、原生拖入与快捷键。
+- `src/components/ExportInspector.tsx`：LUT 强度、编码组合、导出参数与输出操作。
+- `src/components/FramePreview.tsx`：时间轴、分割预览、防抖与过期结果处理。
+- `src/workspace/useWorkspace.ts`：导入、设置持久化、任务快照、轮询、取消与重试。
+- `src/workspace/model.ts` / `types.ts`：纯状态转换、设置迁移、前后端数据契约。
+- `src-tauri/src/commands/preview.rs`：分层缓存、可取消的帧预览服务。
+- `src-tauri/src/commands/workspace.rs` / `startup.rs`：工作区原子保存、安全退出、启动存储恢复。
+- `src/components/WorkspaceStatus.tsx` / `WindowedList.tsx`：恢复与退出交互、大列表窗口渲染。
+- `src-tauri/src/commands/batch_manager.rs`：批量验证、输出命名、并发调度、逐项状态。
+- `src-tauri/src/core/ffmpeg/lut.rs`：预览/导出共享的 LUT 准备与强度滤镜。
+- `src-tauri/src/core/ffmpeg/processor.rs`：FFmpeg 子进程、进度、取消、编码回退、安全发布。
+- `src-tauri/src/database/`：LUT 资料库与历史任务快照。
 
-### 最近验证结果
+`docs/superpowers/` 下的旧设计材料仅作历史参考，当前行为以实现、测试及根目录 `AGENTS.md` 为准。
 
-- `cargo test --manifest-path src-tauri/Cargo.toml` 通过（160 个 Rust 测试）
-- `pnpm test` 通过（14 个前端测试）
-- `pnpm build` 通过（Vite 生产构建成功）
-- 系统诊断接口已改为返回真实系统信息
-- 编解码器列表已改为优先读取 FFmpeg 实际可用编码器名称
+### 4K 媒体性能基准
 
-### 当前已知问题
+```bash
+pnpm benchmark:media --output /tmp/lutlab-benchmark.json
+# 更长素材，或显式选择另一份实际打包的引擎目录
+pnpm benchmark:media --seconds 5 --engine-dir /path/to/bundled/engines
+```
 
-- Rust 代码仍存在一批非阻塞 warnings，主要集中在未使用代码、命名风格和部分旧模块
-- Vite 构建存在 `@tauri-apps/api/core` 的静态/动态混合导入提示，但当前不影响构建成功
-- `Browserslist` 数据包版本较旧，测试和构建时会给出更新提示
+默认使用 Full macOS 应用内的 FFmpeg/ffprobe，在系统临时目录生成 2 秒 4K/30 fps 带音轨素材，并调用生产 Rust 导出引擎测量原色软件编码、50% LUT 软件编码和50% LUT自动硬编。编译测试入口和生成素材的时间不计入导出耗时；结果包含机器、引擎版本、实际编码器、回退信息、耗时、fps 与成片验证，结束后删除临时媒体。自动模式回退时如实记录软件编码，不把它当作硬编成绩。单次合成素材结果用于建立本机基线，不能据此承诺真实素材的固定提升比例。可选 JSON 路径必须尚不存在，避免覆盖已有报告。
 
-## 功能特性
-
-### 🎬 视频处理
-- 支持主流视频格式：MP4, MOV, AVI, MKV等
-- 批量处理多个视频文件
-- 保持原始视频质量和属性
-- 自定义输出格式和质量设置
-
-### 🎨 LUT管理
-- 支持多种LUT格式：.cube, .3dl, .lut, .mga
-- LUT预览和强度调节
-- LUT库管理和分类
-- LUT 批量格式转换与结果摘要
-- 自定义LUT参数设置
-
-### ⚡ 性能优化
-- 多线程并发处理
-- 智能任务调度
-- 内存使用优化
-- 进度实时监控
-
-### 🖥️ 用户界面
-- 现代化苹果设计风格
-- 响应式布局设计
-- 拖拽文件支持
-- 模态弹窗设置界面
-- 磨砂玻璃效果和流畅动画
-
-## 开发计划
-
-### Phase 1: 基础框架 ✅ 已完成
-- [x] 项目架构设计
-- [x] 技术方案制定
-- [x] Tauri项目初始化
-- [x] 基础UI框架搭建
-- [x] 文件选择功能
-
-### Phase 2: 核心功能 ✅ 已完成
-- [x] FFmpeg集成
-- [x] LUT处理逻辑
-- [x] 基础批量处理
-- [x] 数据库集成
-
-### Phase 3: 高级功能 ✅ 已完成
-- [x] 进度监控系统
-- [x] 错误处理机制
-- [x] 性能优化
-- [x] 用户设置管理
-
-### Phase 4: 完善和测试 ⏳ 持续打磨中
-- [x] UI优化和完善
-- [ ] 跨平台完整回归测试
-- [ ] 性能测试补充与结果沉淀
-- [ ] 用户文档和 Beta 发布说明持续更新
-
-## 贡献指南
-
-我们欢迎所有形式的贡献！请阅读 [开发规范.md](./开发规范.md) 了解详细的贡献流程。
-
-### 如何贡献
-
-1. Fork 本项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
-
-### 报告问题
-
-如果您发现了bug或有功能建议，请在 [Issues](https://github.com/your-username/auto-apply-lut/issues) 页面创建新的issue。
-
-## 技术支持
-
-### 常见问题
-
-**Q: 支持哪些视频格式？**
-A: 支持所有FFmpeg支持的格式，包括MP4、MOV、AVI、MKV、WebM等主流格式。
-
-**Q: 支持哪些LUT格式？**
-A: 支持.cube、.3dl、.lut、.mga等常见LUT格式。
-
-**Q: 如何提高处理速度？**
-A: 可以在设置中调整并发任务数，建议设置为CPU核心数的1-2倍。
-
-**Q: 处理后的视频质量如何？**
-A: 默认保持原始质量，也可以自定义输出质量和格式。
-
-### 获取帮助
-
-- 📖 查看 [用户文档](./docs/user-guide.md)
-- 🐛 报告 [Bug](https://github.com/your-username/auto-apply-lut/issues)
-- 💬 参与 [讨论](https://github.com/your-username/auto-apply-lut/discussions)
-- 📧 联系邮箱: support@example.com
-
-## 许可证
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 致谢
-
-- [Tauri](https://tauri.app/) - 跨平台应用框架
-- [FFmpeg](https://ffmpeg.org/) - 视频处理引擎
-- [React](https://reactjs.org/) - 前端框架
-- [Rust](https://www.rust-lang.org/) - 系统编程语言
-
-## 更新日志
-
-### v0.1.0-beta (当前版本)
-- ✅ 完整的Tauri + React项目架构
-- ✅ 文件管理系统（上传、预览、删除）
-- ✅ LUT管理功能（导入、应用、预览）
-- ✅ LUT 资料库批量格式转换（同目录输出、自动避免重名覆盖）
-- ✅ 视频处理引擎（基于FFmpeg）
-- ✅ 批量处理任务管理
-- ✅ 实时进度监控
-- ✅ 系统信息获取
-- ✅ 编解码器查询API
-- ✅ GPU 诊断与硬件加速测试
-- ✅ 设置弹窗中的系统与缓存诊断
-- ✅ 日志文件列表加载与日志内容预览
-- ✅ 缓存清理与缓存大小回刷
-- ✅ 现代化React UI界面
-- ✅ SQLite数据库集成
-- ✅ 并发处理优化
-- ✅ 错误处理机制
-- ✅ UI/UX 优化：设置面板改为弹窗模式，提升用户体验
-
-### 已实现的核心功能
-
-#### 🎬 视频处理模块
-- 支持多种视频格式输入
-- FFmpeg集成的专业视频处理
-- 批量任务队列管理
-- 实时处理进度反馈
-
-#### 🎨 LUT管理系统
-- LUT文件导入和验证
-- LUT预览和应用
-- 多种LUT格式支持
-- LUT库管理功能
-- LUT 批量格式转换
-- 同维度格式约束与转换结果摘要
-
-#### 🖥️ 用户界面
-- 现代化React组件设计
-- 文件拖拽上传支持
-- 实时状态显示
-- 响应式布局设计
-- 设置弹窗集中式诊断面板
-
-#### ⚡ 性能优化
-- 多线程并发处理
-- 智能任务调度
-- 内存使用优化
-- 系统资源监控
-
-#### 🔧 系统功能
-- 系统信息获取
-- GPU 与硬件加速诊断
-- 编解码器查询
-- 缓存大小查看与缓存清理
-- 设置弹窗日志查看
-- 配置管理
-
----
-
-**项目状态**: 本项目已完成核心功能开发，当前处于 Beta 测试与工程打磨阶段。主要功能模块已实现并可运行，但仍建议在正式发布前继续完成 warnings 清理、跨平台回归测试和文档校准。
+本机 4K 导出与预览对照实测见 [性能基线与复跑方法](docs/benchmarks/README.md)。单次样本中，50% LUT 软件导出耗时下降约 56%，VideoToolbox 耗时下降约 63%；这些数字不代表跨设备或所有真实素材的固定加速比例。

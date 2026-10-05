@@ -65,8 +65,9 @@ impl VideoManager {
         }
 
         // 1) 自动发现
-        let ffmpeg_path = Self::find_ffmpeg_path()?;
-        let ffprobe_path = Self::find_ffprobe_path()?;
+        let (ffmpeg_path, ffprobe_path) = crate::core::ffmpeg::discover_ffmpeg_pair()?;
+        let ffmpeg_path = ffmpeg_path.to_string_lossy().into_owned();
+        let ffprobe_path = ffprobe_path.to_string_lossy().into_owned();
         Ok(Self {
             ffmpeg_path,
             ffprobe_path,
@@ -133,6 +134,12 @@ impl VideoManager {
             fps: video_metadata.frame_rate,
             codec: video_metadata.codec,
             bitrate: video_metadata.bitrate,
+            pixel_format: video_metadata.pixel_format,
+            bit_depth: video_metadata.bit_depth,
+            color_primaries: video_metadata.color_primaries,
+            color_transfer: video_metadata.color_transfer,
+            color_matrix: video_metadata.color_space,
+            color_range: video_metadata.color_range,
             created_at: Some(created_at),
             modified_at: Some(modified_at),
         })
@@ -174,184 +181,48 @@ impl VideoManager {
         &self.ffprobe_path
     }
 
-    /// 查找FFmpeg可执行文件路径
-    fn find_ffmpeg_path() -> AppResult<String> {
-        // 1) 环境变量
-        if let Ok(path) = std::env::var("FFMPEG_PATH") {
-            if Self::is_executable_available(&path) {
-                return Ok(path);
-            }
-        }
-
-        // 2) 打包的二进制（随应用一起分发）
-        if let Some(p) = Self::find_packaged_tool("ffmpeg") {
-            return Ok(p);
-        }
-
-        // 3) 常见路径 + PATH
-        let common_paths = [
-            "ffmpeg",
-            "/usr/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/opt/homebrew/bin/ffmpeg",
-            "C:\\ffmpeg\\bin\\ffmpeg.exe",
-            "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
-        ];
-
-        for path in &common_paths {
-            if Self::is_executable_available(path) {
-                return Ok(path.to_string());
-            }
-        }
-
-        Err(crate::types::AppError::Configuration(
-            "FFmpeg not found. Please install FFmpeg or set FFMPEG_PATH environment variable"
-                .to_string(),
-        ))
-    }
-
-    /// 查找FFprobe可执行文件路径
-    fn find_ffprobe_path() -> AppResult<String> {
-        // 1) 环境变量
-        if let Ok(path) = std::env::var("FFPROBE_PATH") {
-            if Self::is_executable_available(&path) {
-                return Ok(path);
-            }
-        }
-
-        // 2) 打包的二进制（随应用一起分发）
-        if let Some(p) = Self::find_packaged_tool("ffprobe") {
-            return Ok(p);
-        }
-
-        // 3) 常见路径 + PATH
-        let common_paths = [
-            "ffprobe",
-            "/usr/bin/ffprobe",
-            "/usr/local/bin/ffprobe",
-            "/opt/homebrew/bin/ffprobe",
-            "C:\\ffmpeg\\bin\\ffprobe.exe",
-            "C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe",
-        ];
-
-        for path in &common_paths {
-            if Self::is_executable_available(path) {
-                return Ok(path.to_string());
-            }
-        }
-
-        Err(crate::types::AppError::Configuration(
-            "FFprobe not found. Please install FFmpeg or set FFPROBE_PATH environment variable"
-                .to_string(),
-        ))
-    }
-
-    /// 检查可执行文件是否可用
+    /// Check configured tools with the same bounded probe used by discovery.
     fn is_executable_available(path: &str) -> bool {
-        std::process::Command::new(path)
-            .arg("-version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    /// 尝试在打包的资源目录查找二进制
-    fn find_packaged_tool(tool: &str) -> Option<String> {
-        // 当前可执行文件所在目录
-        let exe_dir: PathBuf = std::env::current_exe().ok()?.parent()?.to_path_buf();
-
-        #[cfg(target_os = "windows")]
-        let candidates = vec![
-            exe_dir
-                .join("resources")
-                .join("bin")
-                .join("windows")
-                .join("x86_64")
-                .join(format!("{}.exe", tool)),
-            exe_dir
-                .join("resources")
-                .join("resources")
-                .join("bin")
-                .join("windows")
-                .join("x86_64")
-                .join(format!("{}.exe", tool)),
-            exe_dir
-                .join("bin")
-                .join("windows")
-                .join("x86_64")
-                .join(format!("{}.exe", tool)),
-            exe_dir.join(format!("{}.exe", tool)),
-        ];
-
-        #[cfg(target_os = "macos")]
-        let candidates = {
-            let resources = exe_dir.join("../../Resources");
-            let resources = resources.canonicalize().unwrap_or(resources);
-            let arch = std::env::consts::ARCH;
-            vec![
-                resources.join("bin").join("macos").join(arch).join(tool),
-                resources
-                    .join("resources")
-                    .join("bin")
-                    .join("macos")
-                    .join(arch)
-                    .join(tool),
-                resources.join("bin").join("macos").join(tool),
-                resources
-                    .join("resources")
-                    .join("bin")
-                    .join("macos")
-                    .join(tool),
-                resources.join(tool),
-                exe_dir.join(tool),
-            ]
-        };
-
-        #[cfg(target_os = "linux")]
-        let candidates = vec![
-            exe_dir
-                .join("resources")
-                .join("bin")
-                .join("linux")
-                .join(tool),
-            exe_dir
-                .join("resources")
-                .join("resources")
-                .join("bin")
-                .join("linux")
-                .join(tool),
-            exe_dir.join("bin").join("linux").join(tool),
-            exe_dir.join(tool),
-        ];
-
-        for c in candidates {
-            if c.exists() {
-                let p = c.to_string_lossy().to_string();
-                if Self::is_executable_available(&p) {
-                    return Some(p);
-                }
-            }
-        }
-        None
+        crate::core::ffmpeg::executable_works(Path::new(path))
     }
 
     /// 使用FFprobe获取视频元数据
     async fn probe_video_metadata<P: AsRef<Path>>(&self, path: P) -> AppResult<VideoMetadata> {
-        let output = Command::new(&self.ffprobe_path)
+        self.probe_video_metadata_with_timeout(path, std::time::Duration::from_secs(20))
+            .await
+    }
+
+    async fn probe_video_metadata_with_timeout<P: AsRef<Path>>(
+        &self,
+        path: P,
+        timeout: std::time::Duration,
+    ) -> AppResult<VideoMetadata> {
+        let mut command = Command::new(&self.ffprobe_path);
+        command
             .args([
                 "-v",
-                "quiet",
+                "error",
                 "-print_format",
                 "json",
                 "-show_format",
                 "-show_streams",
-                path.as_ref().to_str().unwrap(),
             ])
-            .output()
+            .arg(path.as_ref())
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(timeout, command.output())
             .await
-            .map_err(|e| crate::types::AppError::FFmpeg(e.to_string()))?;
+            .map_err(|_| {
+                crate::types::AppError::FFmpeg(
+                    "读取视频信息超时，请检查视频文件或 FFprobe 路径".into(),
+                )
+            })?
+            .map_err(|e| {
+                crate::types::AppError::FFmpeg(format!(
+                    "无法执行 FFprobe {}：{e}",
+                    self.ffprobe_path
+                ))
+            })?;
 
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
@@ -376,5 +247,56 @@ impl Default for VideoManager {
             ffmpeg_path: "ffmpeg".to_string(),
             ffprobe_path: "ffprobe".to_string(),
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod probe_lifecycle_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    async fn executable(path: &Path, body: &str) {
+        tokio::fs::write(path, format!("#!/bin/sh\n{body}\n"))
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn configured_probe_returns_the_frontend_metadata_contract() {
+        let directory = tempfile::tempdir().unwrap();
+        let probe = directory.path().join("configured ffprobe");
+        executable(&probe, r#"printf '%s\n' '{"format":{"duration":"2.5","bit_rate":"100000"},"streams":[{"codec_type":"video","codec_name":"h264","width":640,"height":360,"r_frame_rate":"25/1"}]}'"#).await;
+        let source = directory.path().join("source ' clip.mp4");
+        tokio::fs::write(&source, b"source").await.unwrap();
+        let manager = VideoManager::with_paths("unused".into(), probe.to_string_lossy().into());
+        let info = manager.get_video_info(&source).await.unwrap();
+        assert_eq!(info.path, source);
+        assert_eq!(info.duration, Some(2.5));
+        assert_eq!(
+            (info.width, info.height, info.fps),
+            (Some(640), Some(360), Some(25.0))
+        );
+        let json = serde_json::to_value(info).unwrap();
+        assert_eq!(json["filename"], "source ' clip.mp4");
+        assert!(json["path"].is_string());
+        assert_eq!(json["size"], 6);
+    }
+
+    #[tokio::test]
+    async fn unresponsive_probe_is_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let probe = directory.path().join("slow-probe");
+        executable(&probe, "exec sleep 20").await;
+        let manager = VideoManager::with_paths("unused".into(), probe.to_string_lossy().into());
+        let started = std::time::Instant::now();
+        let error = manager
+            .probe_video_metadata_with_timeout("unused.mp4", std::time::Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("超时"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }
