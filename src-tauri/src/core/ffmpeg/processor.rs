@@ -377,8 +377,8 @@ impl VideoProcessor {
             .await
             .map_err(AppError::from)?;
         // Temp files live on the destination volume. Dropping them on errors or
-        // cancellation removes incomplete output. persist_noclobber publishes only
-        // completed files and cannot overwrite a file created during encoding.
+        // cancellation removes incomplete output. Prefer persist_noclobber;
+        // network volumes without exclusive rename use an exclusive-copy fallback.
         let extension = output_path
             .extension()
             .and_then(|e| e.to_str())
@@ -509,14 +509,56 @@ impl VideoProcessor {
             match result {
                 Ok(()) => {
                     Self::check_cancel(cancel_rx)?;
-                    temporary_output
-                        .persist_noclobber(output_path)
-                        .map_err(|e| {
-                            AppError::Io(format!(
-                                "Cannot publish output without overwriting: {}",
-                                e.error
-                            ))
-                        })?;
+                    let destination = output_path.to_path_buf();
+                    let (_, replacement) = tokio::sync::oneshot::channel();
+                    let mut publication_cancel = std::mem::replace(cancel_rx, replacement);
+                    // A NAS copy can take time. Keep cancellation registered and
+                    // await its cleanup without blocking the async scheduler.
+                    tokio::task::spawn_blocking(move || {
+                        let mut cancelled = false;
+                        let result = (|| {
+                            let mut check = || {
+                                if publication_cancel.try_recv().is_ok() {
+                                    cancelled = true;
+                                    return Err(std::io::Error::new(
+                                        std::io::ErrorKind::Interrupted,
+                                        "Cancelled",
+                                    ));
+                                }
+                                Ok(())
+                            };
+                            check()?;
+                            match temporary_output.persist_noclobber(&destination) {
+                                Ok(_) => Ok(()),
+                                Err(error)
+                                    if crate::core::output::publication_unsupported(
+                                        &error.error,
+                                    ) =>
+                                {
+                                    let pending = crate::core::output::publish_without_rename(
+                                        &error.file,
+                                        &destination,
+                                        &mut check,
+                                    )?;
+                                    check()?;
+                                    pending.commit();
+                                    Ok(())
+                                }
+                                Err(error) => Err(error.error),
+                            }
+                        })();
+                        result.map_err(|error| {
+                            if cancelled {
+                                AppError::FFmpeg("Cancelled".into())
+                            } else {
+                                AppError::Io(format!(
+                                    "Cannot publish output without overwriting: {error}"
+                                ))
+                            }
+                        })
+                    })
+                    .await
+                    .map_err(|error| AppError::Internal(error.to_string()))??;
                     return Ok(());
                 }
                 Err(AppError::FFmpeg(message)) if message == "Cancelled" => {
@@ -1483,7 +1525,16 @@ mod tests {
             "LUT_3D_SIZE 2\n1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n",
         )
         .unwrap();
-        let output = temp.path().join("finished.mp4");
+        let output_directory = std::env::var_os("LUTLAB_TEST_OUTPUT_DIR").map(|parent| {
+            tempfile::Builder::new()
+                .prefix(".lutlab-video-test-")
+                .tempdir_in(parent)
+                .unwrap()
+        });
+        let output_parent = output_directory
+            .as_ref()
+            .map_or(temp.path(), |dir| dir.path());
+        let output = output_parent.join("finished.mp4");
         let processor = VideoProcessor::new(ffmpeg.clone());
         let result = processor
             .apply_luts_with_task_id(
@@ -1561,6 +1612,11 @@ mod tests {
         assert!(!rejected.success);
         assert_eq!(std::fs::read(&output).unwrap(), original);
         assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".lut-export-")));
+        assert!(std::fs::read_dir(output_parent).unwrap().all(|entry| !entry
             .unwrap()
             .file_name()
             .to_string_lossy()
@@ -1661,6 +1717,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input.mp4");
         fixture(&ffmpeg, &input).await;
+        let output_directory = std::env::var_os("LUTLAB_TEST_OUTPUT_DIR").map(|parent| {
+            tempfile::Builder::new()
+                .prefix(".lutlab-parallel-test-")
+                .tempdir_in(parent)
+                .unwrap()
+        });
+        let output_parent = output_directory
+            .as_ref()
+            .map_or(temp.path(), |dir| dir.path());
         let processor = Arc::new(VideoProcessor::new(ffmpeg));
         let mut settings = create_test_settings();
         settings.bitrate = Some("500k".into());
@@ -1672,7 +1737,7 @@ mod tests {
             let processor = processor.clone();
             let input = input.clone();
             let settings = settings.clone();
-            let output = temp.path().join(format!("output-{index}.mp4"));
+            let output = output_parent.join(format!("output-{index}.mp4"));
             handles.push(tokio::spawn(async move {
                 processor
                     .apply_luts_with_task_id(

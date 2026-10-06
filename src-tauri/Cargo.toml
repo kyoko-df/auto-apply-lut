@@ -63,6 +63,9 @@ ffmpeg-next = { version = "6", default-features = false, optional = true, featur
 # Direct sys binding used only for version queries inside cfg(feature = "ffmpeg_native")
 ffmpeg-sys-next = { version = "6", default-features = false, optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 # Enable this to build with statically linked FFmpeg via ffmpeg-next/ffmpeg-sys-next

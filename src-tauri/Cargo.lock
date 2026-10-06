@@ -274,6 +274,7 @@ dependencies = [
  "glob",
  "image",
  "lcms2",
+ "libc",
  "little_exif",
  "md-5",
  "notify",

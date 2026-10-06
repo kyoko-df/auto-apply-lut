@@ -26,11 +26,10 @@ impl PhotoControl {
         mut temporary: tempfile::NamedTempFile,
         destination: &Path,
     ) -> Result<PathBuf, String> {
-        let mut committed = self.committed.lock().map_err(|e| e.to_string())?;
-        check_cancel(&self.token)?;
         let mut target = destination.to_path_buf();
         let mut reserved = std::collections::HashSet::new();
         for _ in 0..32 {
+            let mut committed = self.committed.lock().map_err(|e| e.to_string())?;
             check_cancel(&self.token)?;
             match temporary.persist_noclobber(&target) {
                 Ok(_) => {
@@ -40,6 +39,34 @@ impl PhotoControl {
                 Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                     temporary = error.file;
                     target = crate::core::output::available_path(destination, &mut reserved)?;
+                }
+                Err(error) if crate::core::output::publication_unsupported(&error.error) => {
+                    temporary = error.file;
+                    // Allow cancel() to set the token while a network copy runs.
+                    drop(committed);
+                    let pending =
+                        crate::core::output::publish_without_rename(&temporary, &target, || {
+                            check_cancel(&self.token).map_err(|message| {
+                                std::io::Error::new(std::io::ErrorKind::Interrupted, message)
+                            })
+                        });
+                    match pending {
+                        Ok(pending) => {
+                            let mut committed = self.committed.lock().map_err(|e| e.to_string())?;
+                            check_cancel(&self.token)?;
+                            pending.commit();
+                            *committed = true;
+                            return Ok(target);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                            target =
+                                crate::core::output::available_path(destination, &mut reserved)?;
+                        }
+                        Err(error) => {
+                            check_cancel(&self.token)?;
+                            return Err(format!("照片发布失败，现有文件保持完整：{error}"));
+                        }
+                    }
                 }
                 Err(error) => {
                     return Err(format!("照片发布失败，现有文件保持完整：{}", error.error))
@@ -246,6 +273,8 @@ impl PhotoProcessor {
         })
         .await
         .map_err(|e| e.to_string())??;
-        control.publish(temporary, &job.output)
+        tokio::task::spawn_blocking(move || control.publish(temporary, &job.output))
+            .await
+            .map_err(|e| e.to_string())?
     }
 }
