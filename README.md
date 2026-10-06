@@ -84,7 +84,15 @@ Download URLs and SHA256 are pinned in `src-tauri/resources/ffmpeg-manifest.json
 
 `tauri:build:full:mac` builds for the current Mac architecture; `tauri:build:full:mac:universal` additionally requires both Intel and ARM static engines plus the Rust targets. `tauri:build:full:win` requires a verified x64 static engine on a Windows build machine; the config already includes an offline WebView2 installer; Intel, Windows, and Linux have not completed on-device acceptance this round. Lite builds still depend on an external FFmpeg and are not dependency-free packages.
 
-Tag CI builds a macOS ARM Full **draft release** by default; Windows is a manual job that requires the audited `FFMPEG_WINDOWS_VENDOR_URL` and `FFMPEG_WINDOWS_VENDOR_SHA256` repository variables. Local macOS bundles use ad-hoc signing — there is no Apple Developer ID signing or notarization yet. Public distribution also requires complete matching source delivery; see [Third-party licenses and provenance](THIRD_PARTY_NOTICES.md).
+Tag CI builds a macOS ARM Full **draft release** by default; Windows is a manual job that requires the audited `FFMPEG_WINDOWS_VENDOR_URL` and `FFMPEG_WINDOWS_VENDOR_SHA256` repository variables. The vendor archive must be a ZIP containing `windows/x86_64/ffmpeg.exe` and `windows/x86_64/ffprobe.exe`. Upstream builds (gyan.dev, martin-riedl.de, ...) do not ship that layout, so repackage an audited archive with `scripts/package-windows-vendor.mjs`:
+
+```bash
+node scripts/package-windows-vendor.mjs --archive ffmpeg-9.0.2-essentials_build.zip --output lutlab-ffmpeg-vendor.zip
+```
+
+Every binary is re-checked with the same architecture and system-DLL rules the release build enforces, and the ZIP is deterministic (fixed timestamps and entry order), so re-running it on the same input reproduces the same SHA256. Upload the output to a durable HTTPS location and set `FFMPEG_WINDOWS_VENDOR_SHA256` to the value the script prints.
+
+Local macOS bundles use ad-hoc signing — there is no Apple Developer ID signing or notarization yet. Public distribution also requires complete matching source delivery; see [Third-party licenses and provenance](THIRD_PARTY_NOTICES.md).
 
 ## Verification
 

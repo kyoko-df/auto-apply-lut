@@ -3,11 +3,11 @@
 // package-manager executable into resources is not a self-contained FFmpeg.
 const CPU = new Map([[0x01000007, 'x86_64'], [0x0100000c, 'aarch64']]);
 const SYSTEM_DLLS = new Set([
-  'advapi32.dll', 'avrt.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'cabinet.dll', 'cfgmgr32.dll',
+  'advapi32.dll', 'avicap32.dll', 'avrt.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'cabinet.dll', 'cfgmgr32.dll',
   'comctl32.dll', 'comdlg32.dll', 'crypt32.dll', 'd3d11.dll', 'd3d12.dll', 'd3d9.dll',
   'dbghelp.dll', 'dnsapi.dll', 'dsound.dll', 'dwmapi.dll', 'dxgi.dll', 'dxva2.dll',
   'gdi32.dll', 'imm32.dll', 'iphlpapi.dll', 'kernel32.dll', 'kernelbase.dll', 'mf.dll',
-  'mfplat.dll', 'mfreadwrite.dll', 'mfuuid.dll', 'msvcrt.dll', 'ncrypt.dll', 'netapi32.dll',
+  'mfplat.dll', 'mfreadwrite.dll', 'mfuuid.dll', 'msimg32.dll', 'msvcrt.dll', 'ncrypt.dll', 'netapi32.dll',
   'normaliz.dll', 'ntdll.dll', 'ole32.dll', 'oleaut32.dll', 'powrprof.dll', 'propsys.dll',
   'psapi.dll', 'rpcrt4.dll', 'secur32.dll', 'setupapi.dll', 'shcore.dll', 'shell32.dll',
   'shlwapi.dll', 'strmiids.dll', 'user32.dll', 'userenv.dll', 'usp10.dll', 'version.dll',
