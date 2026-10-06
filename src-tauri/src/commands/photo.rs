@@ -14,6 +14,7 @@ use crate::{
         },
         task::TaskManager,
     },
+    types::ui_err,
     utils::config::ConfigManager,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -100,7 +101,7 @@ impl Normalized {
         let mut file = std::fs::File::open(self.directory.path().join("rgb16.bin"))
             .map_err(|e| e.to_string())?;
         if file.metadata().map_err(|e| e.to_string())?.len() != self.bytes as u64 {
-            return Err("照片缓存已变化，请重试".into());
+            return Err(ui_err("photo.cache_stale", "照片缓存已变化，请重试"));
         }
         let pixels = self.width as usize * self.height as usize;
         let mut values = Vec::with_capacity(self.bytes / 2);
@@ -191,7 +192,7 @@ pub(super) async fn lut_digest(
         .map_err(|e| e.to_string())?
         .len();
     if bytes > 64 * 1024 * 1024 {
-        return Err("LUT 不能超过 64 MiB".into());
+        return Err(ui_err("lut.too_large", "LUT 不能超过 64 MiB"));
     }
     let _memory = processor.reserve(bytes + 1024 * 1024, token).await?;
     lut_digest_with_memory(path, token).await
@@ -203,9 +204,9 @@ async fn lut_digest_with_memory(path: &Path, token: &CancellationToken) -> Resul
         .map_err(|e| e.to_string())?;
     let mut data = Vec::new();
     let mut bounded = file.take(64 * 1024 * 1024 + 1);
-    tokio::select! { biased; _ = token.cancelled() => return Err("预览已取消".into()), result = bounded.read_to_end(&mut data) => { result.map_err(|e| e.to_string())?; } }
+    tokio::select! { biased; _ = token.cancelled() => return Err(ui_err("preview.cancelled", "预览已取消")), result = bounded.read_to_end(&mut data) => { result.map_err(|e| e.to_string())?; } }
     if data.len() > 64 * 1024 * 1024 {
-        return Err("LUT 不能超过 64 MiB".into());
+        return Err(ui_err("lut.too_large", "LUT 不能超过 64 MiB"));
     }
     Ok(format!("{:x}", Sha256::digest(&data)))
 }
@@ -273,7 +274,7 @@ pub async fn start_photo_batch_processing(
     photo_processor: State<'_, PhotoProcessor>,
 ) -> Result<BatchResponse, String> {
     if request.photo_options.is_none() {
-        return Err("缺少照片导出选项".into());
+        return Err(ui_err("photo.missing_options", "缺少照片导出选项"));
     }
     super::batch_manager::start_batch_processing(
         request,
@@ -325,7 +326,7 @@ fn resize(
     }
     let image =
         image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(frame.width, frame.height, values)
-            .ok_or("照片缩图失败")?;
+            .ok_or_else(|| ui_err("photo.thumb_failed", "照片缩图失败"))?;
     let resized =
         image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
     frame.rgb.clear();
@@ -372,7 +373,10 @@ fn crop(frame: PhotoFrame, view: &PhotoViewport) -> Result<PhotoFrame, String> {
         || x.checked_add(*width).is_none_or(|v| v > frame.width)
         || y.checked_add(*height).is_none_or(|v| v > frame.height)
     {
-        return Err("照片局部查看区域越界或超过 1024 像素".into());
+        return Err(ui_err(
+            "photo.region_bounds",
+            "照片局部查看区域越界或超过 1024 像素",
+        ));
     }
     let mut rgb = Vec::with_capacity(*width as usize * *height as usize * 3);
     let mut alpha = frame.alpha.as_ref().map(|_| Vec::new());
@@ -408,7 +412,10 @@ fn display(frame: &PhotoFrame, token: &CancellationToken) -> Result<String, Stri
         .read_to_end(&mut data)
         .map_err(|e| e.to_string())?;
     if data.len() > 12 * 1024 * 1024 {
-        return Err("照片显示图超过大小限制，请缩小查看区域".into());
+        return Err(ui_err(
+            "photo.display_too_large",
+            "照片显示图超过大小限制，请缩小查看区域",
+        ));
     }
     Ok(format!("data:image/png;base64,{}", STANDARD.encode(data)))
 }
@@ -642,16 +649,16 @@ async fn generate_with_resolver(
         || !(0.0..=1.0).contains(&request.intensity)
         || !matches!(request.quality.as_str(), "fast" | "accurate")
     {
-        return Err("无效照片预览请求".into());
+        return Err(ui_err("photo.bad_request", "无效照片预览请求"));
     }
     if let PhotoViewport::Fit { max_edge } = request.viewport {
         if !(160..=1920).contains(&max_edge) {
-            return Err("照片预览尺寸必须在 160–1920 之间".into());
+            return Err(ui_err("photo.bad_size", "照片预览尺寸必须在 160–1920 之间"));
         }
     }
     let active = preview_state.begin(&request.client_id)?;
     let token = active.token.clone();
-    let engine = tokio::select! { biased; _ = token.cancelled() => return Err("预览已取消".into()), engine = resolver => engine? };
+    let engine = tokio::select! { biased; _ = token.cancelled() => return Err(ui_err("preview.cancelled", "预览已取消")), engine = resolver => engine? };
     let header = photo_processor
         .inspect(Path::new(&request.photo_path), &token)
         .await?;
@@ -661,11 +668,17 @@ async fn generate_with_resolver(
         .filter(|_| request.intensity > 0.0)
     {
         if request.lut_space != Some(PhotoSpace::Srgb) {
-            return Err("请明确按 sRGB 输入和输出使用此 LUT".into());
+            return Err(ui_err(
+                "photo.lut_needs_srgb",
+                "请明确按 sRGB 输入和输出使用此 LUT",
+            ));
         }
         let hash = lut_digest(Path::new(path), &photo_processor, &token).await?;
         if request.lut_fingerprint.as_deref() != Some(&hash) {
-            return Err("LUT 已变化或尚未确认，请重新确认 sRGB 用法".into());
+            return Err(ui_err(
+                "photo.lut_unconfirmed",
+                "LUT 已变化或尚未确认，请重新确认 sRGB 用法",
+            ));
         }
         hash
     } else {
@@ -712,7 +725,7 @@ async fn generate_with_resolver(
     if let Some(images) = preview_state.display_get(&key)? {
         return Ok(response(images, dims.0, dims.1));
     }
-    let render = tokio::select! { biased; _ = token.cancelled() => return Err("预览已取消".into()), permit = preview_state.permits.clone().acquire_owned() => Arc::new(permit.map_err(|e| e.to_string())?) };
+    let render = tokio::select! { biased; _ = token.cancelled() => return Err(ui_err("preview.cancelled", "预览已取消")), permit = preview_state.permits.clone().acquire_owned() => Arc::new(permit.map_err(|e| e.to_string())?) };
     if let Some(images) = preview_state.display_get(&key)? {
         photo::check_cancel(&token)?;
         return Ok(response(images, dims.0, dims.1));
@@ -818,7 +831,10 @@ async fn generate_with_resolver(
                 return Ok::<_, String>((images, frame.width, frame.height));
             }
             if edge.is_none() || frame.width.max(frame.height) <= 160 {
-                return Err("照片对比图超过 16 MiB，请缩小查看区域".into());
+                return Err(ui_err(
+                    "photo.compare_too_large",
+                    "照片对比图超过 16 MiB，请缩小查看区域",
+                ));
             }
             let smaller = (frame.width.max(frame.height) * 3 / 4).max(160);
             original = resize(original, smaller, &cancellation)?;
@@ -829,13 +845,16 @@ async fn generate_with_resolver(
     .map_err(|e| e.to_string())??;
     photo::check_cancel(&token)?;
     if photo::metadata::version(Path::new(&request.photo_path))? != header.info.source_version {
-        return Err("源照片已变化，请重新预览".into());
+        return Err(ui_err("photo.source_changed", "源照片已变化，请重新预览"));
     }
     if !lut_hash.is_empty()
         && lut_digest_with_memory(Path::new(request.lut_path.as_ref().unwrap()), &token).await?
             != lut_hash
     {
-        return Err("LUT 在预览期间发生变化，请重新确认".into());
+        return Err(ui_err(
+            "photo.lut_changed",
+            "LUT 在预览期间发生变化，请重新确认",
+        ));
     }
     preview_state.display_put(key, images.clone())?;
     Ok(response(images, width, height))

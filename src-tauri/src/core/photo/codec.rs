@@ -1,4 +1,5 @@
 use super::{check_cancel, color, metadata, PhotoFrame, PhotoOutput, SourceInterpretation};
+use crate::types::ui_err;
 use image::{ImageDecoder, ImageEncoder};
 use little_exif::{exif_tag::ExifTag, metadata::Metadata};
 use std::{
@@ -19,9 +20,19 @@ pub fn decode(
         SourceInterpretation::Assign { space } => metadata::assigned_icc(*space)?,
         SourceInterpretation::Embedded => match header.icc {
             Some(icc) if header.info.color_status == "embedded" => icc,
-            Some(_) => return Err("照片 ICC 无效，请明确指定输入色彩空间".into()),
+            Some(_) => {
+                return Err(ui_err(
+                    "photo.input_profile_invalid",
+                    "照片 ICC 无效，请明确指定输入色彩空间",
+                ))
+            }
             None if header.declared_srgb => metadata::assigned_icc(super::PhotoSpace::Srgb)?,
-            None => return Err("照片未标记色彩空间，请明确指定输入解释".into()),
+            None => {
+                return Err(ui_err(
+                    "photo.input_profile_unknown",
+                    "照片未标记色彩空间，请明确指定输入解释",
+                ))
+            }
         },
     };
     let decoder = metadata::reader(path)?

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SetStateAction } from "react";
-import { restoreWorkspace } from "./snapshot";
+import i18n from "../i18n";
+import {
+  restoreWorkspace,
+  CLIP_ERROR_INTERRUPTED,
+  CLIP_ERROR_QUEUE_LOST,
+} from "./snapshot";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -8,6 +13,7 @@ import {
   buildBatchRequest,
   DEFAULT_SETTINGS,
   errorMessage,
+  errorText,
   extension,
   isBatchFinished,
   invalidateForSettings,
@@ -41,8 +47,7 @@ import type {
 
 const desktopAvailable = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const desktopMessage =
-  "请在桌面应用中使用本地视频、照片、LUT 预览和导出。浏览器仅提供界面预览。";
+const desktopMessage = () => i18n.t("notices.browserOnly");
 
 const EXPORT_SETTING_KEYS: Array<keyof AppSettings> = [
   "default_output_dir",
@@ -221,7 +226,7 @@ export function useWorkspace() {
       await setExportGuard(false);
     }
     if (!workspaceWritableRef.current)
-      throw new Error("工作区读取失败，自动保存已暂停以保留原文件。");
+      throw new Error(i18n.t("notices.workspaceReadFailed"));
     const write = workspaceWritesRef.current
       .catch(() => {})
       .then(async () => {
@@ -240,7 +245,7 @@ export function useWorkspace() {
     try {
       await write;
     } catch (error) {
-      if (mountedRef.current) setWorkspaceSaveError(errorMessage(error));
+      if (mountedRef.current) setWorkspaceSaveError(errorText(error));
       throw error;
     }
   }, [getSnapshot, setExportGuard]);
@@ -293,13 +298,10 @@ export function useWorkspace() {
         setBatchState(saved.batch);
         historyRef.current = saved.history;
         setHistory(saved.history);
-        if (
-          saved.clips.some((clip) => clip.error === "上次导出未完成，请重试。")
-        )
+        if (saved.clips.some((clip) => clip.error === CLIP_ERROR_INTERRUPTED))
           setNotice({
             kind: "info",
-            message:
-              "已恢复工作区。上次未完成的项目需要重新导出，不会自动续跑。",
+            message: i18n.t("notices.workspaceRestored"),
           });
       }
       workspaceWritableRef.current = true;
@@ -314,7 +316,7 @@ export function useWorkspace() {
       if (!workspaceWritableRef.current) await restoreSavedWorkspace(true);
       await flushWorkspace();
     } catch (error) {
-      setWorkspaceSaveError(errorMessage(error));
+      setWorkspaceSaveError(errorText(error));
     }
   }, [flushWorkspace, restoreSavedWorkspace]);
 
@@ -332,7 +334,7 @@ export function useWorkspace() {
 
   const requireDesktop = useCallback(() => {
     if (desktopAvailable()) return true;
-    setNotice({ kind: "info", message: desktopMessage });
+    setNotice({ kind: "info", message: desktopMessage() });
     return false;
   }, []);
 
@@ -388,7 +390,7 @@ export function useWorkspace() {
             changeClips((current) =>
               current.map((item) =>
                 item.id === clip.id
-                  ? { ...item, metadataError: errorMessage(error) }
+                  ? { ...item, metadataError: errorText(error) }
                   : item
               )
             );
@@ -453,19 +455,25 @@ export function useWorkspace() {
       } else {
         setNotice({
           kind: "error",
-          message: `读取设置失败：${errorMessage(results[0].reason)}`,
+          message: i18n.t("notices.settingsReadFailed", {
+            message: errorMessage(results[0].reason),
+          }),
         });
       }
       if (results[1].status === "fulfilled") replaceLuts(results[1].value);
       else
         setNotice({
           kind: "error",
-          message: `读取 LUT 库失败：${errorMessage(results[1].reason)}`,
+          message: i18n.t("notices.lutLibraryReadFailed", {
+            message: errorMessage(results[1].reason),
+          }),
         });
       if (results[2].status === "rejected") {
         workspaceLoadedRef.current = true;
         setWorkspaceSaveError(
-          `读取工作区失败，自动保存已暂停：${errorMessage(results[2].reason)}`
+          i18n.t("notices.workspaceReadFailedPause", {
+            message: errorMessage(results[2].reason),
+          })
         );
       }
       loadingRef.current = false;
@@ -576,15 +584,25 @@ export function useWorkspace() {
                 : "success",
             message:
               progress.failed_items > 0
-                ? `导出结束：${progress.completed_items} 个完成，${progress.failed_items} 个失败。可以重试失败项目。`
+                ? i18n.t("notices.exportEnded", {
+                    completed: progress.completed_items,
+                    failed: progress.failed_items,
+                  })
                 : progress.cancelled_items > 0
-                ? `已取消导出，${progress.completed_items} 个文件已完成。`
-                : `${progress.completed_items} 个文件导出完成。`,
+                ? i18n.t("notices.exportCancelledDone", {
+                    completed: progress.completed_items,
+                  })
+                : i18n.t("notices.exportAllDone", {
+                    completed: progress.completed_items,
+                  }),
           });
           return;
         }
         if (recovered)
-          setNotice({ kind: "info", message: "已重新连接导出队列。" });
+          setNotice({
+            kind: "info",
+            message: i18n.t("notices.queueReconnected"),
+          });
       } catch (error) {
         if (!active) return;
         failures += 1;
@@ -596,7 +614,7 @@ export function useWorkspace() {
                 ? {
                     ...clip,
                     status: "failed",
-                    error: "后台队列已失效，请重新导出。",
+                    error: CLIP_ERROR_QUEUE_LOST,
                   }
                 : clip
             )
@@ -610,13 +628,13 @@ export function useWorkspace() {
           setBatch((current) =>
             current ? { ...current, status: "failed" } : current
           );
-          setNotice({ kind: "error", message: "后台队列已失效，请重新导出。" });
+          setNotice({ kind: "error", message: i18n.t("notices.queueLost") });
           return;
         }
         if (failures === 3)
           setNotice({
             kind: "error",
-            message: `暂时无法读取导出进度，正在重新连接。后台任务可能仍在运行。${message}`,
+            message: i18n.t("notices.progressReadFailed", { message }),
           });
       }
       if (active)
@@ -674,8 +692,11 @@ export function useWorkspace() {
               setSettingsError(null);
               if (recovered)
                 setNotice((current) =>
-                  current?.message.startsWith("设置保存失败")
-                    ? { kind: "success", message: "设置已重新保存。" }
+                  current?.tag === "settings-save"
+                    ? {
+                        kind: "success",
+                        message: i18n.t("notices.settingsResaved"),
+                      }
                     : current
                 );
             }
@@ -692,7 +713,8 @@ export function useWorkspace() {
               setSettingsError(message);
               setNotice({
                 kind: "error",
-                message: `设置保存失败，已恢复已保存设置：${message}。可以重试未保存的修改。`,
+                tag: "settings-save",
+                message: i18n.t("notices.settingsSaveFailed", { message }),
               });
             }
           }
@@ -730,9 +752,7 @@ export function useWorkspace() {
     failedSettingsRef.current = null;
     settingsErrorRef.current = null;
     setSettingsError(null);
-    setNotice((current) =>
-      current?.message.startsWith("设置保存失败") ? null : current
-    );
+    setNotice((current) => (current?.tag === "settings-save" ? null : current));
   }, [isSavingSettings]);
 
   const beginImport = useCallback(() => {
@@ -760,7 +780,7 @@ export function useWorkspace() {
     importCancelledRef.current = true;
     setNotice({
       kind: "info",
-      message: "已停止后续导入，正在读取的素材会保留。",
+      message: i18n.t("notices.importStopped"),
     });
   }, []);
 
@@ -831,11 +851,17 @@ export function useWorkspace() {
         const picked =
           paths ??
           (await open({
-            title: mediaModeRef.current === "photo" ? "导入照片" : "导入视频",
+            title:
+              mediaModeRef.current === "photo"
+                ? i18n.t("notices.importPhotosTitle")
+                : i18n.t("notices.importVideosTitle"),
             multiple: true,
             filters: [
               {
-                name: mediaModeRef.current === "photo" ? "照片" : "视频",
+                name:
+                  mediaModeRef.current === "photo"
+                    ? i18n.t("notices.photosFilter")
+                    : i18n.t("notices.videosFilter"),
                 extensions:
                   mediaModeRef.current === "photo"
                     ? PHOTO_EXTENSIONS
@@ -899,20 +925,34 @@ export function useWorkspace() {
         if (exportingRef.current) return;
         setNotice({
           kind: issues.length ? "error" : "success",
-          message: `${
-            importCancelledRef.current ? "导入已停止，保留 " : "已导入 "
-          }${videoCount} 个${
-            mediaModeRef.current === "photo" ? "照片" : "视频"
-          }${lutCount ? `、${lutCount} 个 LUT` : ""}${
-            issues.length
-              ? `；${issues.length} 个文件无法导入：${issues[0]}`
-              : "。重复素材已自动跳过。"
-          }`,
+          message: i18n.t(
+            importCancelledRef.current
+              ? "notices.importSummaryStopped"
+              : "notices.importSummary",
+            {
+              imported: videoCount,
+              media:
+                mediaModeRef.current === "photo"
+                  ? i18n.t("notices.photosFilter")
+                  : i18n.t("notices.videosFilter"),
+              lutTail: lutCount
+                ? i18n.t("notices.importSummaryLut", { count: lutCount })
+                : "",
+              issueTail: issues.length
+                ? i18n.t("notices.importSummaryIssues", {
+                    count: issues.length,
+                    first: issues[0],
+                  })
+                : i18n.t("notices.importSummaryDedup"),
+            }
+          ),
         });
       } catch (error) {
         setNotice({
           kind: "error",
-          message: `导入失败：${errorMessage(error)}`,
+          message: i18n.t("notices.importFailed", {
+            message: errorMessage(error),
+          }),
         });
       } finally {
         endImport();
@@ -927,8 +967,8 @@ export function useWorkspace() {
       const directory = await open({
         title:
           mediaModeRef.current === "photo"
-            ? "导入照片文件夹"
-            : "导入视频文件夹",
+            ? i18n.t("notices.importPhotosFolder")
+            : i18n.t("notices.importVideosFolder"),
         directory: true,
         multiple: false,
       });
@@ -952,15 +992,21 @@ export function useWorkspace() {
       setNotice({
         kind: count ? "success" : "info",
         message: count
-          ? `已从文件夹导入 ${count} 个${
-              mediaModeRef.current === "photo" ? "照片" : "视频"
-            }。`
-          : "文件夹中没有新的当前类型素材。",
+          ? i18n.t("notices.folderImported", {
+              count,
+              media:
+                mediaModeRef.current === "photo"
+                  ? i18n.t("notices.photosFilter")
+                  : i18n.t("notices.videosFilter"),
+            })
+          : i18n.t("notices.folderNoNew"),
       });
     } catch (error) {
       setNotice({
         kind: "error",
-        message: `扫描文件夹失败：${errorMessage(error)}`,
+        message: i18n.t("notices.scanFolderFailed", {
+          message: errorMessage(error),
+        }),
       });
     } finally {
       endImport();
@@ -974,7 +1020,7 @@ export function useWorkspace() {
         const picked =
           paths ??
           (await open({
-            title: "导入 LUT",
+            title: i18n.t("notices.importLutsTitle"),
             multiple: true,
             filters: [{ name: "LUT", extensions: LUT_EXTENSIONS }],
           }));
@@ -982,12 +1028,14 @@ export function useWorkspace() {
         const count = await addLuts(Array.isArray(picked) ? picked : [picked]);
         setNotice({
           kind: "success",
-          message: `已导入 ${count} 个 LUT。选择素材后即可应用风格。`,
+          message: i18n.t("notices.lutsImportedApply", { count }),
         });
       } catch (error) {
         setNotice({
           kind: "error",
-          message: `导入 LUT 失败：${errorMessage(error)}`,
+          message: i18n.t("notices.importLutsFailed", {
+            message: errorMessage(error),
+          }),
         });
       } finally {
         endImport();
@@ -1000,7 +1048,7 @@ export function useWorkspace() {
     if (!beginImport()) return;
     try {
       const directory = await open({
-        title: "导入 LUT 文件夹",
+        title: i18n.t("notices.importLutsFolder"),
         directory: true,
         multiple: false,
       });
@@ -1012,12 +1060,14 @@ export function useWorkspace() {
       replaceLuts(mergeLuts(lutsRef.current, items));
       setNotice({
         kind: "success",
-        message: `已导入 ${items.length} 个 LUT。`,
+        message: i18n.t("notices.lutsImported", { count: items.length }),
       });
     } catch (error) {
       setNotice({
         kind: "error",
-        message: `导入 LUT 文件夹失败：${errorMessage(error)}`,
+        message: i18n.t("notices.importLutsFolderFailed", {
+          message: errorMessage(error),
+        }),
       });
     } finally {
       endImport();
@@ -1044,7 +1094,9 @@ export function useWorkspace() {
       } catch (error) {
         setNotice({
           kind: "error",
-          message: `移除 LUT 失败：${errorMessage(error)}`,
+          message: i18n.t("notices.removeLutFailed", {
+            message: errorMessage(error),
+          }),
         });
       } finally {
         endImport();
@@ -1245,7 +1297,7 @@ export function useWorkspace() {
       }
       setNotice({
         kind: "success",
-        message: `已将当前风格和强度应用到 ${chosen.size} 个素材。`,
+        message: i18n.t("notices.lookApplied", { count: chosen.size }),
       });
     },
     [changeClips, rememberUndo]
@@ -1302,7 +1354,7 @@ export function useWorkspace() {
       if (batchIdRef.current === batchId)
         setNotice({
           kind: "info",
-          message: "正在停止导出，等待运行中的任务结束…",
+          message: i18n.t("notices.stoppingExport"),
         });
       return true;
     } catch (error) {
@@ -1316,7 +1368,9 @@ export function useWorkspace() {
       );
       setNotice({
         kind: "error",
-        message: `取消请求失败，请重试：${errorMessage(error)}`,
+        message: i18n.t("notices.cancelFailed", {
+          message: errorMessage(error),
+        }),
       });
       return false;
     }
@@ -1337,7 +1391,7 @@ export function useWorkspace() {
       if (!queue.length) {
         setNotice({
           kind: "info",
-          message: "没有待导出的素材。请导入或修改风格后重新导出。",
+          message: i18n.t("notices.nothingToExport"),
         });
         return;
       }
@@ -1354,7 +1408,7 @@ export function useWorkspace() {
       if (invalid) {
         setNotice({
           kind: "error",
-          message: `“${invalid.name}”的 LUT 不可用，请重新选择风格。`,
+          message: i18n.t("notices.lutUnavailable", { name: invalid.name }),
         });
         return;
       }
@@ -1401,7 +1455,11 @@ export function useWorkspace() {
         await setExportGuard(true);
         await settingsWritesRef.current;
         if (settingsErrorRef.current)
-          throw new Error(`请先解决设置保存错误：${settingsErrorRef.current}`);
+          throw new Error(
+            i18n.t("notices.fixSettingsFirst", {
+              message: settingsErrorRef.current,
+            })
+          );
         const result = await invoke<BatchResponse>(
           queue[0].kind === "photo"
             ? "start_photo_batch_processing"
@@ -1439,7 +1497,9 @@ export function useWorkspace() {
             );
             setNotice({
               kind: "error",
-              message: `取消请求失败，请重试：${errorMessage(error)}`,
+              message: i18n.t("notices.cancelFailed", {
+                message: errorMessage(error),
+              }),
             });
           }
         }
@@ -1466,7 +1526,10 @@ export function useWorkspace() {
               }
             : current
         );
-        setNotice({ kind: "error", message: `无法开始导出：${message}` });
+        setNotice({
+          kind: "error",
+          message: i18n.t("notices.exportStartFailed", { message }),
+        });
       }
     },
     [changeClips, requireDesktop, setBatch, setExportGuard]
@@ -1493,7 +1556,7 @@ export function useWorkspace() {
     if (!requireDesktop() || exportingRef.current || loadingRef.current) return;
     try {
       const directory = await open({
-        title: "选择导出位置",
+        title: i18n.t("notices.pickOutputTitle"),
         directory: true,
         multiple: false,
       });
@@ -1508,7 +1571,7 @@ export function useWorkspace() {
     if (!requireDesktop() || exportingRef.current || loadingRef.current) return;
     try {
       const path = await open({
-        title: "选择 FFmpeg 可执行文件",
+        title: i18n.t("notices.pickFfmpegTitle"),
         multiple: false,
       });
       if (path && !Array.isArray(path))

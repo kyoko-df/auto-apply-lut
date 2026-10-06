@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { CSSProperties } from "react";
 import {
   ArrowDownToLine,
@@ -32,6 +33,7 @@ export default function ExportInspector({
   onExportSelected,
   onExportScopeChange,
 }: ExportInspectorProps) {
+  const { t } = useTranslation();
   const [advanced, setAdvanced] = useState(false);
   const [exportScope, setExportScope] = useState<"pending" | "selected">(
     "pending"
@@ -55,31 +57,31 @@ export default function ExportInspector({
   const selectLut = (path: string | null) => {
     if (active) w.setClipLook(active.id, { lutPath: path });
     else
-      w.setNotice({ kind: "info", message: "先导入视频，再为素材选择 LUT。" });
+      w.setNotice({ kind: "info", message: t("inspector.noticeImportFirst") });
   };
 
   return (
-    <aside className="inspector" aria-label="调色与导出设置">
+    <aside className="inspector" aria-label={t("inspector.aria")}>
       <div className="inspector-title">
         <SlidersHorizontal size={15} />
-        <strong>风格与输出</strong>
+        <strong>{t("inspector.title")}</strong>
         <span>INSPECTOR</span>
       </div>
       <div className="inspector-scroll">
         <section className="inspector-section look-section">
           <div className="section-heading">
-            <h3>调色风格</h3>
+            <h3>{t("inspector.lookSection")}</h3>
             <span className="section-number">01</span>
           </div>
           <div className="field-label">
-            <label htmlFor="lut-select">当前 LUT</label>
+            <label htmlFor="lut-select">{t("inspector.currentLut")}</label>
             <button
               className="text-button"
               disabled={locked}
               onClick={onImportLuts}
             >
               <Plus size={12} />
-              导入
+              {t("inspector.import")}
             </button>
           </div>
           <div className="select-wrap">
@@ -90,10 +92,10 @@ export default function ExportInspector({
               value={active?.lutPath || ""}
               onChange={(e) => selectLut(e.target.value || null)}
             >
-              <option value="">原始色彩 · 不应用 LUT</option>
+              <option value="">{t("inspector.originalColorOption")}</option>
               {active?.lutPath && !activeLut && (
                 <option value={active.lutPath}>
-                  {fileName(active.lutPath)} · 工作区 LUT
+                  {t("inspector.workspaceLut", { name: fileName(active.lutPath) })}
                 </option>
               )}
               {w.luts
@@ -112,12 +114,12 @@ export default function ExportInspector({
               {activeLut
                 ? `${activeLut.format} · ${activeLut.category}`
                 : active?.lutPath
-                ? "来自恢复的工作区，导出前将校验原文件"
-                : "选择适合素材色彩空间的 LUT"}
+                ? t("inspector.restoredLut")
+                : t("inspector.lutHint")}
             </span>
           </div>
           <label className="field-label intensity-label" htmlFor="intensity">
-            LUT 强度
+            {t("inspector.strength")}
             <span className="value-badge">
               {active?.intensity ?? 100}
               <small>%</small>
@@ -145,15 +147,15 @@ export default function ExportInspector({
             }
           />
           <div className="range-labels">
-            <span>原片</span>
-            <span>完整风格</span>
+            <span>{t("inspector.originalEnd")}</span>
+            <span>{t("inspector.fullLook")}</span>
           </div>
           {selected.length > 1 && (
             <>
               <p className="field-hint selection-hint">
-                已选中 {selected.length} 个素材
-                {mixedLook ? "，风格或强度存在不同值。" : "。"}
-                当前控件编辑正在预览的素材。
+                {t("inspector.selectedCount", { count: selected.length })}
+                {mixedLook ? t("inspector.mixedValues") : "。"}
+                {t("inspector.editingPreview")}
               </p>
               <button
                 className="button secondary full-width apply-selected"
@@ -161,7 +163,7 @@ export default function ExportInspector({
                 onClick={() => w.applyLookToSelected()}
               >
                 <Copy size={14} />
-                应用到选中的 {selected.length} 个素材
+                {t("inspector.applySelected", { count: selected.length })}
               </button>
             </>
           )}
@@ -171,15 +173,15 @@ export default function ExportInspector({
             onClick={() => w.applyLookToAll()}
           >
             <Copy size={14} />
-            应用到全部素材
+            {t("inspector.applyAll")}
           </button>
           <p className="field-hint">
-            每个素材可单独设置风格与强度，批量修改可以撤销。
+            {t("inspector.applyHint")}
           </p>
           <label className="field preview-quality-field">
-            <span>预览精度</span>
+            <span>{t("inspector.previewQuality")}</span>
             <select
-              aria-label="预览精度"
+              aria-label={t("inspector.previewQuality")}
               value={w.settings.preview_quality}
               disabled={locked}
               onChange={(e) =>
@@ -189,24 +191,24 @@ export default function ExportInspector({
                 })
               }
             >
-              <option value="fast">快速 · 优先响应</option>
-              <option value="accurate">准确 · 完整精度调色</option>
+              <option value="fast">{t("inspector.qualityFast")}</option>
+              <option value="accurate">{t("inspector.qualityAccurate")}</option>
             </select>
           </label>
           <p className="field-hint">
-            预览为可定位的静态帧，准确模式需要更多处理时间。
+            {t("inspector.qualityHint")}
           </p>
         </section>
         <section className="inspector-section">
           <div className="section-heading">
-            <h3>导出设置</h3>
+            <h3>{t("inspector.exportSection")}</h3>
             <span className="section-number">02</span>
           </div>
           <div className="field-grid">
             <label className="field">
-              <span>封装格式</span>
+              <span>{t("inspector.format")}</span>
               <select
-                aria-label="封装格式"
+                aria-label={t("inspector.format")}
                 value={w.settings.output_format}
                 disabled={locked}
                 onChange={(e) =>
@@ -228,9 +230,9 @@ export default function ExportInspector({
               </select>
             </label>
             <label className="field">
-              <span>视频编码</span>
+              <span>{t("inspector.codec")}</span>
               <select
-                aria-label="视频编码"
+                aria-label={t("inspector.codec")}
                 value={w.settings.video_codec}
                 disabled={locked}
                 onChange={(e) =>
@@ -260,9 +262,9 @@ export default function ExportInspector({
             </label>
           </div>
           <label className="field bit-depth-field">
-            <span>输出位深</span>
+            <span>{t("inspector.bitDepth")}</span>
             <select
-              aria-label="输出位深"
+              aria-label={t("inspector.bitDepth")}
               value={w.settings.output_bit_depth}
               disabled={locked || w.settings.video_codec !== "libx265"}
               onChange={(e) =>
@@ -273,17 +275,17 @@ export default function ExportInspector({
               }
             >
               {w.settings.video_codec !== "prores_ks" && (
-                <option value="8">8-bit · 通用兼容</option>
+                <option value="8">{t("inspector.bit8")}</option>
               )}
               {w.settings.video_codec !== "libx264" && (
-                <option value="10">10-bit · 更细腻的渐变</option>
+                <option value="10">{t("inspector.bit10")}</option>
               )}
             </select>
           </label>
           <label className="field input-color-field">
-            <span>输入色彩处理</span>
+            <span>{t("inspector.inputColor")}</span>
             <select
-              aria-label="输入色彩处理"
+              aria-label={t("inspector.inputColor")}
               value={w.settings.input_color_space}
               disabled={locked}
               onChange={(e) =>
@@ -293,52 +295,50 @@ export default function ExportInspector({
                 })
               }
             >
-              <option value="auto">保持输入 · 不转换</option>
-              <option value="rec709">按 Rec.709 解读</option>
+              <option value="auto">{t("inspector.inputAuto")}</option>
+              <option value="rec709">{t("inspector.inputRec709")}</option>
               <option value="rec2020-pq">Rec.2020 PQ → Rec.709</option>
               <option value="rec2020-hlg">Rec.2020 HLG → Rec.709</option>
             </select>
           </label>
           <p className="field-hint">
-            应用于本次全部导出素材；转换发生在 LUT
-            之前。不同色彩空间的素材请分批处理。
+            {t("inspector.inputColorHint")}
           </p>
           {hdrInput && w.settings.input_color_space === "auto" && (
             <p className="field-hint color-warning" role="status">
-              当前素材为 HDR。保持输入不会自动转换为 SDR，请确认 LUT
-              与输入色彩空间匹配。
+              {t("inspector.hdrWarning")}
             </p>
           )}
           <label className="field quality-field">
-            <span>输出质量</span>
+            <span>{t("inspector.quality")}</span>
             <select
-              aria-label="输出质量"
+              aria-label={t("inspector.quality")}
               value={w.settings.quality_preset}
               disabled={locked || w.settings.video_codec === "prores_ks"}
               onChange={(e) =>
                 w.updateSettings({ quality_preset: e.target.value })
               }
             >
-              <option value="high_quality">高质量 · 细节优先</option>
-              <option value="balanced">均衡 · 质量与速度</option>
-              <option value="fast">快速 · 预览与交付</option>
+              <option value="high_quality">{t("inspector.qualityHigh")}</option>
+              <option value="balanced">{t("inspector.qualityBalanced")}</option>
+              <option value="fast">{t("inspector.qualityFastExport")}</option>
             </select>
           </label>
           {w.settings.video_codec === "prores_ks" && (
-            <p className="field-hint">ProRes 422 HQ 使用固定质量档位。</p>
+            <p className="field-hint">{t("inspector.proresFixed")}</p>
           )}
           <label className="toggle-row">
             <span>
               <Cpu size={16} />
               <span>
-                <strong>硬件加速</strong>
-                <small>不可用时自动使用 CPU</small>
+                <strong>{t("inspector.hwAccel")}</strong>
+                <small>{t("inspector.hwAccelSub")}</small>
               </span>
             </span>
             <input
               type="checkbox"
               role="switch"
-              aria-label="硬件加速"
+              aria-label={t("inspector.hwAccel")}
               checked={w.settings.hardware_acceleration}
               disabled={locked || w.settings.video_codec === "prores_ks"}
               onChange={(e) =>
@@ -353,48 +353,48 @@ export default function ExportInspector({
             aria-expanded={advanced}
             onClick={() => setAdvanced(!advanced)}
           >
-            <span>更多设置</span>
+            <span>{t("inspector.moreSettings")}</span>
             <ChevronDown size={14} className={advanced ? "rotated" : ""} />
           </button>
           {advanced && (
             <div className="advanced-fields">
               <label className="field">
-                <span>分辨率</span>
+                <span>{t("inspector.resolution")}</span>
                 <select
-                  aria-label="分辨率"
+                  aria-label={t("inspector.resolution")}
                   disabled={locked}
                   value={w.settings.resolution}
                   onChange={(e) =>
                     w.updateSettings({ resolution: e.target.value })
                   }
                 >
-                  <option value="original">与原片一致</option>
-                  <option value="1920x1080">适配 1920 × 1080</option>
-                  <option value="3840x2160">适配 3840 × 2160</option>
-                  <option value="1280x720">适配 1280 × 720</option>
+                  <option value="original">{t("inspector.resOriginal")}</option>
+                  <option value="1920x1080">{t("inspector.resFit", { res: "1920 × 1080" })}</option>
+                  <option value="3840x2160">{t("inspector.resFit", { res: "3840 × 2160" })}</option>
+                  <option value="1280x720">{t("inspector.resFit", { res: "1280 × 720" })}</option>
                 </select>
               </label>
               <label className="field">
-                <span>音频</span>
+                <span>{t("inspector.audio")}</span>
                 <select
-                  aria-label="音频"
+                  aria-label={t("inspector.audio")}
                   disabled={locked}
                   value={w.settings.audio_codec}
                   onChange={(e) =>
                     w.updateSettings({ audio_codec: e.target.value })
                   }
                 >
-                  <option value="aac">AAC · 通用兼容</option>
-                  <option value="copy">复制原始音轨</option>
+                  <option value="aac">{t("inspector.audioAac")}</option>
+                  <option value="copy">{t("inspector.audioCopy")}</option>
                   {w.settings.output_format !== "mp4" && (
-                    <option value="pcm_s16le">PCM · 无损音频</option>
+                    <option value="pcm_s16le">{t("inspector.audioPcm")}</option>
                   )}
                 </select>
               </label>
               <label className="field">
-                <span>并行任务数</span>
+                <span>{t("inspector.parallel")}</span>
                 <select
-                  aria-label="并行任务数"
+                  aria-label={t("inspector.parallel")}
                   disabled={locked}
                   value={w.settings.max_concurrent_tasks}
                   onChange={(e) =>
@@ -405,7 +405,7 @@ export default function ExportInspector({
                 >
                   {[1, 2, 3, 4].map((n) => (
                     <option key={n} value={n}>
-                      {n} 个任务{n === 2 ? " · 推荐" : ""}
+                      {t("inspector.taskCount", { count: n })}{n === 2 ? t("inspector.recommended") : ""}
                     </option>
                   ))}
                 </select>
@@ -421,34 +421,34 @@ export default function ExportInspector({
                     })
                   }
                 />
-                保留素材元数据
+                {t("inspector.keepMetadata")}
               </label>
               <p className="field-hint">
-                保持原始帧率。缩放保留画面比例，不裁切。
+                {t("inspector.moreHint")}
               </p>
             </div>
           )}
         </section>
         <section className="inspector-section output-section">
           <div className="section-heading">
-            <h3>输出位置</h3>
+            <h3>{t("inspector.outputSection")}</h3>
             <span className="section-number">03</span>
           </div>
           <button
             className="output-folder"
             disabled={locked}
             onClick={() => void w.pickOutputDirectory()}
-            title={w.settings.default_output_dir || "保存在各原视频所在文件夹"}
+            title={w.settings.default_output_dir || t("inspector.sameFolder")}
           >
             <Folder size={18} />
             <span>
               <strong>
                 {w.settings.default_output_dir
                   ? fileName(w.settings.default_output_dir)
-                  : "与原视频相同文件夹"}
+                  : t("inspector.sameAsSource")}
               </strong>
               <small>
-                {w.settings.default_output_dir || "自动添加 _lut_applied 后缀"}
+                {w.settings.default_output_dir || t("inspector.autoSuffix")}
               </small>
             </span>
             <ChevronDown size={13} />
@@ -459,12 +459,12 @@ export default function ExportInspector({
               disabled={locked}
               onClick={() => w.updateSettings({ default_output_dir: "" })}
             >
-              重置为原视频文件夹
+              {t("inspector.resetOutput")}
             </button>
           )}
           <p className="safe-output">
             <CheckCheck size={13} />
-            自动避免重名，保留原始素材
+            {t("inspector.outputHint")}
           </p>
         </section>
       </div>
@@ -472,8 +472,8 @@ export default function ExportInspector({
         <div>
           <span>
             {w.isExporting
-              ? "批量处理进行中"
-              : `${exportCount} 个素材${selectedExport ? "已选中" : "待导出"}`}
+              ? t("inspector.exportBusy")
+              : `${t("inspector.exportCount", { count: exportCount })}${selectedExport ? t("inspector.exportCountSelected") : t("inspector.exportCountPending")}`}
           </span>
           <span>
             {w.settings.output_format.toUpperCase()}{" "}
@@ -487,9 +487,9 @@ export default function ExportInspector({
         </div>
         {!w.isExporting && (selected.length > 0 || selectedExport) && (
           <label className="field export-scope-field">
-            <span>导出范围</span>
+            <span>{t("inspector.exportScope")}</span>
             <select
-              aria-label="导出范围"
+              aria-label={t("inspector.exportScope")}
               value={exportScope}
               disabled={locked}
               onChange={(e) => {
@@ -498,9 +498,9 @@ export default function ExportInspector({
                 onExportScopeChange?.(scope);
               }}
             >
-              <option value="pending">全部待导出 · {exportable} 个</option>
+              <option value="pending">{t("inspector.scopeAll", { count: exportable })}</option>
               <option value="selected">
-                仅选中素材 · {selected.length} 个
+                {t("inspector.scopeSelected", { count: selected.length })}
               </option>
             </select>
           </label>
@@ -513,8 +513,8 @@ export default function ExportInspector({
           >
             <Square size={13} />
             {w.batch?.status.toLowerCase() === "cancelling"
-              ? "正在停止…"
-              : "停止导出"}
+              ? t("inspector.stopping")
+              : t("inspector.stopExport")}
           </button>
         ) : (
           <button
@@ -533,12 +533,12 @@ export default function ExportInspector({
             }
           >
             <ArrowDownToLine size={17} />
-            {selectedExport ? "导出选中素材" : "批量导出"}
+            {selectedExport ? t("inspector.exportSelected") : t("inspector.exportAll")}
             <ArrowRight size={16} />
           </button>
         )}
         <span className="export-hint">
-          {w.isExporting ? "已完成的文件会保留" : "⌘ / Ctrl + Enter 开始导出"}
+          {w.isExporting ? t("inspector.keepDone") : t("inspector.shortcutHint")}
         </span>
       </div>
     </aside>

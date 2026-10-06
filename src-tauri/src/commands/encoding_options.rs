@@ -1,4 +1,5 @@
 use crate::core::ffmpeg::{EncodingSettings, Resolution};
+use crate::types::ui_err;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -66,7 +67,10 @@ fn parse_resolution(value: Option<&str>) -> Result<Option<Resolution>, String> {
         || width % 2 != 0
         || height % 2 != 0
     {
-        return Err("Resolution must use even dimensions between 2 and 16384".to_string());
+        return Err(ui_err(
+            "encoding.bad_resolution",
+            "Resolution must use even dimensions between 2 and 16384",
+        ));
     }
 
     Ok(Some(Resolution { width, height }))
@@ -134,10 +138,16 @@ pub(crate) fn build_encoding_settings(
 
     let depth = options.output_bit_depth.as_deref().unwrap_or("8");
     if !matches!(depth, "8" | "10") {
-        return Err("输出位深仅支持 8 或 10 bit".into());
+        return Err(ui_err(
+            "encoding.bad_bit_depth",
+            "输出位深仅支持 8 或 10 bit",
+        ));
     }
     if depth == "10" && !matches!(settings.video_codec.as_str(), "libx265" | "prores_ks") {
-        return Err("10-bit 输出请选择 HEVC 或 ProRes".into());
+        return Err(ui_err(
+            "encoding.bad_10bit_codec",
+            "10-bit 输出请选择 HEVC 或 ProRes",
+        ));
     }
     extra_params.insert("__bit_depth__".into(), depth.into());
     let input_space = options.input_color_space.as_deref().unwrap_or("auto");
@@ -154,7 +164,10 @@ pub(crate) fn build_encoding_settings(
         .fps
         .is_some_and(|fps| !fps.is_finite() || fps <= 0.0 || fps > 240.0)
     {
-        return Err("Frame rate must be between 0 and 240".to_string());
+        return Err(ui_err(
+            "encoding.bad_frame_rate",
+            "Frame rate must be between 0 and 240",
+        ));
     }
     settings.fps = options.fps;
     settings.bitrate =
@@ -175,13 +188,19 @@ pub(crate) fn build_encoding_settings(
         settings.video_codec.as_str(),
         "libx264" | "libx265" | "libvpx-vp9" | "prores_ks"
     ) {
-        return Err("Choose H.264, HEVC, VP9 or ProRes for LUT processing".to_string());
+        return Err(ui_err(
+            "encoding.bad_video_codec",
+            "Choose H.264, HEVC, VP9 or ProRes for LUT processing",
+        ));
     }
     if !matches!(
         settings.audio_codec.as_str(),
         "aac" | "copy" | "libopus" | "pcm_s16le" | "pcm_s24le"
     ) {
-        return Err("Unsupported audio encoder".to_string());
+        return Err(ui_err(
+            "encoding.bad_audio_codec",
+            "Unsupported audio encoder",
+        ));
     }
     let format = options
         .output_format
@@ -189,16 +208,25 @@ pub(crate) fn build_encoding_settings(
         .unwrap_or("mp4")
         .trim_start_matches('.');
     if !matches!(format, "mp4" | "mov" | "mkv" | "webm") {
-        return Err("Output format must be MP4, MOV, MKV or WebM".to_string());
+        return Err(ui_err(
+            "encoding.bad_format",
+            "Output format must be MP4, MOV, MKV or WebM",
+        ));
     }
     if format == "webm"
         && (settings.video_codec != "libvpx-vp9"
             || !matches!(settings.audio_codec.as_str(), "libopus" | "copy"))
     {
-        return Err("WebM requires VP9 video and Opus audio".to_string());
+        return Err(ui_err(
+            "encoding.bad_webm",
+            "WebM requires VP9 video and Opus audio",
+        ));
     }
     if settings.video_codec == "prores_ks" && !matches!(format, "mov" | "mkv") {
-        return Err("ProRes requires a MOV or MKV output".to_string());
+        return Err(ui_err(
+            "encoding.bad_prores",
+            "ProRes requires a MOV or MKV output",
+        ));
     }
     if matches!(format, "mp4" | "mov") {
         extra_params.insert("-movflags".to_string(), "+faststart".to_string());
@@ -209,13 +237,19 @@ pub(crate) fn build_encoding_settings(
             .parse::<f64>()
             .map_or(true, |n| !n.is_finite() || n <= 0.0)
         {
-            return Err("Bitrate must be positive, for example 12M or 8000k".to_string());
+            return Err(ui_err(
+                "encoding.bad_bitrate",
+                "Bitrate must be positive, for example 12M or 8000k",
+            ));
         }
     }
     if options.two_pass_encoding
         && (settings.bitrate.is_none() || settings.video_codec != "libx264")
     {
-        return Err("Two-pass encoding requires H.264 and an explicit bitrate".to_string());
+        return Err(ui_err(
+            "encoding.bad_two_pass",
+            "Two-pass encoding requires H.264 and an explicit bitrate",
+        ));
     }
 
     settings.extra_params = extra_params;

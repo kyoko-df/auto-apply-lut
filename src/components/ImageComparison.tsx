@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 export type ComparisonMode = "original" | "split" | "graded";
 
 export default function ImageComparison({
@@ -7,8 +8,8 @@ export default function ImageComparison({
   mode,
   split,
   onSplit,
-  originalLabel = "原图",
-  gradedLabel = "LUT 调色",
+  originalLabel,
+  gradedLabel,
   pixelSize,
   imageSize,
   originalAlt,
@@ -26,6 +27,11 @@ export default function ImageComparison({
   originalAlt?: string;
   gradedAlt?: string;
 }) {
+  const { t } = useTranslation();
+  const labels = {
+    original: originalLabel ?? t("comparison.original"),
+    graded: gradedLabel ?? t("comparison.graded"),
+  };
   const ref = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState({ width: 0, height: 0 });
   const [loaded, setLoaded] = useState({ source: "", width: 0, height: 0 });
@@ -80,8 +86,8 @@ export default function ImageComparison({
         src={source}
         alt={
           mode === "original"
-            ? originalAlt ?? originalLabel
-            : gradedAlt ?? gradedLabel
+            ? originalAlt ?? labels.original
+            : gradedAlt ?? labels.graded
         }
         draggable={false}
         onLoad={(e) =>
@@ -97,12 +103,12 @@ export default function ImageComparison({
           <img
             className="original-overlay"
             src={original}
-            alt={originalAlt ?? originalLabel}
+            alt={originalAlt ?? labels.original}
             draggable={false}
             style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
           />
-          <span className="frame-label before">{originalLabel}</span>
-          <span className="frame-label after">{gradedLabel}</span>
+          <span className="frame-label before">{labels.original}</span>
+          <span className="frame-label after">{labels.graded}</span>
           <div className="split-line" style={{ left: `${split}%` }}>
             <span>↔</span>
           </div>
@@ -112,7 +118,7 @@ export default function ImageComparison({
             min="0"
             max="100"
             value={split}
-            aria-label="前后对比位置"
+            aria-label={t("comparison.ariaSplit")}
             onChange={(e) => onSplit(Number(e.target.value))}
           />
         </>

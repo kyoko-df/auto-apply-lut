@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import i18n from "../i18n";
 import {
   appendClips,
   buildBatchRequest,
   DEFAULT_SETTINGS,
+  errorMessage,
   normalizeSettings,
   reconcileBatch,
   updateLook,
@@ -237,5 +239,57 @@ describe("workspace model", () => {
       normalizeSettings({ video_codec: "prores_ks", output_bit_depth: "8" })
         .output_bit_depth,
     ).toBe("10");
+  });
+});
+
+describe("errorMessage protocol", () => {
+  const encode = (code: string, params: object | "", message: string) =>
+    `\u001f${code}\u001f${params === "" ? "" : JSON.stringify(params)}\u001f${message}`;
+
+  it("passes through plain legacy error strings", () => {
+    expect(errorMessage("网络超时")).toBe("网络超时");
+    expect(errorMessage(new Error("boom"))).toBe("boom");
+  });
+
+  it("translates structured errors in the active language", () => {
+    const encoded = encode("preview.no_video", "", "请先选择视频");
+    expect(errorMessage(encoded)).toBe("请先选择视频");
+    const encodedP = encode(
+      "fs.read_file",
+      { path: "/a/b.mov", error: "io" },
+      "无法读取 /a/b.mov：io",
+    );
+    expect(errorMessage(encodedP)).toBe("无法读取 /a/b.mov：io");
+  });
+
+  it("renders the same code in English and Japanese", async () => {
+    const encoded = encode("preview.cancelled", "", "预览已取消");
+    await i18n.changeLanguage("en");
+    expect(errorMessage(encoded)).toBe("Preview cancelled");
+    await i18n.changeLanguage("ja");
+    expect(errorMessage(encoded)).toBe("プレビューがキャンセルされました");
+    await i18n.changeLanguage("zh");
+  });
+
+  it("falls back to the embedded message for unknown codes", () => {
+    const encoded = encode("future.new_code", "", "新错误");
+    expect(errorMessage(encoded)).toBe("新错误");
+  });
+
+  it("interpolates params in English", async () => {
+    const encoded = encode(
+      "fs.read_file",
+      { path: "/x.mov", error: "denied" },
+      "无法读取 /x.mov：denied",
+    );
+    await i18n.changeLanguage("en");
+    expect(errorMessage(encoded)).toBe("Could not read /x.mov: denied");
+    await i18n.changeLanguage("zh");
+  });
+
+  it("survives malformed markers and bad params json", () => {
+    expect(errorMessage("\u001fbroken")).toBe("\u001fbroken");
+    const bad = "\u001fpreview.cancelled\u001f{oops\u001f预览已取消";
+    expect(errorMessage(bad)).toBe("预览已取消");
   });
 });

@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import WorkspaceStatus from "./WorkspaceStatus";
 import type { useWorkspace } from "../workspace/useWorkspace";
+import i18n from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -48,7 +49,7 @@ beforeEach(() => {
   mockedInvoke.mockImplementation(async (command) =>
     command === "startup_status"
       ? { issues: [], temporary_storage: false, backup_paths: [] }
-      : undefined,
+      : undefined
   );
   mockedListen.mockImplementation(async (event, handler) => {
     listeners.set(event, handler as () => void);
@@ -65,6 +66,31 @@ beforeEach(() => {
 });
 
 describe("workspace exit protection", () => {
+  it("decodes an exit error and updates its language without retrying the exit", async () => {
+    await i18n.changeLanguage("en");
+    mockedInvoke.mockImplementation(async (command) => {
+      if (command === "startup_status")
+        return { issues: [], temporary_storage: false, backup_paths: [] };
+      if (command === "request_app_exit")
+        throw "\u001fapp.exit_exporting\u001f\u001f请先取消并等待导出结束，再退出应用";
+    });
+    render(<WorkspaceStatus workspace={workspace()} />);
+    await emit("workspace-close-requested");
+    expect(
+      await screen.findByText(
+        "Cancel and wait for exports to finish before quitting."
+      )
+    ).toBeVisible();
+    await act(async () => {
+      await i18n.changeLanguage("ja");
+    });
+    expect(screen.getByText(i18n.t("errors.app.exit_exporting"))).toBeVisible();
+    expect(
+      mockedInvoke.mock.calls.filter(
+        ([command]) => command === "request_app_exit"
+      )
+    ).toHaveLength(1);
+  });
   it("requires an explicit choice while encoding and allows continuing without stopping the task", async () => {
     const w = workspace({ isExporting: true });
     render(<WorkspaceStatus workspace={w} />);
@@ -109,11 +135,11 @@ describe("workspace exit protection", () => {
     const w = workspace({ flushWorkspace: flush });
     render(<WorkspaceStatus workspace={w} />);
     await emit("workspace-close-requested");
-    await screen.findByText("Error: disk full");
+    await screen.findByText("disk full");
     expect(mockedInvoke).not.toHaveBeenCalledWith("request_app_exit");
     fireEvent.click(screen.getByRole("button", { name: "重试保存并退出" }));
     await waitFor(() =>
-      expect(mockedInvoke).toHaveBeenCalledWith("request_app_exit"),
+      expect(mockedInvoke).toHaveBeenCalledWith("request_app_exit")
     );
     expect(flush).toHaveBeenCalledTimes(2);
   });
@@ -128,7 +154,7 @@ describe("workspace exit protection", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消导出并退出" }));
     await screen.findByText("取消请求未成功，请重试。后台任务仍在运行。");
     expect(
-      screen.getByRole("button", { name: "取消导出并退出" }),
+      screen.getByRole("button", { name: "取消导出并退出" })
     ).toBeEnabled();
     expect(w.flushWorkspace).not.toHaveBeenCalled();
     expect(mockedInvoke).not.toHaveBeenCalledWith("request_app_exit");
@@ -141,11 +167,11 @@ describe("workspace exit protection", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消导出并退出" }));
     await waitFor(() => expect(w.cancelExport).toHaveBeenCalledOnce());
     rerender(
-      <WorkspaceStatus workspace={{ ...w, cancelError: "IPC unavailable" }} />,
+      <WorkspaceStatus workspace={{ ...w, cancelError: "IPC unavailable" }} />
     );
     await screen.findByText("取消导出失败：IPC unavailable");
     expect(
-      screen.getByRole("button", { name: "取消导出并退出" }),
+      screen.getByRole("button", { name: "取消导出并退出" })
     ).toBeEnabled();
     expect(w.flushWorkspace).not.toHaveBeenCalled();
   });
@@ -185,7 +211,7 @@ describe("workspace exit protection", () => {
     });
     render(<WorkspaceStatus workspace={w} />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "备份并重建存储" }),
+      await screen.findByRole("button", { name: "备份并重建存储" })
     );
     await waitFor(() => expect(order).toEqual(["save", "recover", "reload"]));
     expect(w.cancelImport).toHaveBeenCalledOnce();
@@ -193,7 +219,7 @@ describe("workspace exit protection", () => {
       expect.objectContaining({
         kind: "success",
         message: expect.stringContaining("重新导入"),
-      }),
+      })
     );
   });
 

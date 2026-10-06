@@ -388,7 +388,7 @@ async fn cancellation_during_native_stage_waits_for_cleanup_and_publish_cannot_f
             ),
             control,
             Arc::new(move |stage| {
-                if stage == "写入并验证照片" {
+                if stage == PhotoStage::Write.as_str() {
                     cancel.cancel();
                 }
             }),

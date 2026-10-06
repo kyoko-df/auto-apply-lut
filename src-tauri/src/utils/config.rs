@@ -73,7 +73,7 @@ impl Default for AppConfig {
             recent_lut_files: Vec::new(),
             recent_video_files: Vec::new(),
             theme: "dark".to_string(),
-            language: "zh-CN".to_string(),
+            language: "auto".to_string(),
             output_format: "mp4".to_string(),
             video_codec: "libx264".to_string(),
             audio_codec: "aac".to_string(),

@@ -1,4 +1,5 @@
 use crate::core::ffmpeg::utils::FFmpegUtils;
+use crate::types::{ui_err, ui_err_p};
 use crate::utils::{config::ConfigManager, logger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -86,21 +87,24 @@ fn default_preview_quality() -> String {
 fn validate_color_settings(settings: &AppSettings) -> Result<(), String> {
     settings.photo_options.output.validate(false)?;
     if !matches!(settings.output_bit_depth.as_str(), "8" | "10") {
-        return Err("输出位深必须为 8 或 10".into());
+        return Err(ui_err("settings.bad_bit_depth", "输出位深必须为 8 或 10"));
     }
     if settings.output_bit_depth == "10"
         && !matches!(settings.video_codec.as_str(), "libx265" | "prores_ks")
     {
-        return Err("10-bit 输出仅支持 HEVC 和 ProRes HQ".into());
+        return Err(ui_err(
+            "settings.bad_10bit_codec",
+            "10-bit 输出仅支持 HEVC 和 ProRes HQ",
+        ));
     }
     if !matches!(
         settings.input_color_space.as_str(),
         "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg"
     ) {
-        return Err("不支持的输入色彩空间".into());
+        return Err(ui_err("settings.bad_input_space", "不支持的输入色彩空间"));
     }
     if !matches!(settings.preview_quality.as_str(), "fast" | "accurate") {
-        return Err("不支持的预览质量".into());
+        return Err(ui_err("settings.bad_preview_quality", "不支持的预览质量"));
     }
     Ok(())
 }
@@ -300,24 +304,31 @@ fn read_log_file_in(log_dir: &std::path::Path, file_name: &str) -> Result<String
         || file_name.contains(['/', '\\'])
         || name.file_name().and_then(|value| value.to_str()) != Some(file_name)
     {
-        return Err("日志名称必须是日志目录内的 .log 文件名".into());
+        return Err(ui_err(
+            "log.bad_name",
+            "日志名称必须是日志目录内的 .log 文件名",
+        ));
     }
-    let root = log_dir
-        .canonicalize()
-        .map_err(|error| format!("无法读取日志目录：{error}"))?;
+    let root = log_dir.canonicalize().map_err(|error| {
+        ui_err_p(
+            "log.dir_failed",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法读取日志目录：{error}"),
+        )
+    })?;
     let candidate = root.join(file_name);
     if !std::fs::symlink_metadata(&candidate)
         .map_err(|error| error.to_string())?
         .file_type()
         .is_file()
     {
-        return Err("日志路径必须是普通文件".into());
+        return Err(ui_err("log.not_file", "日志路径必须是普通文件"));
     }
     let canonical = candidate
         .canonicalize()
         .map_err(|error| error.to_string())?;
     if canonical.parent() != Some(root.as_path()) {
-        return Err("日志文件不在应用日志目录内".into());
+        return Err(ui_err("log.outside_dir", "日志文件不在应用日志目录内"));
     }
     let mut content = Vec::new();
     std::fs::File::open(canonical)
@@ -326,9 +337,18 @@ fn read_log_file_in(log_dir: &std::path::Path, file_name: &str) -> Result<String
         .read_to_end(&mut content)
         .map_err(|error| error.to_string())?;
     if content.len() as u64 > MAX_LOG_BYTES {
-        return Err("日志文件超过 2 MB，请在日志目录中直接查看".into());
+        return Err(ui_err(
+            "log.too_large",
+            "日志文件超过 2 MB，请在日志目录中直接查看",
+        ));
     }
-    String::from_utf8(content).map_err(|error| format!("日志内容不是 UTF-8：{error}"))
+    String::from_utf8(content).map_err(|error| {
+        ui_err_p(
+            "log.not_utf8",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("日志内容不是 UTF-8：{error}"),
+        )
+    })
 }
 
 #[tauri::command]
@@ -506,12 +526,28 @@ async fn read_tool_version(
         .kill_on_drop(true);
     let output = tokio::time::timeout(timeout, command.output())
         .await
-        .map_err(|_| format!("{name} 检查超时，请检查可执行文件：{}", path.display()))?
-        .map_err(|error| format!("无法执行 {name} {}：{error}", path.display()))?;
+        .map_err(|_| {
+            ui_err_p(
+                "ffmpeg.probe_timeout",
+                serde_json::json!({ "name": name, "path": path.display().to_string() }),
+                format!("{name} 检查超时，请检查可执行文件：{}", path.display()),
+            )
+        })?
+        .map_err(|error| {
+            ui_err_p(
+                "ffmpeg.probe_exec",
+                serde_json::json!({ "name": name, "path": path.display().to_string(), "error": error.to_string() }),
+                format!("无法执行 {name} {}：{error}", path.display()),
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!(
-            "{name} 版本检查失败：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Err(ui_err_p(
+            "ffmpeg.probe_failed",
+            serde_json::json!({ "name": name, "stderr": String::from_utf8_lossy(&output.stderr).trim().to_string() }),
+            format!(
+                "{name} 版本检查失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
         ));
     }
     let version = String::from_utf8_lossy(&output.stdout)
@@ -523,7 +559,11 @@ async fn read_tool_version(
         .to_ascii_lowercase()
         .starts_with(&format!("{} version", name.to_ascii_lowercase()))
     {
-        return Err(format!("所选程序不是有效的 {name}：{}", path.display()));
+        return Err(ui_err_p(
+            "ffmpeg.invalid_tool",
+            serde_json::json!({ "name": name, "path": path.display().to_string() }),
+            format!("所选程序不是有效的 {name}：{}", path.display()),
+        ));
     }
     Ok(version)
 }

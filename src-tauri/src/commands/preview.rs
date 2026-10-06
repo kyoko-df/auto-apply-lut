@@ -1,6 +1,7 @@
 //! Bounded, cancellable frame previews independent of WebView codec support.
 
 use crate::core::ffmpeg::lut::{build_lut_filter, prepare_luts};
+use crate::types::{ui_err, ui_err_p};
 use crate::utils::config::ConfigManager;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ const LUT_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const LUT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
-const CANCELLED: &str = "预览已取消";
+const CANCELLED: &str = "\u{1f}preview.cancelled\u{1f}\u{1f}预览已取消";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -226,19 +227,25 @@ impl Drop for ActivePreview<'_> {
 
 fn validate_request(request: &VideoPreviewRequest) -> Result<(), String> {
     if request.video_path.trim().is_empty() {
-        return Err("请先选择视频".into());
+        return Err(ui_err("preview.no_video", "请先选择视频"));
     }
     if !request.time_seconds.is_finite() || request.time_seconds < 0.0 {
-        return Err("预览时间必须是非负有限数值".into());
+        return Err(ui_err("preview.bad_time", "预览时间必须是非负有限数值"));
     }
     if !request.intensity.is_finite() || !(0.0..=1.0).contains(&request.intensity) {
-        return Err("LUT 强度必须在 0 到 1 之间".into());
+        return Err(ui_err(
+            "preview.bad_intensity",
+            "LUT 强度必须在 0 到 1 之间",
+        ));
     }
     if !(160..=1920).contains(&request.max_width) {
-        return Err("预览尺寸必须在 160 到 1920 之间".into());
+        return Err(ui_err(
+            "preview.bad_size",
+            "预览尺寸必须在 160 到 1920 之间",
+        ));
     }
     if request.client_id.is_empty() || request.client_id.len() > 128 {
-        return Err("预览客户端标识无效".into());
+        return Err(ui_err("preview.bad_client", "预览客户端标识无效"));
     }
     crate::core::ffmpeg::color::input_filter(&request.input_color_space)
         .map_err(|error| error.to_string())?;
@@ -299,7 +306,7 @@ impl PreviewState {
         let token = CancellationToken::new();
         let mut active = self.active.lock().map_err(|e| e.to_string())?;
         if active.len() >= 64 && !active.contains_key(client_id) {
-            return Err("同时请求的预览过多，请稍后重试".into());
+            return Err(ui_err("preview.too_many", "同时请求的预览过多，请稍后重试"));
         }
         if let Some((_, previous)) = active.insert(client_id.to_string(), (id, token.clone())) {
             previous.cancel();
@@ -363,14 +370,22 @@ async fn generate_with_state(
 }
 
 async fn fingerprint(path: &Path, hasher: &mut Sha256) -> Result<PathBuf, String> {
-    let path = fs::canonicalize(path)
-        .await
-        .map_err(|error| format!("无法读取 {}：{error}", path.display()))?;
+    let path = fs::canonicalize(path).await.map_err(|error| {
+        ui_err_p(
+            "fs.read_file",
+            serde_json::json!({ "path": path.display().to_string(), "error": error.to_string() }),
+            format!("无法读取 {}：{error}", path.display()),
+        )
+    })?;
     let metadata = fs::metadata(&path)
         .await
         .map_err(|error| error.to_string())?;
     if !metadata.is_file() {
-        return Err(format!("请选择文件：{}", path.display()));
+        return Err(ui_err_p(
+            "fs.not_a_file",
+            serde_json::json!({ "path": path.display().to_string() }),
+            format!("请选择文件：{}", path.display()),
+        ));
     }
     hasher.update(path.to_string_lossy().as_bytes());
     hasher.update(metadata.len().to_le_bytes());
@@ -488,8 +503,12 @@ async fn generate_cached(
             };
             let mut bytes = 0;
             for path in &paths {
-                bytes += bounded_file_size(path, LUT_FILE_BYTES, "LUT 缓存过大，请使用较小的 LUT")
-                    .await? as usize;
+                bytes += bounded_file_size(
+                    path,
+                    LUT_FILE_BYTES,
+                    ui_err("preview.lut_too_large", "LUT 缓存过大，请使用较小的 LUT").as_str(),
+                )
+                .await? as usize;
             }
             let prepared = Arc::new(Artifact {
                 _directory: directory,
@@ -575,7 +594,12 @@ fn jpeg_output(command: &mut Command, label: &str, path: &Path) {
 async fn bounded_file_size(path: &Path, limit: u64, error: &str) -> Result<u64, String> {
     let bytes = fs::metadata(path)
         .await
-        .map_err(|_| "此时间点没有可解码帧，请向前移动预览位置".to_string())?
+        .map_err(|_| {
+            ui_err(
+                "preview.no_frame",
+                "此时间点没有可解码帧，请向前移动预览位置",
+            )
+        })?
         .len();
     if bytes == 0 || bytes >= limit {
         return Err(error.to_owned());
@@ -584,7 +608,12 @@ async fn bounded_file_size(path: &Path, limit: u64, error: &str) -> Result<u64, 
 }
 
 async fn read_jpeg(path: &Path) -> Result<String, String> {
-    bounded_file_size(path, IMAGE_BYTES, "预览帧过大，请降低预览尺寸").await?;
+    bounded_file_size(
+        path,
+        IMAGE_BYTES,
+        ui_err("preview.frame_too_large", "预览帧过大，请降低预览尺寸").as_str(),
+    )
+    .await?;
     let image = fs::read(path).await.map_err(|error| error.to_string())?;
     Ok(format!("data:image/jpeg;base64,{}", STANDARD.encode(image)))
 }
@@ -636,7 +665,7 @@ async fn decode_frame(
     let bytes = bounded_file_size(
         &working_path,
         FRAME_FILE_BYTES,
-        "原始帧过大，请切换快速预览",
+        ui_err("preview.raw_frame_too_large", "原始帧过大，请切换快速预览").as_str(),
     )
     .await? as usize;
     let original_image = read_jpeg(&original_path).await?;
@@ -707,10 +736,17 @@ async fn run_preview(mut command: Command, token: &CancellationToken) -> Result<
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("无法启动 FFmpeg，请检查设置中的路径：{error}"))?;
-    let mut stderr = child.stderr.take().ok_or("无法读取 FFmpeg 输出")?;
+    let mut child = command.spawn().map_err(|error| {
+        ui_err_p(
+            "ffmpeg.spawn_failed",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法启动 FFmpeg，请检查设置中的路径：{error}"),
+        )
+    })?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ui_err("ffmpeg.no_stderr", "无法读取 FFmpeg 输出"))?;
     let errors = tokio::spawn(async move {
         let mut retained = Vec::new();
         let mut buffer = [0u8; 4096];
@@ -730,12 +766,16 @@ async fn run_preview(mut command: Command, token: &CancellationToken) -> Result<
         _ = token.cancelled() => { let _ = child.kill().await; Err(CANCELLED.into()) },
         _ = tokio::time::sleep(PREVIEW_TIMEOUT) => {
             let _ = child.kill().await;
-            Err("预览超时，请重试或选择视频中更早的位置".into())
+            Err(ui_err("preview.timeout", "预览超时，请重试或选择视频中更早的位置"))
         },
     };
     let stderr = errors.await.unwrap_or_default();
     if !status?.success() {
-        return Err(format!("无法生成预览：{}", stderr.trim()));
+        return Err(ui_err_p(
+            "preview.render_failed",
+            serde_json::json!({ "error": stderr.trim() }),
+            format!("无法生成预览：{}", stderr.trim()),
+        ));
     }
     Ok(())
 }

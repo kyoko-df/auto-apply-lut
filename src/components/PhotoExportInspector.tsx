@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ChevronDown,
@@ -10,7 +11,7 @@ import {
 } from "lucide-react";
 import type { useWorkspace } from "../workspace/useWorkspace";
 import type { PhotoOutput, PhotoSpace } from "../workspace/types";
-import { fileName } from "../workspace/model";
+import { fileName, errorText, photoProfileText } from "../workspace/model";
 
 export default function PhotoExportInspector({
   workspace: w,
@@ -25,6 +26,7 @@ export default function PhotoExportInspector({
   onExportSelected?: () => void;
   onExportScopeChange?: (scope: "pending" | "selected") => void;
 }) {
+  const { t } = useTranslation();
   const [scope, setScope] = useState<"pending" | "selected">("pending");
   const [confirming, setConfirming] = useState(false);
   const live = useRef(w);
@@ -62,13 +64,13 @@ export default function PhotoExportInspector({
       (!c.lutFingerprint || c.lutSpace !== "srgb")
   );
   const reason = queue.some((c) => c.metadataError || !c.info)
-    ? "请先完成照片信息读取，并处理不支持或损坏的照片。"
+    ? t("photoInspector.errReadInfoFirst")
     : needsMatte
-    ? "透明照片导出此格式时，需要明确选择合成背景。"
+    ? t("photoInspector.errAlphaBg")
     : needsInterpretation
-    ? "请为未标记或无效色彩配置的照片指定输入解释。"
+    ? t("photoInspector.errAssignProfile")
     : needsLut
-    ? "请确认所选 LUT 的输入和输出按 sRGB 使用。"
+    ? t("photoInspector.errConfirmSrgb")
     : "";
   const setOutput = (next: PhotoOutput) =>
     void w.updateSettings({ photo_options: { ...options, output: next } });
@@ -92,33 +94,35 @@ export default function PhotoExportInspector({
         });
     } catch (e) {
       if (mounted.current)
-        live.current.setNotice({ kind: "error", message: String(e) });
+        live.current.setNotice({ kind: "error", message: errorText(e) });
     } finally {
       if (mounted.current) setConfirming(false);
     }
   };
   return (
-    <aside className="inspector" aria-label="照片调色与导出设置">
+    <aside className="inspector" aria-label={t("photoInspector.aria")}>
       <div className="inspector-title">
         <SlidersHorizontal size={15} />
-        <strong>照片风格与输出</strong>
+        <strong>{t("photoInspector.title")}</strong>
         <span>PHOTO</span>
       </div>
       <div className="inspector-scroll">
         <section className="inspector-section">
           <div className="section-heading">
-            <h3>调色风格</h3>
+            <h3>{t("inspector.lookSection")}</h3>
             <span className="section-number">01</span>
           </div>
           <div className="field-label">
-            <label htmlFor="photo-lut-select">当前 LUT</label>
+            <label htmlFor="photo-lut-select">
+              {t("inspector.currentLut")}
+            </label>
             <button
               className="text-button"
               disabled={locked}
               onClick={onImportLuts}
             >
               <Plus size={12} />
-              导入
+              {t("inspector.import")}
             </button>
           </div>
           <div className="select-wrap">
@@ -132,11 +136,13 @@ export default function PhotoExportInspector({
                 w.setClipLook(active.id, { lutPath: e.target.value || null })
               }
             >
-              <option value="">原始色彩 · 不应用 LUT</option>
+              <option value="">{t("inspector.originalColorOption")}</option>
               {active?.lutPath &&
                 !w.luts.some((l) => l.path === active.lutPath) && (
                   <option value={active.lutPath}>
-                    {fileName(active.lutPath)} · 工作区 LUT
+                    {t("inspector.workspaceLut", {
+                      name: fileName(active.lutPath),
+                    })}
                   </option>
                 )}
               {w.luts
@@ -167,24 +173,24 @@ export default function PhotoExportInspector({
                         })
                   }
                 />
-                <span>按 sRGB 输入和输出使用此 LUT</span>
+                <span>{t("photoInspector.srgbUse")}</span>
               </label>
-              <p className="field-hint">
-                适用于照片创意 LUT；相机 Log 与 HDR 转换 LUT 暂不支持。
-              </p>
+              <p className="field-hint">{t("photoInspector.srgbHint")}</p>
               {active.lutFingerprint && (
                 <button
                   className="text-button"
                   disabled={locked || confirming || !w.isDesktop}
                   onClick={() => void confirm()}
                 >
-                  {confirming ? "读取中…" : "重新读取并确认 LUT"}
+                  {confirming
+                    ? t("photoInspector.confirming")
+                    : t("photoInspector.reconfirmLut")}
                 </button>
               )}
             </div>
           )}
           <div className="strength-heading">
-            <label htmlFor="photo-strength">LUT 强度</label>
+            <label htmlFor="photo-strength">{t("inspector.strength")}</label>
             <span>{active?.intensity ?? 100}%</span>
           </div>
           <input
@@ -201,8 +207,8 @@ export default function PhotoExportInspector({
             }
           />
           <div className="strength-labels">
-            <span>原始色彩</span>
-            <span>完整风格</span>
+            <span>{t("photoInspector.originalEnd")}</span>
+            <span>{t("inspector.fullLook")}</span>
           </div>
           <button
             className="button secondary full-width apply-selected"
@@ -210,7 +216,7 @@ export default function PhotoExportInspector({
             onClick={() => w.applyLookToSelected()}
           >
             <Copy size={14} />
-            应用到选中的 {w.selectedIds.length} 张照片
+            {t("photoInspector.applySelected", { count: w.selectedIds.length })}
           </button>
           <button
             className="button secondary full-width apply-all"
@@ -218,10 +224,10 @@ export default function PhotoExportInspector({
             onClick={() => w.applyLookToAll()}
           >
             <Copy size={14} />
-            应用到全部照片
+            {t("photoInspector.applyAll")}
           </button>
           <label className="field">
-            <span>预览精度</span>
+            <span>{t("inspector.previewQuality")}</span>
             <select
               value={w.settings.preview_quality}
               disabled={locked}
@@ -231,18 +237,20 @@ export default function PhotoExportInspector({
                 })
               }
             >
-              <option value="fast">快速 · 选风格</option>
-              <option value="accurate">精确 · 确认效果</option>
+              <option value="fast">{t("photoInspector.qualityFast")}</option>
+              <option value="accurate">
+                {t("photoInspector.qualityAccurate")}
+              </option>
             </select>
           </label>
         </section>
         <section className="inspector-section">
           <div className="section-heading">
-            <h3>输入色彩</h3>
+            <h3>{t("photoInspector.inputSection")}</h3>
             <span className="section-number">02</span>
           </div>
           <label className="field">
-            <span>照片色彩空间</span>
+            <span>{t("photoInspector.colorSpace")}</span>
             <select
               value={
                 active?.sourceInterpretation?.mode === "assign"
@@ -260,38 +268,41 @@ export default function PhotoExportInspector({
                 })
               }
             >
-              <option value="embedded">使用内嵌色彩配置</option>
-              <option value="srgb">明确按 sRGB 解释</option>
-              <option value="adobe-rgb">明确按 Adobe RGB 解释</option>
-              <option value="display-p3">明确按 Display P3 解释</option>
+              <option value="embedded">{t("photoInspector.embedded")}</option>
+              <option value="srgb">{t("photoInspector.srgb")}</option>
+              <option value="adobe-rgb">{t("photoInspector.adobeRgb")}</option>
+              <option value="display-p3">
+                {t("photoInspector.displayP3")}
+              </option>
             </select>
           </label>
           <p className="field-hint">
-            {active?.info?.color_profile ?? "等待照片信息"}。输出统一转换为
-            sRGB。
+            {t("photoInspector.profileOutput", {
+              profile: photoProfileText(active?.info),
+            })}
           </p>
           <button
             className="text-button"
             disabled={!active || locked || w.selectedIds.length < 2}
             onClick={() => w.applyInputToSelected()}
           >
-            将当前输入解释应用到已选照片
+            {t("photoInspector.applyInputToSelected")}
           </button>
           <button
             className="text-button"
             disabled={!active || locked || !w.isDesktop}
             onClick={() => active && void w.refreshMetadata(active.id)}
           >
-            重新读取照片信息
+            {t("photoInspector.rereadInfo")}
           </button>
         </section>
         <section className="inspector-section">
           <div className="section-heading">
-            <h3>照片输出</h3>
+            <h3>{t("photoInspector.outputSection")}</h3>
             <span className="section-number">03</span>
           </div>
           <label className="field">
-            <span>输出格式</span>
+            <span>{t("photoInspector.outputFormat")}</span>
             <select
               value={output.format}
               disabled={locked}
@@ -312,13 +323,15 @@ export default function PhotoExportInspector({
               }
             >
               <option value="jpeg">JPEG</option>
-              <option value="png">PNG · 无损</option>
-              <option value="tiff">TIFF · 无损</option>
+              <option value="png">{t("photoInspector.pngLossless")}</option>
+              <option value="tiff">{t("photoInspector.tiffLossless")}</option>
             </select>
           </label>
           {output.format === "jpeg" ? (
             <label className="field">
-              <span>JPEG 质量 · {output.quality}</span>
+              <span>
+                {t("photoInspector.jpegQuality", { quality: output.quality })}
+              </span>
               <input
                 type="range"
                 min="1"
@@ -332,7 +345,7 @@ export default function PhotoExportInspector({
             </label>
           ) : (
             <label className="field">
-              <span>输出位深</span>
+              <span>{t("photoInspector.bitDepth")}</span>
               <select
                 value={output.bit_depth}
                 disabled={locked}
@@ -343,14 +356,12 @@ export default function PhotoExportInspector({
                   })
                 }
               >
-                <option value="8">8 位</option>
-                <option value="16">16 位</option>
+                <option value="8">{t("photoInspector.bit8")}</option>
+                <option value="16">{t("photoInspector.bit16")}</option>
               </select>
             </label>
           )}
-          <p className="field-hint">
-            保持原始尺寸。8 位照片导出为 16 位不会恢复额外细节。
-          </p>
+          <p className="field-hint">{t("photoInspector.bitDepthHint")}</p>
           <label className="checkbox-field">
             <input
               type="checkbox"
@@ -365,14 +376,14 @@ export default function PhotoExportInspector({
                 })
               }
             />
-            <span>透明照片合成背景</span>
+            <span>{t("photoInspector.alphaBg")}</span>
           </label>
           {output.alpha_policy.mode === "flatten" && (
             <label className="field">
-              <span>背景色</span>
+              <span>{t("photoInspector.bgColor")}</span>
               <input
                 type="color"
-                aria-label="透明照片背景色"
+                aria-label={t("photoInspector.ariaBgColor")}
                 value={`#${output.alpha_policy.color
                   .map((v) => v.toString(16).padStart(2, "0"))
                   .join("")}`}
@@ -405,7 +416,7 @@ export default function PhotoExportInspector({
                 })
               }
             />
-            <span>保留主要拍摄信息</span>
+            <span>{t("photoInspector.keepMetadata")}</span>
           </label>
           <label className="checkbox-field">
             <input
@@ -413,7 +424,9 @@ export default function PhotoExportInspector({
               checked={options.preserve_gps}
               disabled={locked || !options.preserve_metadata}
               title={
-                !options.preserve_metadata ? "先启用拍摄信息保留" : undefined
+                !options.preserve_metadata
+                  ? t("photoInspector.enableMetadataFirst")
+                  : undefined
               }
               onChange={(e) =>
                 void w.updateSettings({
@@ -421,28 +434,32 @@ export default function PhotoExportInspector({
                 })
               }
             />
-            <span>同时保留定位信息</span>
+            <span>{t("photoInspector.keepGps")}</span>
           </label>
           <label className="field">
-            <span>导出位置</span>
+            <span>{t("photoInspector.outputLocation")}</span>
             <button
               className="output-directory"
               disabled={locked}
-              title={w.settings.default_output_dir || "源照片所在文件夹"}
+              title={
+                w.settings.default_output_dir ||
+                t("photoInspector.sourceFolder")
+              }
               onClick={() => void w.pickOutputDirectory()}
             >
               <FolderOpen size={15} />
-              <span>{w.settings.default_output_dir || "源照片所在文件夹"}</span>
+              <span>
+                {w.settings.default_output_dir ||
+                  t("photoInspector.sourceFolder")}
+              </span>
             </button>
           </label>
-          <p className="field-hint">
-            另存为新文件，不覆盖原照片或已有输出。首版不包含 RAW 显影。
-          </p>
+          <p className="field-hint">{t("photoInspector.outputHint")}</p>
         </section>
       </div>
       <div className="inspector-footer">
         <label className="field">
-          <span>导出范围</span>
+          <span>{t("inspector.exportScope")}</span>
           <select
             value={scope}
             disabled={locked}
@@ -452,8 +469,10 @@ export default function PhotoExportInspector({
               onExportScopeChange?.(value);
             }}
           >
-            <option value="pending">全部待导出照片</option>
-            <option value="selected">仅已选照片</option>
+            <option value="pending">{t("photoInspector.scopeAll")}</option>
+            <option value="selected">
+              {t("photoInspector.scopeSelected")}
+            </option>
           </select>
         </label>
         {reason && (
@@ -468,8 +487,8 @@ export default function PhotoExportInspector({
             disabled={w.batch?.status.toLowerCase() === "cancelling"}
           >
             {w.batch?.status.toLowerCase() === "cancelling"
-              ? "正在取消，等待清理…"
-              : "取消照片导出"}
+              ? t("photoInspector.cancelling")
+              : t("photoInspector.cancelExport")}
           </button>
         ) : (
           <button
@@ -482,15 +501,16 @@ export default function PhotoExportInspector({
             }
             title={
               reason ||
-              (!queue.length ? "请先导入或选择待导出的照片" : undefined)
+              (!queue.length ? t("photoInspector.pickPhotosFirst") : undefined)
             }
             onClick={scope === "selected" ? onExportSelected : onStartExport}
           >
-            导出 {queue.length} 张照片 <kbd>⌘ ↵</kbd>
+            {t("photoInspector.exportPhotos", { count: queue.length })}{" "}
+            <kbd>⌘ ↵</kbd>
           </button>
         )}
         {!w.isDesktop && (
-          <p className="field-hint">真实照片处理需要桌面应用。</p>
+          <p className="field-hint">{t("photoInspector.needsDesktop")}</p>
         )}
       </div>
     </aside>

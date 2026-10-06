@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PhotoPreview from "./PhotoPreview";
 import type { PhotoClip, PhotoPreviewResponse } from "../workspace/types";
+import i18n from "../i18n";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const clip: PhotoClip = {
@@ -54,10 +55,13 @@ beforeEach(() => {
       )
   );
 });
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await act(async () => {
+    await i18n.changeLanguage("zh");
+  });
 });
 const settle = () =>
   act(async () => {
@@ -70,6 +74,31 @@ const props = {
   alphaPolicy: { mode: "preserve" as const },
 };
 describe("photo preview", () => {
+  it("decodes structured errors and retranslates the same error after a language change", async () => {
+    await i18n.changeLanguage("en");
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "generate_photo_preview"
+        ? Promise.reject(
+            "\u001fphoto.lut_needs_srgb\u001f\u001f请明确按 sRGB 输入和输出使用此 LUT"
+          )
+        : Promise.resolve()
+    );
+    render(<PhotoPreview clip={clip} {...props} />);
+    await settle();
+    expect(
+      screen.getByText("Confirm this LUT uses sRGB input and output")
+    ).toBeVisible();
+    expect(screen.queryByText(/photo\.lut_needs_srgb/)).toBeNull();
+    await act(async () => {
+      await i18n.changeLanguage("ja");
+    });
+    expect(
+      screen.getByText(i18n.t("errors.photo.lut_needs_srgb"))
+    ).toBeVisible();
+    expect(
+      invoke.mock.calls.filter(([cmd]) => cmd === "generate_photo_preview")
+    ).toHaveLength(1);
+  });
   it("limits 100% regions to visible device pixels and keeps hidden edges reachable by panning", async () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(420);
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(240);

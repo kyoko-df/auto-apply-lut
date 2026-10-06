@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
@@ -30,17 +31,12 @@ import WindowedList from "./components/WindowedList";
 import WorkspaceStatus from "./components/WorkspaceStatus";
 import ExportInspector from "./components/ExportInspector";
 import { useWorkspace } from "./workspace/useWorkspace";
+import { clipErrorText } from "./workspace/snapshot";
+import { errorMessage, errorText, processingMessage } from "./workspace/model";
+import { applyLanguagePreference, normalizeLanguage } from "./i18n";
 import type { Clip } from "./workspace/types";
 import "./App.css";
 
-const clipStatus: Record<Clip["status"], string> = {
-  ready: "待导出",
-  queued: "排队中",
-  processing: "导出中",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "待重试",
-};
 const basename = (path: string) => path.split(/[\\/]/).pop() || path;
 const filesize = (n = 0) =>
   n >= 1073741824
@@ -50,7 +46,16 @@ const filesize = (n = 0) =>
     : `${Math.round(n / 1024)} KB`;
 
 export default function App() {
+  const { t } = useTranslation();
   const w = useWorkspace();
+  const clipStatus: Record<Clip["status"], string> = {
+    ready: t("status.ready"),
+    queued: t("status.queued"),
+    processing: t("status.processing"),
+    completed: t("status.completed"),
+    failed: t("status.failed"),
+    cancelled: t("status.cancelled"),
+  };
   const [section, setSection] = useState<"media" | "luts">("media");
   const [view, setView] = useState<"workspace" | "queue">("workspace");
   const [search, setSearch] = useState("");
@@ -83,6 +88,9 @@ export default function App() {
   );
 
   visibleIdsRef.current = filteredClips.map((c) => c.id);
+  useEffect(() => {
+    applyLanguagePreference(w.settings.language);
+  }, [w.settings.language]);
   useEffect(() => {
     exportScopeRef.current = "pending";
     setView("workspace");
@@ -162,12 +170,12 @@ export default function App() {
     try {
       await invoke(folder ? "open_folder" : "open_file_location", { path });
     } catch (e) {
-      wRef.current.setNotice({ kind: "error", message: String(e) });
+      wRef.current.setNotice({ kind: "error", message: errorText(e) });
     }
   }, []);
   const selectLut = (path: string | null) => {
     if (active) w.setClipLook(active.id, { lutPath: path });
-    else w.setNotice({ kind: "info", message: "先导入素材，再选择 LUT。" });
+    else w.setNotice({ kind: "info", message: t("app.noticeImportFirst") });
   };
   const start = () => {
     setView("queue");
@@ -191,7 +199,7 @@ export default function App() {
         if (!w.isDesktop)
           w.setNotice({
             kind: "info",
-            message: "请在桌面应用中拖入素材，浏览器仅用于界面预览。",
+            message: t("app.noticeDesktopDrop"),
           });
       }}
     >
@@ -203,7 +211,7 @@ export default function App() {
             e.preventDefault();
             setView("workspace");
           }}
-          aria-label="LUT Lab 工作台"
+          aria-label={t("app.ariaWorkspace")}
         >
           <span className="brand-symbol">
             <Layers3 size={23} strokeWidth={1.8} />
@@ -213,20 +221,20 @@ export default function App() {
             <small>COLOR WORKSPACE</small>
           </span>
         </a>
-        <nav className="main-navigation" aria-label="主导航">
+        <nav className="main-navigation" aria-label={t("app.ariaMainNav")}>
           <button
             className={view === "workspace" ? "selected" : ""}
             onClick={() => setView("workspace")}
           >
             <SlidersHorizontal size={15} />
-            调色工作台
+            {t("app.navWorkspace")}
           </button>
           <button
             className={view === "queue" ? "selected" : ""}
             onClick={() => setView("queue")}
           >
             <ListVideo size={16} />
-            导出队列
+            {t("app.navQueue")}
             {w.clips.length > 0 && (
               <span className="nav-count">
                 {w.isExporting ? w.clips.length - completed : completed}
@@ -235,22 +243,25 @@ export default function App() {
           </button>
         </nav>
         <div className="header-actions">
-          <div className="segmented media-mode" aria-label="媒体模式">
+          <div
+            className="segmented media-mode"
+            aria-label={t("app.ariaMediaMode")}
+          >
             <button
               aria-pressed={!photoMode}
               disabled={locked || w.isImporting}
-              title={locked ? "请等待当前处理结束后切换模式" : undefined}
+              title={locked ? t("app.mediaSwitchLocked") : undefined}
               onClick={() => w.setMediaMode("video")}
             >
-              视频
+              {t("mode.video")}
             </button>
             <button
               aria-pressed={photoMode}
               disabled={locked || w.isImporting}
-              title={locked ? "请等待当前处理结束后切换模式" : undefined}
+              title={locked ? t("app.mediaSwitchLocked") : undefined}
               onClick={() => w.setMediaMode("photo")}
             >
-              照片
+              {t("mode.photo")}
             </button>
           </div>
           <button
@@ -259,24 +270,24 @@ export default function App() {
           >
             <span className="status-dot" />
             {w.ffmpeg.status === "ready"
-              ? "处理引擎就绪"
+              ? t("app.engineReady")
               : w.ffmpeg.status === "checking"
-              ? "检测处理引擎"
+              ? t("app.engineChecking")
               : w.ffmpeg.status === "browser"
-              ? "浏览器预览"
-              : "配置处理引擎"}
+              ? t("app.engineBrowser")
+              : t("app.engineConfigure")}
           </button>
           <span className="header-divider" />
           <button
             className="icon-button"
-            aria-label="使用帮助"
+            aria-label={t("app.ariaHelp")}
             onClick={() => setHelpOpen(true)}
           >
             <CircleHelp size={18} />
           </button>
           <button
             className="icon-button"
-            aria-label="应用设置"
+            aria-label={t("app.ariaSettings")}
             onClick={() => setSettingsOpen(true)}
           >
             <Settings2 size={18} />
@@ -286,7 +297,7 @@ export default function App() {
 
       <WorkspaceStatus workspace={w} />
       <div className="workspace-body">
-        <aside className="media-sidebar" aria-label="素材与 LUT 资料库">
+        <aside className="media-sidebar" aria-label={t("app.ariaSidebar")}>
           <div className="sidebar-tabs">
             <button
               className={section === "media" ? "active" : ""}
@@ -296,7 +307,8 @@ export default function App() {
               }}
             >
               <Clapperboard size={15} />
-              素材<span>{w.clips.length}</span>
+              {t("app.clipsTitle")}
+              <span>{w.clips.length}</span>
             </button>
             <button
               className={section === "luts" ? "active" : ""}
@@ -313,8 +325,16 @@ export default function App() {
             <label className="search-field">
               <Search size={14} />
               <input
-                placeholder={section === "media" ? "搜索素材…" : "搜索 LUT…"}
-                aria-label={section === "media" ? "搜索素材" : "搜索 LUT"}
+                placeholder={
+                  section === "media"
+                    ? t("app.searchClips")
+                    : t("app.searchLuts")
+                }
+                aria-label={
+                  section === "media"
+                    ? t("app.searchClips")
+                    : t("app.searchLuts")
+                }
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -325,9 +345,9 @@ export default function App() {
               aria-label={
                 section === "media"
                   ? photoMode
-                    ? "添加照片"
-                    : "添加视频"
-                  : "添加 LUT"
+                    ? t("app.addPhotos")
+                    : t("app.addVideos")
+                  : t("app.addLuts")
               }
               disabled={locked}
               onClick={() =>
@@ -341,28 +361,30 @@ export default function App() {
           </div>
           {section === "media" && (w.clips.length > 0 || w.canUndo) && (
             <div className="selection-toolbar">
-              <span>{w.selectedIds.length} 项已选</span>
+              <span>
+                {t("app.selectedCount", { count: w.selectedIds.length })}
+              </span>
               <button
-                title="全选当前搜索结果"
+                title={t("app.selectAllTitle")}
                 onClick={() => w.selectAll(filteredClips.map((c) => c.id))}
               >
-                全选
+                {t("app.selectAll")}
               </button>
               <button
                 disabled={!w.selectedIds.length}
                 onClick={w.clearSelection}
               >
-                清除选择
+                {t("app.clearSelection")}
               </button>
               <button
                 disabled={locked || !w.selectedIds.length}
                 onClick={w.removeSelected}
               >
-                移除
+                {t("app.remove")}
               </button>
               <button
-                aria-label="撤销修改"
-                title="撤销 ⌘Z"
+                aria-label={t("app.ariaUndo")}
+                title={t("app.undoTitle")}
                 disabled={locked || !w.canUndo}
                 onClick={w.undo}
               >
@@ -373,9 +395,12 @@ export default function App() {
           {w.isImporting && (
             <div className="import-progress" role="status">
               <span>
-                读取素材 {w.importProgress.completed} / {w.importProgress.total}
+                {t("app.importProgress", {
+                  completed: w.importProgress.completed,
+                  total: w.importProgress.total,
+                })}
               </span>
-              <button onClick={w.cancelImport}>停止添加</button>
+              <button onClick={w.cancelImport}>{t("app.stopImport")}</button>
             </div>
           )}
           <div className="sidebar-list">
@@ -386,7 +411,7 @@ export default function App() {
                     items={filteredClips}
                     rowHeight={92}
                     itemKey={(clip) => clip.id}
-                    label="素材列表"
+                    label={t("app.ariaClipsList")}
                   >
                     {(clip, i) => (
                       <div
@@ -409,7 +434,9 @@ export default function App() {
                             });
                             setView("workspace");
                           }}
-                          aria-label={`预览 ${clip.name}`}
+                          aria-label={t("app.ariaPreviewClip", {
+                            name: clip.name,
+                          })}
                           aria-current={
                             active?.id === clip.id ? "true" : undefined
                           }
@@ -435,12 +462,14 @@ export default function App() {
                               >
                                 {clip.info?.width
                                   ? `${clip.info.width} × ${clip.info.height}`
-                                  : "读取素材"}
+                                  : t("app.readingClip")}
                               </span>
                               <i />
                               <span>
                                 {clip.kind === "photo"
-                                  ? `${clip.info?.bit_depth ?? "—"} 位`
+                                  ? t("app.bitDepth", {
+                                      bits: clip.info?.bit_depth ?? "—",
+                                    })
                                   : timecode(clip.info?.duration || 0)}
                               </span>
                             </span>
@@ -461,7 +490,9 @@ export default function App() {
                         </button>
                         <button
                           className="clip-remove icon-button"
-                          aria-label={`移除 ${clip.name}`}
+                          aria-label={t("app.ariaRemoveClip", {
+                            name: clip.name,
+                          })}
                           disabled={locked}
                           onClick={() => w.removeClip(clip.id)}
                         >
@@ -483,26 +514,26 @@ export default function App() {
                     <div className="empty-icon">
                       <FolderInput size={24} strokeWidth={1.3} />
                     </div>
-                    <strong>素材，从这里开始</strong>
+                    <strong>{t("app.emptyClipsTitle")}</strong>
                     <p>
                       {photoMode
-                        ? "拖入多张照片或整个文件夹"
-                        : "拖入多个视频或整个文件夹"}
+                        ? t("app.emptyClipsPhoto")
+                        : t("app.emptyClipsVideo")}
                       <br />
-                      一次完成所有素材的调色
+                      {t("app.emptyClipsSub")}
                     </p>
                     <button
                       className="text-button"
                       disabled={locked}
                       onClick={() => void w.importVideos()}
                     >
-                      {photoMode ? "选择照片" : "选择视频"}{" "}
+                      {photoMode ? t("app.pickPhotos") : t("app.pickVideos")}{" "}
                       <ArrowRight size={13} />
                     </button>
                   </div>
                 )}
                 {w.clips.length > 0 && !filteredClips.length && (
-                  <p className="no-results">没有匹配的素材</p>
+                  <p className="no-results">{t("app.noClipMatch")}</p>
                 )}
               </>
             ) : (
@@ -516,8 +547,8 @@ export default function App() {
                     <ScanIcon />
                   </span>
                   <span>
-                    <strong>原始色彩</strong>
-                    <small>不应用 LUT</small>
+                    <strong>{t("app.originalColor")}</strong>
+                    <small>{t("app.noLutApplied")}</small>
                   </span>
                   {!active?.lutPath && <Check size={14} />}
                 </button>
@@ -526,7 +557,7 @@ export default function App() {
                     items={filteredLuts}
                     rowHeight={68}
                     itemKey={(lut) => lut.path}
-                    label="LUT 列表"
+                    label={t("app.ariaLutList")}
                   >
                     {(lut) => (
                       <div className="lut-list-item" key={lut.path}>
@@ -536,7 +567,11 @@ export default function App() {
                           }`}
                           disabled={locked || !lut.is_valid}
                           onClick={() => selectLut(lut.path)}
-                          title={lut.error_message || lut.path}
+                          title={
+                            lut.error_message
+                              ? errorMessage(lut.error_message)
+                              : lut.path
+                          }
                         >
                           <span
                             className={`lut-icon ${
@@ -550,14 +585,16 @@ export default function App() {
                             <small>
                               {lut.is_valid
                                 ? `${lut.format} · ${lut.category}`
-                                : "文件不可用"}
+                                : t("app.fileUnavailable")}
                             </small>
                           </span>
                           {active?.lutPath === lut.path && <Check size={14} />}
                         </button>
                         <button
                           className="icon-button lut-remove"
-                          aria-label={`移除 LUT ${lut.name}`}
+                          aria-label={t("app.ariaRemoveLut", {
+                            name: lut.name,
+                          })}
                           disabled={locked}
                           onClick={() => w.removeLut(lut.path)}
                         >
@@ -569,23 +606,23 @@ export default function App() {
                 )}
                 {!w.luts.length && (
                   <div className="sidebar-empty">
-                    <strong>建立你的风格资料库</strong>
+                    <strong>{t("app.emptyLutsTitle")}</strong>
                     <p>
-                      导入 .cube、.3dl 等 LUT
+                      {t("app.emptyLutsLine1")}
                       <br />
-                      在照片与视频间自由复用
+                      {t("app.emptyLutsLine2")}
                     </p>
                     <button
                       className="text-button"
                       disabled={locked}
                       onClick={() => void w.importLuts()}
                     >
-                      导入 LUT <Plus size={13} />
+                      {t("app.importLuts")} <Plus size={13} />
                     </button>
                   </div>
                 )}
                 {w.luts.length > 0 && !filteredLuts.length && (
-                  <p className="no-results">没有匹配的 LUT</p>
+                  <p className="no-results">{t("app.noLutMatch")}</p>
                 )}
               </>
             )}
@@ -601,15 +638,20 @@ export default function App() {
               }
             >
               <FolderInput size={15} />
-              导入{section === "media" ? "素材" : "LUT"}文件夹
+              {section === "media"
+                ? t("app.importClipsFolder")
+                : t("app.importLutsFolder")}
             </button>
             <div className="sidebar-summary">
               <span>
                 {section === "media"
                   ? photoMode
-                    ? `${w.clips.length} 张照片`
-                    : `${w.clips.length} 个素材 · ${timecode(totalDuration)}`
-                  : `${w.luts.length} 个 LUT`}
+                    ? t("app.photoCount", { count: w.clips.length })
+                    : t("app.clipCount", {
+                        count: w.clips.length,
+                        duration: timecode(totalDuration),
+                      })
+                  : t("app.lutCount", { count: w.luts.length })}
               </span>
               {section === "media" && w.clips.length > 0 && (
                 <button
@@ -617,7 +659,7 @@ export default function App() {
                   disabled={locked}
                   onClick={w.clearClips}
                 >
-                  清空
+                  {t("app.clearAll")}
                 </button>
               )}
             </div>
@@ -631,12 +673,14 @@ export default function App() {
                 {view === "workspace" ? "COLOR WORKSPACE" : "RENDER QUEUE"}
               </div>
               <h2>
-                {view === "workspace" ? "调色工作台" : "导出队列"}
+                {view === "workspace"
+                  ? t("app.navWorkspace")
+                  : t("app.navQueue")}
                 <span className="heading-slash">/</span>
                 <span className="heading-detail">
                   {view === "workspace"
-                    ? "预览、调整，统一你的影像风格"
-                    : `${completed} / ${w.clips.length} 个素材已完成`}
+                    ? t("app.workspaceSub")
+                    : t("app.queueSub", { completed, total: w.clips.length })}
                 </span>
               </h2>
             </div>
@@ -646,7 +690,7 @@ export default function App() {
               onClick={() => void w.importVideos()}
             >
               <Plus size={15} />
-              导入素材
+              {t("app.importMedia")}
             </button>
           </div>
           {view === "workspace" ? (
@@ -677,24 +721,32 @@ export default function App() {
               )}
               <section className="selection-detail">
                 <div>
-                  <span className="section-overline">当前素材</span>
-                  <strong>{active?.name || "尚未选择素材"}</strong>
+                  <span className="section-overline">
+                    {t("app.currentClip")}
+                  </span>
+                  <strong>{active?.name || t("app.noClipSelected")}</strong>
                   <span
                     className={`source-path ${
                       active?.metadataError ? "metadata-error" : ""
                     }`}
-                    title={active?.metadataError || active?.path}
+                    title={
+                      active?.metadataError
+                        ? errorMessage(active.metadataError)
+                        : active?.path
+                    }
                   >
                     {active?.metadataError
-                      ? `读取素材信息失败：${active.metadataError}`
+                      ? t("app.metadataFailed", {
+                          message: errorMessage(active.metadataError),
+                        })
                       : active?.path ||
                         (photoMode
-                          ? "导入照片后即可查看和比较 LUT 效果"
-                          : "导入后即可预览，不需要等待整个视频处理完成")}
+                          ? t("app.previewHintPhoto")
+                          : t("app.previewHintVideo"))}
                   </span>
                 </div>
                 <div className="metadata-pair">
-                  <span>编码</span>
+                  <span>{t("app.codecLabel")}</span>
                   <strong>
                     {active?.kind === "photo"
                       ? active.info?.format.toUpperCase() || "—"
@@ -702,14 +754,14 @@ export default function App() {
                   </strong>
                 </div>
                 <div className="metadata-pair">
-                  <span>文件大小</span>
+                  <span>{t("app.sizeLabel")}</span>
                   <strong>
                     {active?.info ? filesize(active.info.size) : "—"}
                   </strong>
                 </div>
                 <button
                   className="icon-button"
-                  aria-label="在文件夹中显示原素材"
+                  aria-label={t("app.ariaShowInFolder")}
                   disabled={!active || !w.isDesktop}
                   onClick={() => active && void openPath(active.path)}
                 >
@@ -721,20 +773,17 @@ export default function App() {
                   <span>
                     {videoInfo.bit_depth
                       ? `${videoInfo.bit_depth}-bit`
-                      : "位深未知"}{" "}
-                    · {videoInfo.color_primaries || "色域未标记"} ·{" "}
-                    {videoInfo.color_transfer || "传递函数未标记"}
+                      : t("app.bitDepthUnknown")}{" "}
+                    · {videoInfo.color_primaries || t("app.primariesUnknown")} ·{" "}
+                    {videoInfo.color_transfer || t("app.transferUnknown")}
                   </span>
                   {(videoInfo.color_transfer === "smpte2084" ||
                     videoInfo.color_transfer === "arib-std-b67") &&
                     w.settings.input_color_space === "auto" && (
-                      <strong>
-                        HDR 素材：使用 SDR 风格 LUT 前，请选择对应的 HDR →
-                        Rec.709 转换。
-                      </strong>
+                      <strong>{t("app.hdrNotice")}</strong>
                     )}
                   {!videoInfo.color_transfer && (
-                    <span>请确认素材与 LUT 的输入色彩空间匹配。</span>
+                    <span>{t("app.colorSpaceHint")}</span>
                   )}
                 </div>
               )}
@@ -746,11 +795,11 @@ export default function App() {
                     {w.clips.length ? <Check size={12} /> : "01"}
                   </span>
                   <span>
-                    <strong>添加素材</strong>
+                    <strong>{t("app.addMediaTitle")}</strong>
                     <small>
                       {photoMode
-                        ? "多选照片或拖入文件夹"
-                        : "多选视频或拖入文件夹"}
+                        ? t("app.addMediaPhoto")
+                        : t("app.addMediaVideo")}
                     </small>
                   </span>
                 </div>
@@ -762,8 +811,8 @@ export default function App() {
                     {active?.lutPath ? <Check size={12} /> : "02"}
                   </span>
                   <span>
-                    <strong>调整风格</strong>
-                    <small>选择 LUT，对比真实画面</small>
+                    <strong>{t("app.stepLookTitle")}</strong>
+                    <small>{t("app.stepLookSub")}</small>
                   </span>
                 </div>
                 <ArrowRight size={14} />
@@ -772,8 +821,8 @@ export default function App() {
                     {completed ? <Check size={12} /> : "03"}
                   </span>
                   <span>
-                    <strong>批量导出</strong>
-                    <small>设置一次，处理全部素材</small>
+                    <strong>{t("app.stepExportTitle")}</strong>
+                    <small>{t("app.stepExportSub")}</small>
                   </span>
                 </div>
               </section>
@@ -784,15 +833,15 @@ export default function App() {
                 <div>
                   <strong>
                     {w.isExporting
-                      ? "正在处理素材"
+                      ? t("app.queueBusyTitle")
                       : w.clips.length
-                      ? "你的导出任务"
-                      : "队列准备就绪"}
+                      ? t("app.queueReadyTitle")
+                      : t("app.queueEmptyTitle")}
                   </strong>
                   <p>
                     {w.isExporting
-                      ? "你可以继续查看素材，导出将在后台进行。"
-                      : "每个任务独立处理，失败的素材可以单独重试。"}
+                      ? t("app.queueBusySub")
+                      : t("app.queueReadySub")}
                   </p>
                 </div>
                 {failures > 0 && (
@@ -802,7 +851,7 @@ export default function App() {
                     onClick={() => void w.retryFailed()}
                   >
                     <RotateCcw size={14} />
-                    重试未完成
+                    {t("app.retryUnfinished")}
                   </button>
                 )}
               </div>
@@ -811,39 +860,42 @@ export default function App() {
                   <div>
                     <span>
                       {w.isExporting
-                        ? "任务处理进度"
+                        ? t("app.batchBusy")
                         : w.batch.status.toLowerCase() === "completed"
-                        ? "批次已完成"
+                        ? t("app.batchDone")
                         : w.batch.status.toLowerCase() === "cancelled"
-                        ? "批次已取消"
-                        : "批次已结束"}
+                        ? t("app.batchCancelled")
+                        : t("app.batchEnded")}
                     </span>
                     <strong>
-                      {w.batch.completed_items +
-                        w.batch.failed_items +
-                        w.batch.cancelled_items}{" "}
-                      / {w.batch.total_items} 已结束 ·{" "}
+                      {t("app.batchProgress", {
+                        done:
+                          w.batch.completed_items +
+                          w.batch.failed_items +
+                          w.batch.cancelled_items,
+                        total: w.batch.total_items,
+                      })}{" "}
                       {Math.round(w.batch.overall_progress)}%
                     </strong>
                   </div>
                   <progress
                     max="100"
                     value={w.batch.overall_progress}
-                    aria-label="批次总进度"
+                    aria-label={t("app.ariaBatchProgress")}
                   />
                 </div>
               )}
               {!w.clips.length && (
                 <div className="queue-empty">
                   <ListVideo size={38} strokeWidth={1} />
-                  <h3>还没有导出任务</h3>
-                  <p>添加素材并设置调色风格后，即可开始批量导出。</p>
+                  <h3>{t("app.noExportsTitle")}</h3>
+                  <p>{t("app.noExportsSub")}</p>
                   <button
                     className="button secondary"
                     onClick={() => void w.importVideos()}
                   >
                     <Plus size={14} />
-                    添加素材
+                    {t("app.addMedia")}
                   </button>
                 </div>
               )}
@@ -852,7 +904,7 @@ export default function App() {
                   items={w.clips}
                   rowHeight={120}
                   itemKey={(clip) => clip.id}
-                  label="导出任务列表"
+                  label={t("app.ariaExportList")}
                 >
                   {(clip, i) => (
                     <article className="queue-row" key={clip.id}>
@@ -864,21 +916,25 @@ export default function App() {
                         <span>
                           {clip.lutPath
                             ? `${basename(clip.lutPath)} · ${clip.intensity}%`
-                            : "原始色彩"}
+                            : t("app.originalColor")}
                           <i />
                           {clip.kind === "photo"
-                            ? `${clip.info?.bit_depth ?? "—"} 位`
+                            ? t("app.bitDepth", {
+                                bits: clip.info?.bit_depth ?? "—",
+                              })
                             : timecode(clip.info?.duration || 0)}
                         </span>
                         {clip.encoder && (
                           <span
                             className="encoding-details"
-                            title={clip.message}
+                            title={processingMessage(clip.message)}
                           >
                             {clip.encoder}
                             {clip.speed ? ` · ${clip.speed.toFixed(2)}×` : ""}
                             {clip.eta_seconds != null
-                              ? ` · 预计剩余 ${timecode(clip.eta_seconds)}`
+                              ? ` · ${t("app.etaRemaining", {
+                                  time: timecode(clip.eta_seconds),
+                                })}`
                               : ""}
                           </span>
                         )}
@@ -886,11 +942,13 @@ export default function App() {
                           clip.status === "processing" &&
                           clip.message && (
                             <span className="encoding-details">
-                              {clip.message}
+                              {processingMessage(clip.message)}
                             </span>
                           )}
                         {clip.error && (
-                          <p className="queue-error">{clip.error}</p>
+                          <p className="queue-error">
+                            {clipErrorText(clip.error)}
+                          </p>
                         )}
                         {clip.outputPath && clip.status === "completed" && (
                           <span
@@ -919,14 +977,18 @@ export default function App() {
                             <progress
                               max="100"
                               value={clip.progress}
-                              aria-label={`${clip.name} 导出进度`}
+                              aria-label={t("app.ariaExportProgress", {
+                                name: clip.name,
+                              })}
                             />
                           )}
                       </div>
                       {clip.status === "completed" && clip.outputPath ? (
                         <button
                           className="icon-button"
-                          aria-label={`显示导出文件 ${clip.name}`}
+                          aria-label={t("app.ariaShowExported", {
+                            name: clip.name,
+                          })}
                           onClick={() => void openPath(clip.outputPath!)}
                         >
                           <FolderOpen size={17} />
@@ -935,7 +997,9 @@ export default function App() {
                         clip.status === "cancelled" ? (
                         <button
                           className="icon-button"
-                          aria-label={`重试 ${clip.name}`}
+                          aria-label={t("app.ariaRetryClip", {
+                            name: clip.name,
+                          })}
                           disabled={locked}
                           onClick={() => void w.startExport([clip.id])}
                         >
@@ -950,14 +1014,19 @@ export default function App() {
               </div>
               {w.history.length > 0 && (
                 <details className="batch-history">
-                  <summary>最近批次 · {w.history.length}</summary>
+                  <summary>
+                    {t("app.recentBatches", { count: w.history.length })}
+                  </summary>
                   {w.history
                     .slice(-10)
                     .reverse()
                     .map((b) => (
                       <div key={b.batch_id}>
-                        {b.completed_items} 成功 / {b.failed_items} 失败 /{" "}
-                        {b.cancelled_items} 待重试
+                        {t("app.batchSummary", {
+                          completed: b.completed_items,
+                          failed: b.failed_items,
+                          cancelled: b.cancelled_items,
+                        })}
                       </div>
                     ))}
                 </details>
@@ -1001,23 +1070,25 @@ export default function App() {
         <span>
           <span className={`status-dot ${w.isExporting ? "pulsing" : ""}`} />
           {w.loading
-            ? "正在读取素材与设置…"
+            ? t("app.statusLoading")
             : w.isExporting
-            ? `正在导出 · ${completed} 个已完成`
+            ? t("app.statusExporting", { count: completed })
             : w.isImporting
-            ? `正在导入 · ${w.importProgress.completed}/${w.importProgress.total}`
+            ? t("app.statusImporting", {
+                completed: w.importProgress.completed,
+                total: w.importProgress.total,
+              })
             : w.isSavingSettings
-            ? "正在保存设置…"
-            : "准备就绪"}
+            ? t("app.statusSaving")
+            : t("app.statusReady")}
           {!w.isDesktop && (
-            <span className="browser-hint">
-              浏览器仅预览界面，视频和照片处理请使用桌面应用
-            </span>
+            <span className="browser-hint">{t("app.browserOnly")}</span>
           )}
         </span>
         <span>
-          本地工作流<span className="status-separator">/</span>
-          {w.settings.max_concurrent_tasks} 个并行任务
+          {t("app.localFlow")}
+          <span className="status-separator">/</span>
+          {t("app.parallelTasks", { count: w.settings.max_concurrent_tasks })}
           <span className="status-separator">/</span>LUTlab{" "}
           <span className="muted">0.1.0</span>
         </span>
@@ -1036,10 +1107,10 @@ export default function App() {
               <LoaderCircle size={17} />
             )}
           </span>
-          <p>{w.notice.message}</p>
+          <p>{errorMessage(w.notice.message)}</p>
           <button
             className="icon-button"
-            aria-label="关闭提示"
+            aria-label={t("app.ariaDismissNotice")}
             onClick={() => w.setNotice(null)}
           >
             <X size={15} />
@@ -1050,10 +1121,8 @@ export default function App() {
         <div className="drop-overlay">
           <div>
             <Upload size={44} strokeWidth={1.2} />
-            <h2>松开，加入工作台</h2>
-            <p>
-              {photoMode ? "照片、LUT 或整个文件夹" : "视频、LUT 或整个文件夹"}
-            </p>
+            <h2>{t("app.dropTitle")}</h2>
+            <p>{photoMode ? t("app.dropPhoto") : t("app.dropVideo")}</p>
           </div>
         </div>
       )}
@@ -1061,7 +1130,7 @@ export default function App() {
         <dialog
           className="app-dialog"
           ref={dialogRef}
-          aria-label={settingsOpen ? "应用设置" : "使用帮助"}
+          aria-label={settingsOpen ? t("app.ariaSettings") : t("app.ariaHelp")}
           onCancel={() => {
             setSettingsOpen(false);
             setHelpOpen(false);
@@ -1079,12 +1148,14 @@ export default function App() {
                 <span className="eyebrow">
                   {settingsOpen ? "PREFERENCES" : "QUICK START"}
                 </span>
-                <h2>{settingsOpen ? "应用设置" : "从素材到成片"}</h2>
+                <h2>
+                  {settingsOpen ? t("app.ariaSettings") : t("app.helpTitle")}
+                </h2>
               </div>
               <button
                 ref={closeRef}
                 className="icon-button"
-                aria-label="关闭窗口"
+                aria-label={t("app.ariaCloseDialog")}
                 onClick={() => {
                   setSettingsOpen(false);
                   setHelpOpen(false);
@@ -1098,32 +1169,29 @@ export default function App() {
                 <div className="engine-detail">
                   <Cpu size={24} />
                   <div>
-                    <strong>FFmpeg 处理引擎</strong>
+                    <strong>{t("app.ffmpegTitle")}</strong>
                     <span>
                       {w.ffmpeg.status === "ready"
-                        ? "已连接 · 可以预览与导出"
+                        ? t("app.engineConnected")
                         : w.ffmpeg.status === "browser"
-                        ? "需要启动桌面应用"
+                        ? t("app.engineNeedsDesktop")
                         : w.ffmpeg.status === "checking"
-                        ? "正在检测…"
-                        : "处理引擎不可用"}
+                        ? t("app.engineCheckingShort")
+                        : t("app.engineUnavailable")}
                     </span>
                   </div>
                   <span className={`engine-status ${w.ffmpeg.status}`}>
                     <span className="status-dot" />
                   </span>
                 </div>
-                <p className="field-hint">
-                  优先使用应用内的媒体引擎，也可发现系统中的
-                  FFmpeg。手动选择时，同目录下需包含 ffprobe。
-                </p>
+                <p className="field-hint">{t("app.ffmpegHint")}</p>
                 <div className="engine-path">
                   {w.ffmpeg.info?.binary_path ||
                     w.settings.ffmpeg_path ||
-                    "未配置自定义路径"}
+                    t("app.noCustomPath")}
                 </div>
                 {w.ffmpeg.error && (
-                  <p className="queue-error">{w.ffmpeg.error}</p>
+                  <p className="queue-error">{errorMessage(w.ffmpeg.error)}</p>
                 )}
                 <div className="dialog-buttons">
                   <button
@@ -1132,7 +1200,7 @@ export default function App() {
                     onClick={() => void w.pickFfmpegPath()}
                   >
                     <FolderOpen size={15} />
-                    选择 FFmpeg
+                    {t("app.pickFfmpeg")}
                   </button>
                   <button
                     className="button secondary"
@@ -1140,16 +1208,33 @@ export default function App() {
                     onClick={() => void w.refreshEngine()}
                   >
                     <RotateCcw size={14} />
-                    重新检测
+                    {t("app.recheckEngine")}
                   </button>
                 </div>
                 <div className="dialog-note">
-                  <strong>预览与导出</strong>
+                  <strong>{t("app.previewExportTitle")}</strong>
                   <p>
                     {photoMode
-                      ? "照片预览先转换为 sRGB，再应用明确按 sRGB 使用的创意 LUT。快速模式用于选择风格，精确模式和 100% 局部用于检查效果；导出保持原尺寸。首版支持 JPEG、PNG、TIFF，不包含 RAW 显影。"
-                      : "预览使用缩小的真实视频帧与 LUT 运算；导出使用设置的完整分辨率。预览是可寻帧的静止画面。自动模式不转换输入色彩；手动选择 PQ 或 HLG 可转换为 Rec.709 SDR，再应用 LUT。"}
+                      ? t("app.previewPhotoDesc")
+                      : t("app.previewVideoDesc")}
                   </p>
+                </div>
+                <div className="dialog-note">
+                  <strong>{t("app.languageLabel")}</strong>
+                  <select
+                    aria-label={t("app.languageLabel")}
+                    value={normalizeLanguage(w.settings.language)}
+                    disabled={locked}
+                    title={locked ? t("app.languageLocked") : undefined}
+                    onChange={(e) =>
+                      void w.updateSettings({ language: e.target.value })
+                    }
+                  >
+                    <option value="auto">{t("app.languageAuto")}</option>
+                    <option value="en">{t("app.languageEn")}</option>
+                    <option value="zh">{t("app.languageZh")}</option>
+                    <option value="ja">{t("app.languageJa")}</option>
+                  </select>
                 </div>
               </>
             ) : (
@@ -1157,41 +1242,43 @@ export default function App() {
                 <div className="help-step">
                   <span>01</span>
                   <div>
-                    <strong>导入素材与 LUT</strong>
+                    <strong>{t("app.helpStep1Title")}</strong>
                     <p>
                       {photoMode
-                        ? "照片支持多选，也可以拖入文件夹。"
-                        : "视频支持多选，也可以拖入文件夹。"}
-                      切换左侧 LUT 标签页，管理风格资料库。
+                        ? t("app.helpStep1Photo")
+                        : t("app.helpStep1Video")}
+                      {t("app.helpStep1Tail")}
                     </p>
                   </div>
                 </div>
                 <div className="help-step">
                   <span>02</span>
                   <div>
-                    <strong>查看真实调色效果</strong>
+                    <strong>{t("app.helpStep2Title")}</strong>
                     <p>
                       {photoMode
-                        ? "选中照片，选择 LUT 并确认按 sRGB 使用，再调节强度。用中央分割线比较原图与调色画面，或用 100% 局部检查细节。使用「应用到全部照片」统一风格。"
-                        : "选中素材，选择 LUT 并调节强度。拖动时间轴选帧，用中央分割线比较原片与调色画面。使用「应用到全部素材」统一风格。"}
+                        ? t("app.helpStep2Photo")
+                        : t("app.helpStep2Video")}
                     </p>
                   </div>
                 </div>
                 <div className="help-step">
                   <span>03</span>
                   <div>
-                    <strong>批量导出与检查</strong>
-                    <p>
-                      选择格式、质量和输出目录，点击批量导出。导出队列可查看进度、重试失败任务，或定位已完成的文件。
-                    </p>
+                    <strong>{t("app.helpStep3Title")}</strong>
+                    <p>{t("app.helpStep3Desc")}</p>
                   </div>
                 </div>
                 <div className="shortcut-row">
-                  <span>{photoMode ? "导入照片" : "导入视频"}</span>
+                  <span>
+                    {photoMode
+                      ? t("app.helpImportPhotos")
+                      : t("app.helpImportVideos")}
+                  </span>
                   <kbd>⌘ / Ctrl O</kbd>
                 </div>
                 <div className="shortcut-row">
-                  <span>开始导出</span>
+                  <span>{t("app.helpStartExport")}</span>
                   <kbd>⌘ / Ctrl Enter</kbd>
                 </div>
               </>

@@ -1,6 +1,7 @@
 //! Recoverable local-storage startup. Failed user files are never discarded.
 use crate::database::runtime::default_database_path;
 use crate::database::DatabaseManager;
+use crate::types::{ui_err, ui_err_p};
 use crate::utils::config::ConfigManager;
 use crate::utils::path_utils::get_app_data_dir;
 use serde::Serialize;
@@ -39,21 +40,39 @@ pub fn initialize_storage() -> Result<(DatabaseManager, ConfigManager, StartupSt
         Err(error) => {
             status.issues.push(StartupIssue {
                 component: "database".into(),
-                message: format!("无法打开素材资料库，原文件已保留。当前资料库仅在内存中使用，退出后不会保留新记录：{error}"),
+                message: ui_err_p(
+                    "startup.db_open",
+                    serde_json::json!({ "error": error.to_string() }),
+                    format!("无法打开素材资料库，原文件已保留。当前资料库仅在内存中使用，退出后不会保留新记录：{error}"),
+                ),
                 recoverable: true,
             });
             status.temporary_storage = true;
-            DatabaseManager::in_memory().map_err(|error| format!("无法启动临时资料库：{error}"))?
+            DatabaseManager::in_memory().map_err(|error| {
+                ui_err_p(
+                    "startup.temp_db_failed",
+                    serde_json::json!({ "error": error.to_string() }),
+                    format!("无法启动临时资料库：{error}"),
+                )
+            })?
         }
     };
     let config = match ConfigManager::new() {
         Ok(config) => config,
-        Err(error) => ConfigManager::temporary(format!("无法初始化设置目录：{error}")),
+        Err(error) => ConfigManager::temporary(ui_err_p(
+            "startup.config_dir_failed",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法初始化设置目录：{error}"),
+        )),
     };
     if let Some(error) = config.persistence_error() {
         status.issues.push(StartupIssue {
             component: "settings".into(),
-            message: format!("当前使用临时默认设置，原配置已保留：{error}"),
+            message: ui_err_p(
+                "startup.temp_settings",
+                serde_json::json!({ "error": error }),
+                format!("当前使用临时默认设置，原配置已保留：{error}"),
+            ),
             recoverable: true,
         });
         status.temporary_storage = true;
@@ -71,17 +90,34 @@ pub fn startup_status(state: State<'_, StartupState>) -> Result<StartupStatus, S
 }
 
 fn copy_durable_no_clobber(source: &Path, destination: &Path) -> Result<(), String> {
-    let mut source_file = fs::File::open(source)
-        .map_err(|error| format!("无法读取原文件 {}：{error}", source.display()))?;
+    let mut source_file = fs::File::open(source).map_err(|error| {
+        ui_err_p(
+            "startup.read_source",
+            serde_json::json!({ "path": source.display().to_string(), "error": error.to_string() }),
+            format!("无法读取原文件 {}：{error}", source.display()),
+        )
+    })?;
     let mut destination_file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)
-        .map_err(|error| format!("无法创建备份 {}：{error}", destination.display()))?;
+        .map_err(|error| {
+        ui_err_p(
+            "startup.create_backup",
+            serde_json::json!({ "path": destination.display().to_string(), "error": error.to_string() }),
+            format!("无法创建备份 {}：{error}", destination.display()),
+        )
+    })?;
     std::io::copy(&mut source_file, &mut destination_file)
         .and_then(|_| destination_file.flush())
         .and_then(|_| destination_file.sync_all())
-        .map_err(|error| format!("备份失败，原文件已保留：{error}"))?;
+        .map_err(|error| {
+            ui_err_p(
+                "startup.copy_failed",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("备份失败，原文件已保留：{error}"),
+            )
+        })?;
     Ok(())
 }
 
@@ -89,9 +125,21 @@ fn copy_durable_no_clobber(source: &Path, destination: &Path) -> Result<(), Stri
 /// Keeping sidecars under their original adjacent names in the backup directory
 /// allows SQLite recovery tools to replay WAL data later.
 fn backup_files(directory: &Path, names: &[&str]) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    fs::create_dir_all(directory).map_err(|error| format!("无法创建数据目录：{error}"))?;
+    fs::create_dir_all(directory).map_err(|error| {
+        ui_err_p(
+            "startup.mkdir_data",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法创建数据目录：{error}"),
+        )
+    })?;
     let backup_directory = directory.join(format!("recovery-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&backup_directory).map_err(|error| format!("无法创建恢复备份目录：{error}"))?;
+    fs::create_dir(&backup_directory).map_err(|error| {
+        ui_err_p(
+            "startup.mkdir_backup",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法创建恢复备份目录：{error}"),
+        )
+    })?;
     let mut sources = Vec::new();
     for name in names {
         let source = directory.join(name);
@@ -101,24 +149,42 @@ fn backup_files(directory: &Path, names: &[&str]) -> Result<(PathBuf, Vec<PathBu
                 sources.push(source);
             }
             Ok(_) => {
-                return Err(format!(
-                    "{} 不是普通文件，已保留原路径；请手动修复访问权限或路径",
-                    source.display()
+                return Err(ui_err_p(
+                    "startup.not_regular",
+                    serde_json::json!({ "path": source.display().to_string() }),
+                    format!(
+                        "{} 不是普通文件，已保留原路径；请手动修复访问权限或路径",
+                        source.display()
+                    ),
                 ))
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("无法读取原文件信息，原文件已保留：{error}")),
+            Err(error) => {
+                return Err(ui_err_p(
+                    "startup.stat_failed",
+                    serde_json::json!({ "error": error.to_string() }),
+                    format!("无法读取原文件信息，原文件已保留：{error}"),
+                ))
+            }
         }
     }
     #[cfg(unix)]
     fs::File::open(&backup_directory)
         .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("无法同步备份目录，原文件已保留：{error}"))?;
+        .map_err(|error| {
+            ui_err_p(
+                "startup.sync_backup",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("无法同步备份目录，原文件已保留：{error}"),
+            )
+        })?;
     Ok((backup_directory, sources))
 }
 
 fn recover_database(path: &Path, manager: &DatabaseManager) -> Result<PathBuf, String> {
-    let directory = path.parent().ok_or("无法确定数据库目录")?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| ui_err("startup.db_no_parent", "无法确定数据库目录"))?;
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     // Validate a fresh DB first. The failed database has not been moved yet.
     let temporary = tempfile::Builder::new()
@@ -138,7 +204,7 @@ fn recover_database(path: &Path, manager: &DatabaseManager) -> Result<PathBuf, S
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("数据库文件名无效")?;
+        .ok_or_else(|| ui_err("startup.db_bad_name", "数据库文件名无效"))?;
     let wal = format!("{name}-wal");
     let shm = format!("{name}-shm");
     let journal = format!("{name}-journal");
@@ -147,29 +213,32 @@ fn recover_database(path: &Path, manager: &DatabaseManager) -> Result<PathBuf, S
     // any I/O error leaves the original main DB and its backup accessible.
     for source in sources.iter().filter(|source| source.as_path() != path) {
         fs::remove_file(source).map_err(|error| {
-            format!(
-                "原资料库已备份到 {}，但无法移走侧文件：{error}",
-                backup.display()
+            ui_err_p(
+                "startup.sidecar_remove",
+                serde_json::json!({ "backup": backup.display().to_string(), "error": error.to_string() }),
+                format!("原资料库已备份到 {}，但无法移走侧文件：{error}", backup.display()),
             )
         })?;
     }
     temporary.persist(path).map_err(|error| {
-        format!(
-            "原资料库已备份到 {}，无法创建新资料库：{}",
-            backup.display(),
-            error.error
+        ui_err_p(
+            "startup.db_persist",
+            serde_json::json!({ "backup": backup.display().to_string(), "error": error.error.to_string() }),
+            format!("原资料库已备份到 {}，无法创建新资料库：{}", backup.display(), error.error),
         )
     })?;
     let replacement = DatabaseManager::new(path).map_err(|error| {
-        format!(
-            "原资料库已备份到 {}，无法打开新资料库：{error}",
-            backup.display()
+        ui_err_p(
+            "startup.db_open_new",
+            serde_json::json!({ "backup": backup.display().to_string(), "error": error.to_string() }),
+            format!("原资料库已备份到 {}，无法打开新资料库：{error}", backup.display()),
         )
     })?;
     replacement.initialize().map_err(|error| {
-        format!(
-            "原资料库已备份到 {}，无法初始化新资料库：{error}",
-            backup.display()
+        ui_err_p(
+            "startup.db_init_new",
+            serde_json::json!({ "backup": backup.display().to_string(), "error": error.to_string() }),
+            format!("原资料库已备份到 {}，无法初始化新资料库：{error}", backup.display()),
         )
     })?;
     manager
@@ -187,7 +256,7 @@ pub async fn recover_startup_storage(
     tasks: State<'_, crate::core::task::TaskManager>,
 ) -> Result<StartupStatus, String> {
     if guard.exporting(&tasks) {
-        return Err("请等待导出完成后再恢复存储".into());
+        return Err(ui_err("startup.exporting", "请等待导出完成后再恢复存储"));
     }
     let mut status = state.0.lock().map_err(|error| error.to_string())?;
     if status
@@ -211,14 +280,20 @@ pub async fn recover_startup_storage(
         let directory = get_app_data_dir().map_err(|error| error.to_string())?;
         let (backup, sources) = backup_files(&directory, &["config.json"])?;
         for source in sources {
-            fs::remove_file(source)
-                .map_err(|error| format!("设置已备份到 {}，无法重建：{error}", backup.display()))?;
+            fs::remove_file(source).map_err(|error| {
+                ui_err_p(
+                    "startup.settings_remove",
+                    serde_json::json!({ "backup": backup.display().to_string(), "error": error.to_string() }),
+                    format!("设置已备份到 {}，无法重建：{error}", backup.display()),
+                )
+            })?;
         }
         let recovered = ConfigManager::new().map_err(|error| error.to_string())?;
         recovered.save().map_err(|error| {
-            format!(
-                "设置原文件已备份到 {}，保存默认设置失败：{error}",
-                backup.display()
+            ui_err_p(
+                "startup.settings_save",
+                serde_json::json!({ "backup": backup.display().to_string(), "error": error.to_string() }),
+                format!("设置原文件已备份到 {}，保存默认设置失败：{error}", backup.display()),
             )
         })?;
         *config.lock().map_err(|error| error.to_string())? = recovered;

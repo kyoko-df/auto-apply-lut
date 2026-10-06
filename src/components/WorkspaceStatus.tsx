@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { useWorkspace } from "../workspace/useWorkspace";
+import { errorMessage, errorText } from "../workspace/model";
 
 type StartupStatus = {
   issues: { component: string; message: string; recoverable: boolean }[];
@@ -13,6 +15,7 @@ export default function WorkspaceStatus({
 }: {
   workspace: ReturnType<typeof useWorkspace>;
 }) {
+  const { t } = useTranslation();
   const [startup, setStartup] = useState<StartupStatus | null>(null);
   const [exitOpen, setExitOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
@@ -33,7 +36,7 @@ export default function WorkspaceStatus({
       await current.current.flushWorkspace();
       await invoke("request_app_exit");
     } catch (e) {
-      setExitError(String(e));
+      setExitError(errorText(e));
       setExitOpen(true);
       setExiting(false);
       cancelThenExit.current = false;
@@ -53,7 +56,9 @@ export default function WorkspaceStatus({
         if (!disposed)
           current.current.setNotice({
             kind: "error",
-            message: `无法读取启动状态：${String(e)}`,
+            message: t("statusBar.startupReadFailed", {
+              message: errorMessage(e),
+            }),
           });
       });
     for (const [event, callback] of [
@@ -88,7 +93,11 @@ export default function WorkspaceStatus({
     if (!cancelThenExit.current) return;
     if (!w.isExporting) void finishExit();
     else if (w.cancelError) {
-      setExitError(`取消导出失败：${w.cancelError}`);
+      setExitError(
+        t("statusBar.cancelExportFailed", {
+          message: errorMessage(w.cancelError),
+        })
+      );
       setExiting(false);
       cancelThenExit.current = false;
     }
@@ -100,12 +109,12 @@ export default function WorkspaceStatus({
     try {
       const accepted = await current.current.cancelExport();
       if (accepted === false) {
-        setExitError("取消请求未成功，请重试。后台任务仍在运行。");
+        setExitError(t("statusBar.cancelNotAccepted"));
         setExiting(false);
         cancelThenExit.current = false;
       }
     } catch (e) {
-      setExitError(String(e));
+      setExitError(errorText(e));
       setExiting(false);
       cancelThenExit.current = false;
     }
@@ -120,10 +129,12 @@ export default function WorkspaceStatus({
       setStartup(result);
       w.setNotice({
         kind: "success",
-        message: `存储已重建，原文件已备份。临时资料库中新增的 LUT 请重新导入。${result.backup_paths?.join("；") || ""}`,
+        message: t("statusBar.storageRebuilt", {
+          paths: result.backup_paths?.join("；") || "",
+        }),
       });
     } catch (e) {
-      w.setNotice({ kind: "error", message: String(e) });
+      w.setNotice({ kind: "error", message: errorText(e) });
     } finally {
       setRecovering(false);
     }
@@ -134,51 +145,71 @@ export default function WorkspaceStatus({
         <div className="persistence-banner" role="alert">
           <span>
             {startup.temporary_storage
-              ? "当前使用临时存储。"
-              : "启动需要处理。"}
-            {startup.issues.map((i) => i.message).join("；")}
-            操作将备份并重建资料库与设置，临时库新增的 LUT 需要重新导入。
+              ? t("statusBar.usingTempStorage")
+              : t("statusBar.startupAction")}
+            {startup.issues.map((i) => errorMessage(i.message)).join("；")}
+            {t("statusBar.rebuildHint")}
           </span>
           <button
             disabled={recovering || w.isExporting || w.loading}
             onClick={() => void recover()}
           >
-            {recovering ? "正在重建…" : "备份并重建存储"}
+            {recovering
+              ? t("statusBar.rebuilding")
+              : t("statusBar.rebuildStorage")}
           </button>
         </div>
       ) : null}
       {w.settingsError && (
         <div className="persistence-banner" role="alert">
-          <span>设置保存失败，已恢复上次保存的值：{w.settingsError}</span>
-          <button onClick={() => void w.retrySettings()}>重试保存</button>
-          <button onClick={w.discardSettingsError}>放弃修改</button>
+          <span>
+            {t("statusBar.settingsSaveFailed", {
+              message: errorMessage(w.settingsError),
+            })}
+          </span>
+          <button onClick={() => void w.retrySettings()}>
+            {t("statusBar.retrySave")}
+          </button>
+          <button onClick={w.discardSettingsError}>
+            {t("statusBar.discardChanges")}
+          </button>
         </div>
       )}
       {w.workspaceSaveError && (
         <div className="persistence-banner" role="alert">
-          <span>工作区尚未保存：{w.workspaceSaveError}</span>
-          <button onClick={() => void w.retryWorkspaceSave()}>重试</button>
+          <span>
+            {t("statusBar.workspaceUnsaved", {
+              message: errorMessage(w.workspaceSaveError),
+            })}
+          </span>
+          <button onClick={() => void w.retryWorkspaceSave()}>
+            {t("statusBar.retry")}
+          </button>
         </div>
       )}
       {exitOpen && (
         <dialog
           ref={dialog}
           className="app-dialog exit-dialog"
-          aria-label="退出应用"
+          aria-label={t("statusBar.ariaQuit")}
           onCancel={(e) => {
             e.preventDefault();
             if (!exiting) setExitOpen(false);
           }}
         >
-          <h2>{w.isExporting ? "导出仍在进行" : "保存工作区后退出"}</h2>
+          <h2>
+            {w.isExporting
+              ? t("statusBar.quitBusyTitle")
+              : t("statusBar.quitSaveTitle")}
+          </h2>
           <p>
             {exiting
-              ? "正在停止编码并保存工作区，请稍候…"
-              : "退出前会等待编码进程停止并保存工作区。已完成文件会保留，未完成任务可在下次打开时重试。"}
+              ? t("statusBar.quitBusyDesc")
+              : t("statusBar.quitSaveDesc")}
           </p>
           {exitError && (
             <p role="alert" className="queue-error">
-              {exitError}
+              {errorMessage(exitError)}
             </p>
           )}
           <div className="exit-actions">
@@ -187,7 +218,7 @@ export default function WorkspaceStatus({
               disabled={exiting}
               onClick={() => setExitOpen(false)}
             >
-              继续使用
+              {t("statusBar.continueUsing")}
             </button>
             <button
               className="button primary"
@@ -197,10 +228,10 @@ export default function WorkspaceStatus({
               }
             >
               {exiting
-                ? "正在安全退出…"
+                ? t("statusBar.quitting")
                 : w.isExporting
-                  ? "取消导出并退出"
-                  : "重试保存并退出"}
+                ? t("statusBar.cancelAndQuit")
+                : t("statusBar.retrySaveAndQuit")}
             </button>
           </div>
         </dialog>

@@ -6,7 +6,7 @@ use crate::core::photo::{
     PhotoItemOptions, PhotoSettings, SourceInterpretation,
 };
 use crate::core::task::{TaskManager, TaskType};
-use crate::types::LutFormat;
+use crate::types::{ui_err, ui_err_p, LutFormat};
 use crate::utils::config::ConfigManager;
 use crate::utils::logger;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,12 @@ impl BatchLifetime {
     fn try_new() -> Result<Self, String> {
         UNFINISHED_BATCHES
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| "已有批次正在启动或导出，请等待其实际结束".to_string())?;
+            .map_err(|_| {
+                ui_err(
+                    "batch.already_running",
+                    "已有批次正在启动或导出，请等待其实际结束",
+                )
+            })?;
         Ok(Self)
     }
 }
@@ -444,7 +449,7 @@ pub async fn start_batch_processing(
     ));
 
     if request.items.is_empty() || request.items.len() > 10000 {
-        return Err("批次需要包含 1–10000 个素材".to_string());
+        return Err(ui_err("batch.bad_count", "批次需要包含 1–10000 个素材"));
     }
 
     if !request.output_directory.trim().is_empty() {
@@ -479,14 +484,21 @@ pub async fn start_batch_processing(
     let mut normalized_items = Vec::with_capacity(request.items.len());
     for mut item in request.items {
         if !item.intensity.is_finite() || !(0.0..=1.0).contains(&item.intensity) {
-            return Err("LUT intensity must be between 0 and 1".to_string());
+            return Err(ui_err(
+                "batch.bad_intensity",
+                "LUT intensity must be between 0 and 1",
+            ));
         }
         if !fs::metadata(&item.input_path)
             .await
             .map(|m| m.is_file())
             .unwrap_or(false)
         {
-            return Err(format!("Input file does not exist: {}", item.input_path));
+            return Err(ui_err_p(
+                "batch.missing_input",
+                serde_json::json!({ "path": item.input_path }),
+                format!("Input file does not exist: {}", item.input_path),
+            ));
         }
 
         if let Some(options) = &photo_options {
@@ -500,21 +512,32 @@ pub async fn start_batch_processing(
             if matches!(photo.source_interpretation, SourceInterpretation::Embedded)
                 && !matches!(info.color_status.as_str(), "embedded" | "srgb")
             {
-                return Err(format!("{}：请明确指定输入照片的色彩空间", item.input_path));
+                return Err(ui_err_p(
+                    "batch.photo_needs_space",
+                    serde_json::json!({ "path": item.input_path }),
+                    format!("{}：请明确指定输入照片的色彩空间", item.input_path),
+                ));
             }
             if photo
                 .source_version
                 .as_ref()
                 .is_some_and(|v| *v != info.source_version)
             {
-                return Err(format!("{}：源照片已变化，请重新读取", item.input_path));
+                return Err(ui_err_p(
+                    "batch.photo_changed",
+                    serde_json::json!({ "path": item.input_path }),
+                    format!("{}：源照片已变化，请重新读取", item.input_path),
+                ));
             }
             photo.source_version = Some(info.source_version);
             if (item.lut_path.is_some() || !item.lut_paths.is_empty())
                 && item.intensity > 0.0
                 && photo.lut_space != Some(crate::core::photo::PhotoSpace::Srgb)
             {
-                return Err("请明确按 sRGB 输入和输出使用照片 LUT".into());
+                return Err(ui_err(
+                    "batch.photo_lut_srgb",
+                    "请明确按 sRGB 输入和输出使用照片 LUT",
+                ));
             }
         }
 
@@ -532,18 +555,29 @@ pub async fn start_batch_processing(
                 continue;
             }
             if fs::metadata(lut_path).await.is_err() {
-                return Err(format!("LUT file does not exist: {}", lut_path));
+                return Err(ui_err_p(
+                    "batch.missing_lut",
+                    serde_json::json!({ "path": lut_path }),
+                    format!("LUT file does not exist: {}", lut_path),
+                ));
             }
 
-            let validation = lut_manager
-                .validate_lut(lut_path)
-                .await
-                .map_err(|e| format!("Failed to validate LUT {}: {}", lut_path, e))?;
+            let validation = lut_manager.validate_lut(lut_path).await.map_err(|e| {
+                ui_err_p(
+                    "batch.lut_validate_failed",
+                    serde_json::json!({ "path": lut_path, "error": e.to_string() }),
+                    format!("Failed to validate LUT {}: {}", lut_path, e),
+                )
+            })?;
             if !validation.is_valid {
-                return Err(format!(
-                    "Invalid LUT file {}: {}",
-                    lut_path,
-                    validation.errors.join("; ")
+                return Err(ui_err_p(
+                    "batch.lut_invalid",
+                    serde_json::json!({ "path": lut_path, "errors": validation.errors.join("; ") }),
+                    format!(
+                        "Invalid LUT file {}: {}",
+                        lut_path,
+                        validation.errors.join("; ")
+                    ),
                 ));
             }
             validated_luts.insert(lut_path.clone());
@@ -563,7 +597,10 @@ pub async fn start_batch_processing(
                     .and_then(|p| p.lut_fingerprint.as_deref())
                     != Some(hash.as_str())
                 {
-                    return Err("照片 LUT 已变化或尚未确认，请重新确认 sRGB 用法".into());
+                    return Err(ui_err(
+                        "batch.photo_lut_unconfirmed",
+                        "照片 LUT 已变化或尚未确认，请重新确认 sRGB 用法",
+                    ));
                 }
             }
         }
@@ -595,7 +632,10 @@ pub async fn start_batch_processing(
                     .and_then(|p| p.lut_fingerprint.as_deref())
                     != Some(hash.as_str())
                 {
-                    return Err("照片 LUT 在准备期间变化，请重新确认 sRGB 用法".into());
+                    return Err(ui_err(
+                        "batch.photo_lut_changed",
+                        "照片 LUT 在准备期间变化，请重新确认 sRGB 用法",
+                    ));
                 }
                 frozen_luts.insert(path.clone(), frozen.clone());
                 *path = frozen;
@@ -613,7 +653,10 @@ pub async fn start_batch_processing(
             && std::fs::canonicalize(&output_path).ok()
                 == std::fs::canonicalize(&item.input_path).ok()
         {
-            return Err("Output path must differ from input video".to_string());
+            return Err(ui_err(
+                "batch.output_same_as_input",
+                "Output path must differ from input video",
+            ));
         }
         let output_path = available_output_path(Path::new(&output_path), &mut reserved)?
             .to_string_lossy()

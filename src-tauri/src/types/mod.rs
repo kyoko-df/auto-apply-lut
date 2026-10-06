@@ -15,7 +15,7 @@ pub mod video;
 
 // 重新导出常用类型
 pub use batch::{BatchConfig, BatchStatus, BatchTask};
-pub use error::{AppError, AppResult};
+pub use error::{parse_ui_error, ui_err, ui_err_p, AppError, AppResult};
 pub use gpu::{GpuAcceleration, GpuInfo, GpuPerformanceConfig};
 pub use lut::{LutApplyOptions, LutFormat, LutInfo, LutSizeInfo, LutType, LutValidationResult};
 pub use lut_conversion::{

@@ -9,7 +9,7 @@ use crate::database::queries::lut as lut_queries;
 use crate::database::runtime::upsert_lut_info;
 use crate::database::DatabaseManager;
 use crate::types::{
-    BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse, LutInfo,
+    ui_err, BatchConvertLutItemResult, BatchConvertLutsRequest, BatchConvertLutsResponse, LutInfo,
     LutValidationResult,
 };
 use crate::utils::logger;
@@ -247,7 +247,10 @@ pub async fn list_lut_library(
     let mut items = Vec::with_capacity(records.len());
     for record in records {
         if !Path::new(&record.file_path).exists() {
-            items.push(item_from_db_record(&record, Some("文件不存在".to_string())));
+            items.push(item_from_db_record(
+                &record,
+                Some(ui_err("lut.missing", "文件不存在")),
+            ));
             continue;
         }
 

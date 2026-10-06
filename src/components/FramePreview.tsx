@@ -1,4 +1,6 @@
+import { errorText, errorMessage } from "../workspace/model";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeftRight,
@@ -33,6 +35,7 @@ export default function FramePreview({
   quality?: "fast" | "accurate";
   inputColorSpace?: string;
 }) {
+  const { t } = useTranslation();
   const [clientId] = useState(() => `workspace-${crypto.randomUUID()}`);
   const [time, setTime] = useState(0);
   const [mode, setMode] = useState<"split" | "original" | "graded">("split");
@@ -85,7 +88,7 @@ export default function FramePreview({
           setError("");
         }
       } catch (e) {
-        if (!stale) setError(String(e));
+        if (!stale) setError(errorText(e));
       } finally {
         if (!stale) setBusy(false);
       }
@@ -123,35 +126,35 @@ export default function FramePreview({
   };
 
   return (
-    <section className="preview-panel" aria-label="视频对比预览">
+    <section className="preview-panel" aria-label={t("previewVideo.aria")}>
       <div className="panel-toolbar">
         <div className="panel-title">
           <ScanLine size={15} />
-          <span>画面预览</span>
+          <span>{t("previewVideo.title")}</span>
           {clip && (
             <span className="muted toolbar-filename" title={clip.name}>
               / {clip.name}
             </span>
           )}
         </div>
-        <div className="segmented" aria-label="预览模式">
+        <div className="segmented" aria-label={t("previewVideo.modeLabel")}>
           <button
             aria-pressed={mode === "original"}
             onClick={() => setMode("original")}
           >
-            原片
+            {t("previewVideo.original")}
           </button>
           <button
             aria-pressed={mode === "split"}
             onClick={() => setMode("split")}
           >
-            <ArrowLeftRight size={12} /> 对比
+            <ArrowLeftRight size={12} /> {t("previewVideo.compare")}
           </button>
           <button
             aria-pressed={mode === "graded"}
             onClick={() => setMode("graded")}
           >
-            调色后
+            {t("previewVideo.graded")}
           </button>
         </div>
       </div>
@@ -168,10 +171,10 @@ export default function FramePreview({
               <span className="frame-corner br" />
             </div>
             <span className="eyebrow">YOUR NEXT LOOK STARTS HERE</span>
-            <h1>让每一帧，风格一致。</h1>
-            <p>导入视频，选择 LUT，预览并批量导出。</p>
+            <h1>{t("previewVideo.heroTitle")}</h1>
+            <p>{t("previewVideo.heroSub")}</p>
             <button className="button primary" onClick={onImport}>
-              <Film size={15} /> 导入视频 <kbd>⌘ O</kbd>
+              <Film size={15} /> {t("previewVideo.importVideos")} <kbd>⌘ O</kbd>
             </button>
             <span className="empty-formats">MP4 · MOV · MKV · AVI · WEBM</span>
           </div>
@@ -184,46 +187,50 @@ export default function FramePreview({
                 mode={mode}
                 split={split}
                 onSplit={setSplit}
-                originalLabel="原片"
-                originalAlt="原始视频帧"
-                gradedAlt="应用 LUT 后的视频帧"
-                gradedLabel={clip.lutPath ? "LUT 调色" : "原色"}
+                originalLabel={t("previewVideo.original")}
+                originalAlt={t("previewVideo.originalAlt")}
+                gradedAlt={t("previewVideo.gradedAlt")}
+                gradedLabel={
+                  clip.lutPath
+                    ? t("previewVideo.lutGraded")
+                    : t("previewVideo.noLutLabel")
+                }
               />
             )}
             {!frame && !error && (
               <div className="preview-message">
                 <LoaderCircle className="spin" size={24} />
-                <p>正在读取视频画面</p>
+                <p>{t("previewVideo.loading")}</p>
               </div>
             )}
             {error && (
               <div className="preview-message error-message">
                 <Film size={26} />
-                <strong>暂时无法生成预览</strong>
-                <p>{error}</p>
+                <strong>{t("previewVideo.previewFailed")}</strong>
+                <p>{errorMessage(error)}</p>
                 <button
                   className="button secondary"
                   onClick={() => setRetry((n) => n + 1)}
                 >
                   <RotateCcw size={14} />
-                  重新加载
+                  {t("previewVideo.reload")}
                 </button>
               </div>
             )}
             {busy && frame && (
               <span className="preview-loading">
                 <LoaderCircle size={12} className="spin" />
-                更新画面
+                {t("previewVideo.refresh")}
               </span>
             )}
             <div className="preview-bottom-label">
               <span>
                 {clip.info?.width && clip.info?.height
                   ? `${clip.info.width} × ${clip.info.height}`
-                  : "读取规格中"}
+                  : t("previewVideo.readingSpecs")}
               </span>
               <span>
-                帧预览 ·{" "}
+                {t("previewVideo.framePreview")}{" "}
                 {clip.info?.fps
                   ? `${Number(clip.info.fps.toFixed(2))} fps`
                   : "—"}
@@ -240,7 +247,7 @@ export default function FramePreview({
         <input
           className="timeline"
           type="range"
-          aria-label="预览时间点"
+          aria-label={t("previewVideo.ariaSeek")}
           min="0"
           max={maxTime || 1}
           step={1 / fps}
@@ -250,7 +257,7 @@ export default function FramePreview({
         />
         <button
           className="icon-button"
-          aria-label="上一帧"
+          aria-label={t("previewVideo.ariaPrev")}
           disabled={!clip || !duration}
           onClick={() => seek(time - 1 / fps)}
         >
@@ -258,7 +265,7 @@ export default function FramePreview({
         </button>
         <button
           className="icon-button"
-          aria-label="下一帧"
+          aria-label={t("previewVideo.ariaNext")}
           disabled={!clip || !duration}
           onClick={() => seek(time + 1 / fps)}
         >
@@ -266,7 +273,7 @@ export default function FramePreview({
         </button>
         <button
           className="icon-button"
-          aria-label="全屏预览"
+          aria-label={t("previewVideo.ariaFullscreen")}
           disabled={!clip}
           onClick={fullscreen}
         >
@@ -275,13 +282,11 @@ export default function FramePreview({
       </div>
       <div className="preview-footnote">
         <span className="tiny-dot" />
-        {clip
-          ? "拖动时间轴查看任意帧，拖动分割线对比调色效果"
-          : "本地处理 · 原始素材始终保留"}
+        {clip ? t("previewVideo.hintDesktop") : t("previewVideo.hintBrowser")}
         <span>
           {quality === "accurate"
-            ? "准确预览 · 先调色后缩放"
-            : "快速预览 · 先缩放后调色"}
+            ? t("previewVideo.accurateNote")
+            : t("previewVideo.fastNote")}
         </span>
       </div>
     </section>

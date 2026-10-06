@@ -1,3 +1,4 @@
+use super::PhotoStage;
 use super::{check_cancel, codec, color, metadata, PhotoOutput, PhotoSpace, SourceInterpretation};
 use crate::core::ffmpeg::{lut::prepare_luts, photo_bridge::grade_rgb16};
 use std::{
@@ -135,7 +136,7 @@ impl PhotoProcessor {
         if job.output.exists() {
             return Err("照片输出已存在，禁止覆盖".into());
         }
-        progress("读取照片信息");
+        progress(PhotoStage::Read.as_str());
         let header = self.inspect(&job.input, &control.token).await?;
         check_cancel(&control.token)?;
         if job
@@ -157,7 +158,7 @@ impl PhotoProcessor {
             );
         }
         let permit = self.reserve(required * 1024 * 1024, &control.token).await?;
-        progress("解码并转换到 sRGB");
+        progress(PhotoStage::Normalize.as_str());
         let path = job.input.clone();
         let source = job.source.clone();
         let token = control.token.clone();
@@ -181,7 +182,7 @@ impl PhotoProcessor {
             Vec::new()
         };
         check_cancel(&control.token)?;
-        progress("应用 LUT");
+        progress(PhotoStage::Lut.as_str());
         frame.rgb = grade_rgb16(
             engine,
             frame.width,
@@ -193,7 +194,7 @@ impl PhotoProcessor {
         )
         .await?;
         check_cancel(&control.token)?;
-        progress("写入并验证照片");
+        progress(PhotoStage::Write.as_str());
         let path = job.input.clone();
         let destination = job.output.clone();
         let format = job.format;

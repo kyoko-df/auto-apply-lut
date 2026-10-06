@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FramePreview from "./FramePreview";
 import type { Clip } from "../workspace/types";
+import i18n from "../i18n";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const clip: Clip = {
@@ -35,27 +36,46 @@ beforeEach(() => {
   invoke.mockReset();
   invoke.mockResolvedValue(result);
 });
-afterEach(() => vi.useRealTimers());
+afterEach(async () => {
+  vi.useRealTimers();
+  await act(async () => {
+    await i18n.changeLanguage("zh");
+  });
+});
 async function settle() {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(200);
   });
 }
 describe("real frame preview", () => {
+  it("shows decoded errors in English and updates existing errors in Japanese", async () => {
+    await i18n.changeLanguage("en");
+    invoke.mockRejectedValue(
+      new Error("\u001fpreview.timeout\u001f\u001f预览超时")
+    );
+    render(<FramePreview clip={clip} isDesktop onImport={() => {}} />);
+    await settle();
+    expect(screen.getByText(i18n.t("errors.preview.timeout"))).toBeVisible();
+    expect(screen.queryByText(/preview\.timeout/)).toBeNull();
+    await act(async () => {
+      await i18n.changeLanguage("ja");
+    });
+    expect(screen.getByText(i18n.t("errors.preview.timeout"))).toBeVisible();
+  });
   it("debounces LUT changes and submits fractional intensity and selected time", async () => {
     const { rerender } = render(
-      <FramePreview clip={clip} isDesktop onImport={() => {}} />,
+      <FramePreview clip={clip} isDesktop onImport={() => {}} />
     );
     rerender(
       <FramePreview
         clip={{ ...clip, intensity: 40 }}
         isDesktop
         onImport={() => {}}
-      />,
+      />
     );
     await settle();
     expect(
-      invoke.mock.calls.filter(([name]) => name === "generate_video_preview"),
+      invoke.mock.calls.filter(([name]) => name === "generate_video_preview")
     ).toHaveLength(1);
     expect(invoke).toHaveBeenCalledWith("generate_video_preview", {
       request: expect.objectContaining({
@@ -74,12 +94,12 @@ describe("real frame preview", () => {
     });
     expect(screen.getByAltText("应用 LUT 后的视频帧")).toHaveAttribute(
       "src",
-      result.processed_image,
+      result.processed_image
     );
     fireEvent.click(screen.getByRole("button", { name: "原片" }));
     expect(screen.getByAltText("原始视频帧")).toHaveAttribute(
       "src",
-      result.original_image,
+      result.original_image
     );
   });
   it("discards stale responses and cancels an in-flight preview when cleared", async () => {
@@ -89,10 +109,10 @@ describe("real frame preview", () => {
         ? new Promise((resolve) => {
             finish = resolve;
           })
-        : Promise.resolve(),
+        : Promise.resolve()
     );
     const { rerender } = render(
-      <FramePreview clip={clip} isDesktop onImport={() => {}} />,
+      <FramePreview clip={clip} isDesktop onImport={() => {}} />
     );
     await settle();
     rerender(<FramePreview isDesktop onImport={() => {}} />);
@@ -100,7 +120,7 @@ describe("real frame preview", () => {
       finish?.(result);
     });
     expect(
-      screen.queryByAltText("应用 LUT 后的视频帧"),
+      screen.queryByAltText("应用 LUT 后的视频帧")
     ).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("cancel_video_preview", {
       clientId: expect.stringMatching(/^workspace-/),

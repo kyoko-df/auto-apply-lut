@@ -1,4 +1,11 @@
-import { appendClips, clampPercent, isBatchFinished, pathKey } from "./model";
+import {
+  appendClips,
+  clampPercent,
+  isBatchFinished,
+  pathKey,
+  errorMessage,
+} from "./model";
+import i18n from "../i18n";
 import type {
   BatchProgress,
   Clip,
@@ -14,6 +21,27 @@ const text = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 const finite = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
+
+/**
+ * Persisted clip error sentinels. These exact strings are part of the
+ * on-disk snapshot format, so they stay stable across language changes
+ * and are translated only at display time.
+ */
+export const CLIP_ERROR_INTERRUPTED = "上次导出未完成，请重试。";
+export const CLIP_ERROR_APP_EXITED = "应用已退出，此项目待重试。";
+export const CLIP_ERROR_QUEUE_LOST = "后台队列已失效，请重新导出。";
+const CLIP_ERROR_KEYS: Record<string, string> = {
+  [CLIP_ERROR_INTERRUPTED]: "errors.export_incomplete_retry",
+  [CLIP_ERROR_APP_EXITED]: "errors.app_exited_retry",
+  [CLIP_ERROR_QUEUE_LOST]: "notices.queueLost",
+};
+
+/** Translates persisted sentinel errors; other stored text passes through. */
+export function clipErrorText(error: string | undefined): string | undefined {
+  if (!error) return error;
+  const key = CLIP_ERROR_KEYS[error];
+  return key ? i18n.t(key) : errorMessage(error);
+}
 
 function restoreInfo(value: unknown, clip: Clip): VideoInfo | undefined {
   if (!record(value)) return undefined;
@@ -69,7 +97,7 @@ function restoreBatch(value: unknown): BatchProgress | null {
         output_path: text(item.output_path) ?? "",
         status: unfinished ? "cancelled" : String(item.status).toLowerCase(),
         progress: clampPercent(finite(item.progress) ?? 0),
-        error: unfinished ? "应用已退出，此项目待重试。" : text(item.error),
+        error: unfinished ? CLIP_ERROR_APP_EXITED : text(item.error),
         encoder: text(item.encoder),
         speed: finite(item.speed),
         eta_seconds: undefined,
@@ -99,25 +127,25 @@ export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
     (value.version !== 1 && value.version !== 2) ||
     !Array.isArray(value.clips)
   )
-    throw new Error("工作区格式无法识别，原文件已保留。");
+    throw new Error(i18n.t("errors.workspace_bad_format"));
   const seen = new Set<string>();
   const clips: Clip[] = [];
   for (const raw of value.clips) {
     if (!record(raw) || typeof raw.path !== "string")
-      throw new Error("工作区素材记录损坏，原文件已保留。");
+      throw new Error(i18n.t("errors.workspace_bad_clip"));
     if (
       value.version === 2 &&
       raw.kind !== undefined &&
       !["photo", "video"].includes(String(raw.kind))
     )
-      throw new Error("工作区媒体类型无法识别，原文件已保留。");
+      throw new Error(i18n.t("errors.workspace_bad_media"));
     const base = appendClips(
       [],
       [raw.path],
       100,
       value.version === 2 && raw.kind === "photo" ? "photo" : "video"
     )[0];
-    if (!base) throw new Error("工作区包含无法识别的素材记录，原文件已保留。");
+    if (!base) throw new Error(i18n.t("errors.workspace_unknown_record"));
     if (seen.has(base.id)) continue;
     seen.add(base.id);
     const interrupted = raw.status === "queued" || raw.status === "processing";
@@ -141,7 +169,7 @@ export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
             .filter((path): path is string => typeof path === "string")
             .slice(-20)
         : undefined,
-      error: interrupted ? "上次导出未完成，请重试。" : text(raw.error),
+      error: interrupted ? CLIP_ERROR_INTERRUPTED : text(raw.error),
       encoder: text(raw.encoder),
     };
     clips.push(

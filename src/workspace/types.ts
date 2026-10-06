@@ -215,6 +215,7 @@ export interface ScanResult {
 export interface Notice {
   kind: "info" | "success" | "error";
   message: string;
+  tag?: string;
 }
 
 export type LookPatch = Pick<

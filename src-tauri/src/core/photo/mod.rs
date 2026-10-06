@@ -6,6 +6,25 @@ pub mod processor;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy)]
+pub enum PhotoStage {
+    Read,
+    Normalize,
+    Lut,
+    Write,
+}
+
+impl PhotoStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "photo.read",
+            Self::Normalize => "photo.normalize",
+            Self::Lut => "photo.lut",
+            Self::Write => "photo.write",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PhotoSpace {

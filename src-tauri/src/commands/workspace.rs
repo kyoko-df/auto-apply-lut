@@ -1,5 +1,6 @@
 //! Bounded workspace snapshots and coordinated application shutdown.
 use crate::core::task::{TaskManager, TaskStatus};
+use crate::types::{ui_err, ui_err_p};
 use crate::utils::path_utils::get_app_data_dir;
 use serde_json::Value;
 use std::fs;
@@ -30,13 +31,18 @@ impl Default for WorkspaceStore {
 
 fn ensure_regular_file(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if !metadata.file_type().is_file() => Err(format!(
-            "工作区路径不是普通文件，原路径已保留：{}",
-            path.display()
+        Ok(metadata) if !metadata.file_type().is_file() => Err(ui_err_p(
+            "ws.not_regular",
+            serde_json::json!({ "path": path.display().to_string() }),
+            format!("工作区路径不是普通文件，原路径已保留：{}", path.display()),
         )),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("无法检查工作区文件：{error}")),
+        Err(error) => Err(ui_err_p(
+            "ws.check_failed",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法检查工作区文件：{error}"),
+        )),
     }
 }
 
@@ -45,14 +51,29 @@ fn load_snapshot(path: &Path) -> Result<Option<Value>, String> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("无法读取工作区，原文件已保留：{error}")),
+        Err(error) => {
+            return Err(ui_err_p(
+                "ws.read_failed",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("无法读取工作区，原文件已保留：{error}"),
+            ))
+        }
     };
     let mut bytes = Vec::new();
     file.take(MAX_WORKSPACE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("无法读取工作区，原文件已保留：{error}"))?;
+        .map_err(|error| {
+            ui_err_p(
+                "ws.read_failed",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("无法读取工作区，原文件已保留：{error}"),
+            )
+        })?;
     if bytes.len() as u64 > MAX_WORKSPACE_BYTES {
-        return Err("工作区文件超过 8 MB，原文件已保留，请先备份并移走该文件".into());
+        return Err(ui_err(
+            "ws.too_large",
+            "工作区文件超过 8 MB，原文件已保留，请先备份并移走该文件",
+        ));
     }
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(value) if value.is_object() => Ok(Some(value)),
@@ -69,15 +90,33 @@ fn load_snapshot(path: &Path) -> Result<Option<Value>, String> {
                 .write(true)
                 .create_new(true)
                 .open(&backup)
-                .map_err(|error| format!("工作区损坏且无法备份，原文件已保留：{error}"))?;
+                .map_err(|error| {
+                    ui_err_p(
+                        "ws.backup_failed",
+                        serde_json::json!({ "error": error.to_string() }),
+                        format!("工作区损坏且无法备份，原文件已保留：{error}"),
+                    )
+                })?;
             file.write_all(&bytes)
                 .and_then(|_| file.sync_all())
-                .map_err(|error| format!("工作区备份失败，原文件已保留：{error}"))?;
-            fs::remove_file(path)
-                .map_err(|error| format!("工作区已备份但无法恢复，原文件已保留：{error}"))?;
-            Err(format!(
-                "工作区数据损坏，已保留备份 {}：{reason}",
-                backup.display()
+                .map_err(|error| {
+                    ui_err_p(
+                        "ws.backup_write",
+                        serde_json::json!({ "error": error.to_string() }),
+                        format!("工作区备份失败，原文件已保留：{error}"),
+                    )
+                })?;
+            fs::remove_file(path).map_err(|error| {
+                ui_err_p(
+                    "ws.restore_failed",
+                    serde_json::json!({ "error": error.to_string() }),
+                    format!("工作区已备份但无法恢复，原文件已保留：{error}"),
+                )
+            })?;
+            Err(ui_err_p(
+                "ws.corrupt",
+                serde_json::json!({ "backup": backup.display().to_string(), "reason": reason }),
+                format!("工作区数据损坏，已保留备份 {}：{reason}", backup.display()),
             ))
         }
     }
@@ -85,47 +124,94 @@ fn load_snapshot(path: &Path) -> Result<Option<Value>, String> {
 
 fn save_snapshot(path: &Path, snapshot: &Value) -> Result<(), String> {
     if !snapshot.is_object() {
-        return Err("工作区必须是 JSON 对象".into());
+        return Err(ui_err("ws.not_object", "工作区必须是 JSON 对象"));
     }
     let content = serde_json::to_vec(snapshot).map_err(|error| error.to_string())?;
     if content.len() as u64 > MAX_WORKSPACE_BYTES {
-        return Err("工作区超过 8 MB，无法保存；请减少素材数量".into());
+        return Err(ui_err(
+            "ws.too_large_save",
+            "工作区超过 8 MB，无法保存；请减少素材数量",
+        ));
     }
     ensure_regular_file(path)?;
-    let parent = path.parent().ok_or("无法解析工作区目录")?;
-    fs::create_dir_all(parent).map_err(|error| format!("无法创建工作区目录：{error}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| ui_err("ws.no_parent", "无法解析工作区目录"))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        ui_err_p(
+            "ws.mkdir_failed",
+            serde_json::json!({ "error": error.to_string() }),
+            format!("无法创建工作区目录：{error}"),
+        )
+    })?;
     if snapshot.get("version").and_then(Value::as_u64) == Some(2) && path.exists() {
-        let original =
-            fs::read(path).map_err(|error| format!("迁移前无法读取原工作区：{error}"))?;
+        let original = fs::read(path).map_err(|error| {
+            ui_err_p(
+                "ws.migrate_read",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("迁移前无法读取原工作区：{error}"),
+            )
+        })?;
         if original.len() as u64 > MAX_WORKSPACE_BYTES {
-            return Err("原工作区超过大小限制，未执行迁移".into());
+            return Err(ui_err(
+                "ws.migrate_too_large",
+                "原工作区超过大小限制，未执行迁移",
+            ));
         }
-        let previous: Value =
-            serde_json::from_slice(&original).map_err(|_| "原工作区无法解析，未执行迁移")?;
+        let previous: Value = serde_json::from_slice(&original)
+            .map_err(|_| ui_err("ws.migrate_unparseable", "原工作区无法解析，未执行迁移"))?;
         if previous.get("version").and_then(Value::as_u64) == Some(1) {
             let backup = parent.join(format!("workspace.v1-{}.json", uuid::Uuid::new_v4()));
             let mut file = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&backup)
-                .map_err(|error| format!("无法保留旧工作区，未执行迁移：{error}"))?;
+                .map_err(|error| {
+                    ui_err_p(
+                        "ws.migrate_keep",
+                        serde_json::json!({ "error": error.to_string() }),
+                        format!("无法保留旧工作区，未执行迁移：{error}"),
+                    )
+                })?;
             file.write_all(&original)
                 .and_then(|_| file.sync_all())
-                .map_err(|error| format!("旧工作区备份失败，未执行迁移：{error}"))?;
+                .map_err(|error| {
+                    ui_err_p(
+                        "ws.migrate_backup",
+                        serde_json::json!({ "error": error.to_string() }),
+                        format!("旧工作区备份失败，未执行迁移：{error}"),
+                    )
+                })?;
         }
     }
     let mut temporary = tempfile::Builder::new()
         .prefix(".workspace-")
         .suffix(".tmp")
         .tempfile_in(parent)
-        .map_err(|error| format!("无法创建工作区临时文件：{error}"))?;
+        .map_err(|error| {
+            ui_err_p(
+                "ws.temp_failed",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("无法创建工作区临时文件：{error}"),
+            )
+        })?;
     temporary
         .write_all(&content)
         .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|error| format!("工作区写入失败，原文件已保留：{error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("工作区保存失败，原文件已保留：{}", error.error))?;
+        .map_err(|error| {
+            ui_err_p(
+                "ws.write_failed",
+                serde_json::json!({ "error": error.to_string() }),
+                format!("工作区写入失败，原文件已保留：{error}"),
+            )
+        })?;
+    temporary.persist(path).map_err(|error| {
+        ui_err_p(
+            "ws.persist_failed",
+            serde_json::json!({ "error": error.error.to_string() }),
+            format!("工作区保存失败，原文件已保留：{}", error.error),
+        )
+    })?;
     #[cfg(unix)]
     if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
         tracing::warn!("工作区已保存，但目录同步失败：{error}");
@@ -155,8 +241,10 @@ pub async fn save_workspace(
 ) -> Result<(), String> {
     let blocked = store.lock.lock().map_err(|error| error.to_string())?;
     if let Some(reason) = &*blocked {
-        return Err(format!(
-            "工作区原文件需要手动恢复后重启应用，已停止自动保存：{reason}"
+        return Err(ui_err_p(
+            "ws.autosave_blocked",
+            serde_json::json!({ "reason": reason.clone() }),
+            format!("工作区原文件需要手动恢复后重启应用，已停止自动保存：{reason}"),
         ));
     }
     save_snapshot(store.path.as_ref().map_err(Clone::clone)?, &snapshot)
@@ -216,7 +304,10 @@ pub fn request_app_exit(
     task_manager: State<'_, TaskManager>,
 ) -> Result<(), String> {
     if guard.exporting(&task_manager) {
-        return Err("请先取消并等待导出结束，再退出应用".into());
+        return Err(ui_err(
+            "app.exit_exporting",
+            "请先取消并等待导出结束，再退出应用",
+        ));
     }
     guard.approved.store(true, Ordering::SeqCst);
     app.exit(0);

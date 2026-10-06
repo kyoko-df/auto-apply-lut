@@ -1,4 +1,6 @@
+import { errorText, errorMessage } from "../workspace/model";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Image as ImageIcon,
@@ -29,6 +31,7 @@ export default function PhotoPreview({
   alphaPolicy: AlphaPolicy;
   onRefreshMetadata?: () => void;
 }) {
+  const { t } = useTranslation();
   const [clientId] = useState(() => `photo-${crypto.randomUUID()}`);
   const [mode, setMode] = useState<ComparisonMode>("split");
   const [split, setSplit] = useState(50);
@@ -139,7 +142,7 @@ export default function PhotoPreview({
           setFrame({ key, data });
       } catch (e) {
         if (!stale && generation === requestGeneration.current)
-          setError(String(e));
+          setError(errorText(e));
       } finally {
         if (!stale && generation === requestGeneration.current) setBusy(false);
       }
@@ -173,18 +176,18 @@ export default function PhotoPreview({
       y: Math.max(0, Math.min(height - regionHeight, p.y + dy)),
     }));
   return (
-    <section className="preview-panel" aria-label="照片对比预览">
+    <section className="preview-panel" aria-label={t("previewPhoto.aria")}>
       <div className="panel-toolbar">
         <div className="panel-title">
           <ScanLine size={15} />
-          <span>照片预览</span>
+          <span>{t("previewPhoto.title")}</span>
           {clip && (
             <span className="muted toolbar-filename" title={clip.name}>
               / {clip.name}
             </span>
           )}
         </div>
-        <div className="segmented" aria-label="预览模式">
+        <div className="segmented" aria-label={t("previewPhoto.modeLabel")}>
           {(["original", "split", "graded"] as const).map((value) => (
             <button
               key={value}
@@ -192,10 +195,10 @@ export default function PhotoPreview({
               onClick={() => setMode(value)}
             >
               {value === "original"
-                ? "原图"
+                ? t("previewPhoto.original")
                 : value === "split"
-                ? "对比"
-                : "调色后"}
+                ? t("previewPhoto.compare")
+                : t("previewPhoto.graded")}
             </button>
           ))}
         </div>
@@ -207,9 +210,7 @@ export default function PhotoPreview({
         }`}
         tabIndex={zoom === "region" ? 0 : undefined}
         aria-label={
-          zoom === "region"
-            ? "100% 局部照片，可以拖动或用方向键移动"
-            : undefined
+          zoom === "region" ? t("previewPhoto.regionAria") : undefined
         }
         onKeyDown={(e) => {
           if (
@@ -274,20 +275,20 @@ export default function PhotoPreview({
           <div className="empty-preview">
             <ImageIcon size={42} strokeWidth={1} />
             <span className="eyebrow">PHOTO COLOR WORKSPACE</span>
-            <h1>为照片，找到同一种风格。</h1>
-            <p>导入照片，比较 LUT 效果，再批量导出。</p>
+            <h1>{t("previewPhoto.heroTitle")}</h1>
+            <p>{t("previewPhoto.heroSub")}</p>
             <button className="button primary" onClick={onImport}>
-              导入照片 <kbd>⌘ O</kbd>
+              {t("previewPhoto.importPhotos")} <kbd>⌘ O</kbd>
             </button>
             <span className="empty-formats">JPEG · PNG · TIFF</span>
           </div>
         ) : !isDesktop ? (
           <div className="preview-message">
-            照片预览需要桌面应用，浏览器仅提供界面预览。
+            {t("previewPhoto.needsDesktop")}
           </div>
         ) : error || clip.metadataError ? (
           <div className="preview-message">
-            <p>{error || clip.metadataError}</p>
+            <p>{errorMessage(error || clip.metadataError)}</p>
             <button
               className="button secondary"
               onClick={() => {
@@ -296,7 +297,7 @@ export default function PhotoPreview({
               }}
             >
               <RotateCcw size={14} />
-              重试预览
+              {t("previewPhoto.retry")}
             </button>
           </div>
         ) : shown ? (
@@ -307,7 +308,9 @@ export default function PhotoPreview({
             split={split}
             onSplit={setSplit}
             gradedLabel={
-              clip.lutPath && clip.intensity > 0 ? "LUT 调色" : "原色"
+              clip.lutPath && clip.intensity > 0
+                ? t("previewPhoto.lutGraded")
+                : t("previewPhoto.noLutLabel")
             }
             imageSize={{ width: shown.width, height: shown.height }}
             pixelSize={
@@ -322,44 +325,42 @@ export default function PhotoPreview({
         ) : (
           <div className="preview-message">
             {busy
-              ? "正在生成照片预览…"
-              : "请选择照片的输入色彩空间与 LUT 用法。"}
+              ? t("previewPhoto.rendering")
+              : t("previewPhoto.configureFirst")}
           </div>
         )}
         {busy && clip && (
           <div className="preview-loading">
             <LoaderCircle size={16} className="spin" />
-            <span>读取照片</span>
+            <span>{t("previewPhoto.readingPhoto")}</span>
           </div>
         )}
       </div>
       <div className="photo-preview-footer">
-        <div className="segmented" aria-label="照片缩放">
+        <div className="segmented" aria-label={t("previewPhoto.zoomLabel")}>
           <button
             aria-pressed={zoom === "fit"}
             onClick={() => chooseZoom("fit")}
           >
-            适应窗口
+            {t("previewPhoto.fitWindow")}
           </button>
           <button
             aria-pressed={zoom === "region"}
             disabled={!width || !height}
             title={
-              !width
-                ? "等待照片尺寸读取完成"
-                : "查看原尺寸局部，可拖动或用方向键移动"
+              !width ? t("previewPhoto.waitSize") : t("previewPhoto.regionHint")
             }
             onClick={() => chooseZoom("region")}
           >
-            100% 局部
+            {t("previewPhoto.region100")}
           </button>
         </div>
         <span>
           {zoom === "region"
-            ? "拖动查看 · 精确效果"
+            ? t("previewPhoto.dragAccurate")
             : quality === "fast"
-            ? "快速预览 · 近似效果"
-            : "精确预览"}
+            ? t("previewPhoto.fastApprox")
+            : t("previewPhoto.accurate")}
         </span>
         {clip && (
           <button
@@ -367,7 +368,7 @@ export default function PhotoPreview({
             disabled={busy || !isDesktop}
             onClick={() => setRetry((v) => v + 1)}
           >
-            刷新
+            {t("previewPhoto.refresh")}
           </button>
         )}
       </div>

@@ -1,3 +1,4 @@
+import i18n, { normalizeLanguage } from "../i18n";
 import type {
   AppSettings,
   BatchProgress,
@@ -7,6 +8,7 @@ import type {
   LutLibraryItem,
   MediaMode,
   PhotoSettings,
+  PhotoInfo,
 } from "./types";
 
 export const VIDEO_EXTENSIONS = [
@@ -35,7 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hardware_acceleration: true,
   log_level: "info",
   ui_theme: "dark",
-  language: "zh-CN",
+  language: "auto",
   output_format: "mp4",
   video_codec: "libx264",
   audio_codec: "aac",
@@ -105,6 +107,7 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
       Math.max(1, Math.round(Number(merged.max_concurrent_tasks) || 2))
     ),
     lut_intensity: clampPercent(merged.lut_intensity),
+    language: normalizeLanguage(merged.language),
     // The current export UI promises source frame rate and quality-based encoding.
     // Retired controls must not silently override that promise via an old config.
     fps: null,
@@ -266,7 +269,7 @@ export function mergeLuts(
 export function buildBatchRequest(clips: Clip[], settings: AppSettings) {
   if (clips.some((clip) => clip.kind === "photo")) {
     if (clips.some((clip) => clip.kind !== "photo"))
-      throw new Error("照片和视频不能在同一个批次导出");
+      throw new Error(i18n.t("errors.mixed_media_batch"));
     return {
       items: clips.map((clip) => ({
         input_path: clip.path,
@@ -433,8 +436,81 @@ export function reconcileBatch(clips: Clip[], progress: BatchProgress): Clip[] {
   return changed ? next : clips;
 }
 
-export function errorMessage(error: unknown): string {
+const UI_ERROR_MARK = "\u001f";
+
+/**
+ * Backend errors may carry the structured protocol
+ * `\x1f{code}\x1f{params-json}\x1f{message}` through the plain String IPC
+ * channel. Translate via `errors.{code}` when the key exists; otherwise keep
+ * the backend fallback message (itself Chinese for old callers).
+ */
+export function errorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
-  return "发生未知错误，请重试。";
+  return `${UI_ERROR_MARK}unknown${UI_ERROR_MARK}${UI_ERROR_MARK}Unknown error`;
+}
+
+export function errorMessage(error: unknown, depth = 0): string {
+  const text = errorText(error);
+  if (depth >= 8) return i18n.t("errors.unknown");
+
+  if (!text.startsWith(UI_ERROR_MARK)) return text;
+  const parts = text.slice(1).split(UI_ERROR_MARK);
+  if (parts.length < 3) return text;
+  const [code, paramsJson, ...rest] = parts;
+  const message = rest.join(UI_ERROR_MARK);
+  if (!code) return message;
+  let params: Record<string, unknown> = {};
+  if (paramsJson) {
+    try {
+      const parsed: unknown = JSON.parse(paramsJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        params = parsed as Record<string, unknown>;
+      }
+    } catch {
+      return message;
+    }
+  }
+  for (const name of ["error", "reason"]) {
+    if (
+      typeof params[name] === "string" &&
+      params[name].startsWith(UI_ERROR_MARK)
+    ) {
+      params[name] = errorMessage(params[name], depth + 1);
+    }
+  }
+  const key = `errors.${code}`;
+  return i18n.exists(key) ? i18n.t(key, { ...params, message }) : message;
+}
+
+const PHOTO_STAGE_KEYS: Record<string, string> = {
+  "photo.read": "photoStage.read",
+  "photo.normalize": "photoStage.normalize",
+  "photo.lut": "photoStage.lut",
+  "photo.write": "photoStage.write",
+  // Existing snapshots keep their original stage text.
+  读取照片信息: "photoStage.read",
+  "解码并转换到 sRGB": "photoStage.normalize",
+  "应用 LUT": "photoStage.lut",
+  写入并验证照片: "photoStage.write",
+};
+
+export function processingMessage(
+  message: string | undefined
+): string | undefined {
+  if (!message) return message;
+  const key = PHOTO_STAGE_KEYS[message];
+  return key ? i18n.t(key) : errorMessage(message);
+}
+
+export function photoProfileText(info: PhotoInfo | undefined): string {
+  if (!info) return i18n.t("photoInspector.profilePending");
+  if (info.color_status === "unknown")
+    return i18n.t("photoInspector.profileUnknown");
+  if (info.color_status === "invalid")
+    return i18n.t("photoInspector.profileInvalid");
+  if (info.color_status === "srgb") return "sRGB";
+  return info.color_profile && info.color_profile !== "嵌入 ICC"
+    ? info.color_profile
+    : i18n.t("photoInspector.profileEmbedded");
 }

@@ -10,7 +10,11 @@ pub fn get_app_data_dir() -> AppResult<PathBuf> {
     #[cfg(debug_assertions)]
     if let Some(directory) = env::var_os("LUTLAB_DATA_DIR") {
         let path = PathBuf::from(directory);
-        if !path.is_absolute() { return Err(AppError::InvalidInput("LUTLAB_DATA_DIR 必须是绝对路径".into())); }
+        if !path.is_absolute() {
+            return Err(AppError::InvalidInput(
+                "LUTLAB_DATA_DIR 必须是绝对路径".into(),
+            ));
+        }
         return Ok(path);
     }
     let app_name = "auto-apply-lut";
