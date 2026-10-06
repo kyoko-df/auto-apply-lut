@@ -10,14 +10,9 @@ import {
   RotateCcw,
   ScanLine,
 } from "lucide-react";
-import type { Clip } from "../workspace/types";
+import ImageComparison from "./ImageComparison";
+import type { VideoClip, PreviewFrame } from "../workspace/types";
 
-interface PreviewFrame {
-  original_image: string;
-  processed_image: string;
-  time_seconds: number;
-  cached: boolean;
-}
 export const timecode = (seconds = 0) => {
   const total = Math.max(0, Math.floor(seconds));
   return `${Math.floor(total / 60)
@@ -32,7 +27,7 @@ export default function FramePreview({
   quality = "fast",
   inputColorSpace = "auto",
 }: {
-  clip?: Clip;
+  clip?: VideoClip;
   isDesktop: boolean;
   onImport: () => void;
   quality?: "fast" | "accurate";
@@ -115,7 +110,7 @@ export default function FramePreview({
       if (isDesktop)
         void invoke("cancel_video_preview", { clientId }).catch(() => {});
     },
-    [isDesktop, clientId],
+    [isDesktop, clientId]
   );
   const seek = (value: number) => {
     const next = Math.min(maxTime, Math.max(0, value));
@@ -183,50 +178,17 @@ export default function FramePreview({
         ) : (
           <>
             {frame && !error && (
-              <div className="frame-images">
-                <img
-                  src={
-                    mode === "original"
-                      ? frame.original_image
-                      : frame.processed_image
-                  }
-                  alt={
-                    mode === "original" ? "原始视频帧" : "应用 LUT 后的视频帧"
-                  }
-                  draggable={false}
-                />
-                {mode === "split" && (
-                  <img
-                    className="original-overlay"
-                    src={frame.original_image}
-                    alt="对比中的原始画面"
-                    style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
-                    draggable={false}
-                  />
-                )}
-                {mode === "split" && (
-                  <>
-                    <span className="frame-label before">原片</span>
-                    <span className="frame-label after">
-                      {clip.lutPath ? "LUT 调色" : "原色"}
-                    </span>
-                    <div className="split-line" style={{ left: `${split}%` }}>
-                      <span>
-                        <ArrowLeftRight size={15} />
-                      </span>
-                    </div>
-                    <input
-                      className="split-control"
-                      type="range"
-                      aria-label="前后对比位置"
-                      min="0"
-                      max="100"
-                      value={split}
-                      onChange={(e) => setSplit(Number(e.target.value))}
-                    />
-                  </>
-                )}
-              </div>
+              <ImageComparison
+                original={frame.original_image}
+                processed={frame.processed_image}
+                mode={mode}
+                split={split}
+                onSplit={setSplit}
+                originalLabel="原片"
+                originalAlt="原始视频帧"
+                gradedAlt="应用 LUT 后的视频帧"
+                gradedLabel={clip.lutPath ? "LUT 调色" : "原色"}
+              />
             )}
             {!frame && !error && (
               <div className="preview-message">

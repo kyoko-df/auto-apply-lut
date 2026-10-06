@@ -94,6 +94,26 @@ fn save_snapshot(path: &Path, snapshot: &Value) -> Result<(), String> {
     ensure_regular_file(path)?;
     let parent = path.parent().ok_or("无法解析工作区目录")?;
     fs::create_dir_all(parent).map_err(|error| format!("无法创建工作区目录：{error}"))?;
+    if snapshot.get("version").and_then(Value::as_u64) == Some(2) && path.exists() {
+        let original =
+            fs::read(path).map_err(|error| format!("迁移前无法读取原工作区：{error}"))?;
+        if original.len() as u64 > MAX_WORKSPACE_BYTES {
+            return Err("原工作区超过大小限制，未执行迁移".into());
+        }
+        let previous: Value =
+            serde_json::from_slice(&original).map_err(|_| "原工作区无法解析，未执行迁移")?;
+        if previous.get("version").and_then(Value::as_u64) == Some(1) {
+            let backup = parent.join(format!("workspace.v1-{}.json", uuid::Uuid::new_v4()));
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&backup)
+                .map_err(|error| format!("无法保留旧工作区，未执行迁移：{error}"))?;
+            file.write_all(&original)
+                .and_then(|_| file.sync_all())
+                .map_err(|error| format!("旧工作区备份失败，未执行迁移：{error}"))?;
+        }
+    }
     let mut temporary = tempfile::Builder::new()
         .prefix(".workspace-")
         .suffix(".tmp")

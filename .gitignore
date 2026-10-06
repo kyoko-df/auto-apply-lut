@@ -28,7 +28,7 @@ src-tauri/resources/bin/macos/
 src-tauri/resources/bin/windows/
 src-tauri/resources/bin/linux/
 
-docs/benchmarks/
+docs/*
 .pnpm-store/*
 tmp/*
 

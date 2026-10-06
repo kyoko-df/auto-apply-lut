@@ -34,13 +34,13 @@ export default function ExportInspector({
 }: ExportInspectorProps) {
   const [advanced, setAdvanced] = useState(false);
   const [exportScope, setExportScope] = useState<"pending" | "selected">(
-    "pending",
+    "pending"
   );
   const locked = w.isExporting || w.loading;
   const active = w.activeClip;
   const activeLut = w.luts.find((lut) => lut.path === active?.lutPath);
   const exportable = w.clips.filter(
-    (clip) => clip.status !== "completed",
+    (clip) => clip.status !== "completed"
   ).length;
   const selectedSet = new Set(w.selectedIds);
   const selected = w.clips.filter((clip) => selectedSet.has(clip.id));
@@ -50,7 +50,7 @@ export default function ExportInspector({
   const selectedExport = exportScope === "selected";
   const exportCount = selectedExport ? selected.length : exportable;
   const hdrInput = ["smpte2084", "arib-std-b67"].includes(
-    active?.info?.color_transfer ?? "",
+    active?.kind !== "photo" ? active?.info?.color_transfer ?? "" : ""
   );
   const selectLut = (path: string | null) => {
     if (active) w.setClipLook(active.id, { lutPath: path });
@@ -112,8 +112,8 @@ export default function ExportInspector({
               {activeLut
                 ? `${activeLut.format} · ${activeLut.category}`
                 : active?.lutPath
-                  ? "来自恢复的工作区，导出前将校验原文件"
-                  : "选择适合素材色彩空间的 LUT"}
+                ? "来自恢复的工作区，导出前将校验原文件"
+                : "选择适合素材色彩空间的 LUT"}
             </span>
           </div>
           <label className="field-label intensity-label" htmlFor="intensity">
@@ -216,9 +216,9 @@ export default function ExportInspector({
                     w.settings.video_codec === "prores_ks"
                       ? { video_codec: "libx264", audio_codec: "aac" }
                       : e.target.value === "mp4" &&
-                          w.settings.audio_codec === "pcm_s16le"
-                        ? { audio_codec: "aac" }
-                        : {}),
+                        w.settings.audio_codec === "pcm_s16le"
+                      ? { audio_codec: "aac" }
+                      : {}),
                   })
                 }
               >
@@ -244,12 +244,12 @@ export default function ExportInspector({
                           output_bit_depth: "10",
                         }
                       : w.settings.video_codec === "prores_ks"
-                        ? {
-                            audio_codec: "aac",
-                            output_bit_depth:
-                              e.target.value === "libx265" ? "10" : "8",
-                          }
-                        : {}),
+                      ? {
+                          audio_codec: "aac",
+                          output_bit_depth:
+                            e.target.value === "libx265" ? "10" : "8",
+                        }
+                      : {}),
                   })
                 }
               >
@@ -481,8 +481,8 @@ export default function ExportInspector({
             {w.settings.video_codec === "libx265"
               ? "HEVC"
               : w.settings.video_codec === "prores_ks"
-                ? "ProRes"
-                : "H.264"}
+              ? "ProRes"
+              : "H.264"}
           </span>
         </div>
         {!w.isExporting && (selected.length > 0 || selectedExport) && (
@@ -528,7 +528,7 @@ export default function ExportInspector({
             }
             onClick={
               selectedExport
-                ? (onExportSelected ?? (() => void w.exportSelected()))
+                ? onExportSelected ?? (() => void w.exportSelected())
                 : onStartExport
             }
           >

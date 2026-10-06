@@ -5,6 +5,8 @@ import type {
   ClipStatus,
   LookPatch,
   LutLibraryItem,
+  MediaMode,
+  PhotoSettings,
 } from "./types";
 
 export const VIDEO_EXTENSIONS = [
@@ -18,6 +20,12 @@ export const VIDEO_EXTENSIONS = [
   "flv",
 ];
 export const LUT_EXTENSIONS = ["cube", "3dl", "csp", "m3d", "look", "lut"];
+export const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff"];
+export const DEFAULT_PHOTO_SETTINGS: PhotoSettings = {
+  output: { format: "png", bit_depth: 16, alpha_policy: { mode: "preserve" } },
+  preserve_metadata: true,
+  preserve_gps: false,
+};
 
 export const DEFAULT_SETTINGS: AppSettings = {
   default_output_dir: "",
@@ -43,6 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   output_bit_depth: "8",
   input_color_space: "auto",
   preview_quality: "fast",
+  photo_options: DEFAULT_PHOTO_SETTINGS,
 };
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -60,7 +69,7 @@ export function pathKey(path: string): string {
 export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
   const merged = { ...DEFAULT_SETTINGS, ...settings };
   const videoCodec = ["libx264", "libx265", "prores_ks"].includes(
-    merged.video_codec,
+    merged.video_codec
   )
     ? merged.video_codec
     : DEFAULT_SETTINGS.video_codec;
@@ -68,8 +77,8 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     videoCodec === "prores_ks"
       ? "mov"
       : ["mp4", "mov", "mkv"].includes(merged.output_format)
-        ? merged.output_format
-        : DEFAULT_SETTINGS.output_format;
+      ? merged.output_format
+      : DEFAULT_SETTINGS.output_format;
   const audioCodecs =
     outputFormat === "mp4" ? ["aac", "copy"] : ["aac", "copy", "pcm_s16le"];
   return {
@@ -80,12 +89,12 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
       ? merged.audio_codec
       : DEFAULT_SETTINGS.audio_codec,
     quality_preset: ["balanced", "high_quality", "fast"].includes(
-      merged.quality_preset,
+      merged.quality_preset
     )
       ? merged.quality_preset
       : DEFAULT_SETTINGS.quality_preset,
     resolution: ["original", "1920x1080", "3840x2160", "1280x720"].includes(
-      merged.resolution,
+      merged.resolution
     )
       ? merged.resolution
       : "original",
@@ -93,7 +102,7 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
       videoCodec === "prores_ks" ? false : merged.hardware_acceleration,
     max_concurrent_tasks: Math.min(
       4,
-      Math.max(1, Math.round(Number(merged.max_concurrent_tasks) || 2)),
+      Math.max(1, Math.round(Number(merged.max_concurrent_tasks) || 2))
     ),
     lut_intensity: clampPercent(merged.lut_intensity),
     // The current export UI promises source frame rate and quality-based encoding.
@@ -107,15 +116,53 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
       videoCodec === "prores_ks"
         ? "10"
         : videoCodec === "libx265" && merged.output_bit_depth === "10"
-          ? "10"
-          : "8",
+        ? "10"
+        : "8",
     input_color_space: ["auto", "rec709", "rec2020-pq", "rec2020-hlg"].includes(
-      merged.input_color_space,
+      merged.input_color_space
     )
       ? merged.input_color_space
       : "auto",
     preview_quality:
       merged.preview_quality === "accurate" ? "accurate" : "fast",
+    photo_options: normalizePhotoSettings(merged.photo_options),
+  };
+}
+
+export function normalizePhotoSettings(
+  value?: Partial<PhotoSettings>
+): PhotoSettings {
+  const output = value?.output;
+  const alpha = output?.alpha_policy;
+  const policy =
+    alpha?.mode === "flatten" &&
+    Array.isArray(alpha.color) &&
+    alpha.color.length === 3
+      ? {
+          mode: "flatten" as const,
+          color: alpha.color.map((v) =>
+            Math.round((clampPercent((Number(v) / 255) * 100) * 255) / 100)
+          ) as [number, number, number],
+        }
+      : { mode: "preserve" as const };
+  return {
+    output:
+      output?.format === "jpeg"
+        ? {
+            format: "jpeg",
+            quality: Math.max(
+              1,
+              Math.min(100, Math.round(Number(output.quality) || 95))
+            ),
+            alpha_policy: policy,
+          }
+        : {
+            format: output?.format === "tiff" ? "tiff" : "png",
+            bit_depth: output?.bit_depth === 8 ? 8 : 16,
+            alpha_policy: policy,
+          },
+    preserve_metadata: value?.preserve_metadata !== false,
+    preserve_gps: value?.preserve_gps === true,
   };
 }
 
@@ -123,13 +170,16 @@ export function appendClips(
   existing: Clip[],
   paths: string[],
   intensity = 100,
+  kind: MediaMode = "video"
 ): Clip[] {
   const known = new Set(existing.map((clip) => pathKey(clip.path)));
   const additions: Clip[] = [];
   for (const path of paths) {
     if (
       !path ||
-      !VIDEO_EXTENSIONS.includes(extension(path)) ||
+      !(kind === "photo" ? PHOTO_EXTENSIONS : VIDEO_EXTENSIONS).includes(
+        extension(path)
+      ) ||
       known.has(pathKey(path))
     )
       continue;
@@ -142,6 +192,14 @@ export function appendClips(
       intensity: clampPercent(intensity),
       status: "ready",
       progress: 0,
+      ...(kind === "photo"
+        ? {
+            kind: "photo" as const,
+            sourceInterpretation: { mode: "embedded" as const },
+            lutSpace: null,
+            lutFingerprint: null,
+          }
+        : {}),
     });
   }
   return [...existing, ...additions];
@@ -154,11 +212,36 @@ export function updateLook(clip: Clip, patch: LookPatch): Clip {
     patch.intensity === undefined
       ? clip.intensity
       : clampPercent(patch.intensity);
-  if (lutPath === clip.lutPath && intensity === clip.intensity) return clip;
+  const sourceInterpretation =
+    patch.sourceInterpretation ?? clip.sourceInterpretation;
+  const lutSpace =
+    patch.lutSpace !== undefined
+      ? patch.lutSpace
+      : lutPath !== clip.lutPath
+      ? null
+      : clip.lutSpace;
+  const lutFingerprint =
+    patch.lutFingerprint !== undefined
+      ? patch.lutFingerprint
+      : lutPath !== clip.lutPath
+      ? null
+      : clip.lutFingerprint;
+  if (
+    lutPath === clip.lutPath &&
+    intensity === clip.intensity &&
+    JSON.stringify(sourceInterpretation) ===
+      JSON.stringify(clip.sourceInterpretation) &&
+    lutSpace === clip.lutSpace &&
+    lutFingerprint === clip.lutFingerprint
+  )
+    return clip;
   return {
     ...clip,
     lutPath,
     intensity,
+    sourceInterpretation,
+    lutSpace,
+    lutFingerprint,
     status: "ready",
     progress: 0,
     error: undefined,
@@ -173,7 +256,7 @@ export function updateLook(clip: Clip, patch: LookPatch): Clip {
 
 export function mergeLuts(
   existing: LutLibraryItem[],
-  incoming: LutLibraryItem[],
+  incoming: LutLibraryItem[]
 ): LutLibraryItem[] {
   const merged = new Map(existing.map((item) => [pathKey(item.path), item]));
   for (const item of incoming) merged.set(pathKey(item.path), item);
@@ -181,6 +264,31 @@ export function mergeLuts(
 }
 
 export function buildBatchRequest(clips: Clip[], settings: AppSettings) {
+  if (clips.some((clip) => clip.kind === "photo")) {
+    if (clips.some((clip) => clip.kind !== "photo"))
+      throw new Error("照片和视频不能在同一个批次导出");
+    return {
+      items: clips.map((clip) => ({
+        input_path: clip.path,
+        output_path: "",
+        lut_paths: clip.lutPath ? [clip.lutPath] : [],
+        lut_path: clip.lutPath,
+        intensity: clampPercent(clip.intensity) / 100,
+        photo: {
+          source_interpretation: clip.sourceInterpretation ?? {
+            mode: "embedded",
+          },
+          lut_space: clip.lutSpace ?? null,
+          lut_fingerprint: clip.lutFingerprint ?? null,
+          source_version:
+            clip.kind === "photo" ? clip.info?.source_version : null,
+        },
+      })),
+      output_directory: settings.default_output_dir,
+      max_concurrent: Math.min(2, settings.max_concurrent_tasks),
+      photo_options: settings.photo_options,
+    };
+  }
   return {
     items: clips.map((clip) => ({
       input_path: clip.path,
@@ -260,9 +368,43 @@ export function invalidateCompleted(clips: Clip[]): Clip[] {
   return changed ? next : clips;
 }
 
+export function invalidateForSettings(
+  clips: Clip[],
+  previous: AppSettings,
+  next: AppSettings
+): Clip[] {
+  const shared = previous.default_output_dir !== next.default_output_dir;
+  const videoKeys: Array<keyof AppSettings> = [
+    "output_format",
+    "video_codec",
+    "audio_codec",
+    "quality_preset",
+    "resolution",
+    "fps",
+    "bitrate",
+    "preserve_metadata",
+    "output_bit_depth",
+    "input_color_space",
+  ];
+  const video = shared || videoKeys.some((key) => previous[key] !== next[key]);
+  const photo =
+    shared ||
+    JSON.stringify(previous.photo_options) !==
+      JSON.stringify(next.photo_options);
+  if (!video && !photo) return clips;
+  let changed = false;
+  const updated = clips.map((clip) => {
+    if (clip.status !== "completed" || !(clip.kind === "photo" ? photo : video))
+      return clip;
+    changed = true;
+    return invalidateCompleted([clip])[0];
+  });
+  return changed ? updated : clips;
+}
+
 export function reconcileBatch(clips: Clip[], progress: BatchProgress): Clip[] {
   const byPath = new Map(
-    progress.items.map((item) => [pathKey(item.input_path), item]),
+    progress.items.map((item) => [pathKey(item.input_path), item])
   );
   let changed = false;
   const next = clips.map((clip) => {
@@ -281,7 +423,7 @@ export function reconcileBatch(clips: Clip[], progress: BatchProgress): Clip[] {
     };
     if (
       (Object.keys(patch) as Array<keyof typeof patch>).every(
-        (key) => clip[key] === patch[key],
+        (key) => clip[key] === patch[key]
       )
     )
       return clip;

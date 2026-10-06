@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 pub mod color;
 mod engine_cache;
 pub mod lut;
+pub mod photo_bridge;
 pub mod processor;
 pub mod utils;
 

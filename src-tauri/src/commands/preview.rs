@@ -77,6 +77,8 @@ pub struct VideoPreviewResponse {
     pub processed_image: String,
     pub time_seconds: f64,
     pub cached: bool,
+    #[serde(skip)]
+    pub(crate) photo_size: Option<(u32, u32)>,
 }
 
 impl VideoPreviewResponse {
@@ -184,7 +186,7 @@ pub struct PreviewState {
     cache: Mutex<PreviewCache>,
     frames: Mutex<ArtifactCache>,
     luts: Mutex<ArtifactCache>,
-    permits: Semaphore,
+    pub(crate) permits: Arc<Semaphore>,
 }
 
 impl Default for PreviewState {
@@ -194,18 +196,18 @@ impl Default for PreviewState {
             cache: Mutex::new(PreviewCache::default()),
             frames: Mutex::new(ArtifactCache::new(FRAME_CACHE_BYTES)),
             luts: Mutex::new(ArtifactCache::new(LUT_CACHE_BYTES)),
-            permits: Semaphore::new(2),
+            permits: Arc::new(Semaphore::new(2)),
         }
     }
 }
 
 // Tauri can drop an invocation when its WebView disappears. Cleanup must also
 // run on that path, not only when the rendering future returns normally.
-struct ActivePreview<'a> {
+pub(crate) struct ActivePreview<'a> {
     state: &'a PreviewState,
     client_id: &'a str,
     id: uuid::Uuid,
-    token: CancellationToken,
+    pub(crate) token: CancellationToken,
 }
 
 impl Drop for ActivePreview<'_> {
@@ -279,7 +281,7 @@ pub async fn cancel_video_preview(
     cancel_client(&preview_state, &client_id.unwrap_or_else(default_client))
 }
 
-fn cancel_client(state: &PreviewState, client: &str) -> Result<(), String> {
+pub(crate) fn cancel_client(state: &PreviewState, client: &str) -> Result<(), String> {
     if let Some((_, token)) = state
         .active
         .lock()
@@ -291,29 +293,48 @@ fn cancel_client(state: &PreviewState, client: &str) -> Result<(), String> {
     Ok(())
 }
 
+impl PreviewState {
+    pub(crate) fn begin<'a>(&'a self, client_id: &'a str) -> Result<ActivePreview<'a>, String> {
+        let id = uuid::Uuid::new_v4();
+        let token = CancellationToken::new();
+        let mut active = self.active.lock().map_err(|e| e.to_string())?;
+        if active.len() >= 64 && !active.contains_key(client_id) {
+            return Err("同时请求的预览过多，请稍后重试".into());
+        }
+        if let Some((_, previous)) = active.insert(client_id.to_string(), (id, token.clone())) {
+            previous.cancel();
+        }
+        Ok(ActivePreview {
+            state: self,
+            client_id,
+            id,
+            token,
+        })
+    }
+    pub(crate) fn display_get(&self, key: &str) -> Result<Option<VideoPreviewResponse>, String> {
+        Ok(self.cache.lock().map_err(|e| e.to_string())?.get(key))
+    }
+    pub(crate) fn display_put(
+        &self,
+        key: String,
+        value: VideoPreviewResponse,
+    ) -> Result<(), String> {
+        self.cache
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(key, value);
+        Ok(())
+    }
+}
+
 async fn generate_with_resolver(
     request: VideoPreviewRequest,
     state: &PreviewState,
     resolver: impl Future<Output = Result<PathBuf, String>>,
 ) -> Result<VideoPreviewResponse, String> {
     validate_request(&request)?;
-    let id = uuid::Uuid::new_v4();
-    let token = CancellationToken::new();
-    {
-        let mut active = state.active.lock().map_err(|error| error.to_string())?;
-        if active.len() >= 64 && !active.contains_key(&request.client_id) {
-            return Err("同时请求的预览过多，请稍后重试".into());
-        }
-        if let Some((_, previous)) = active.insert(request.client_id.clone(), (id, token.clone())) {
-            previous.cancel();
-        }
-    }
-    let _active = ActivePreview {
-        state,
-        client_id: &request.client_id,
-        id,
-        token: token.clone(),
-    };
+    let _active = state.begin(&request.client_id)?;
+    let token = _active.token.clone();
     let ffmpeg_path = tokio::select! {
         biased;
         _ = token.cancelled() => return Err(CANCELLED.into()),
@@ -673,6 +694,7 @@ async fn render_frame(
         processed_image,
         time_seconds: request.time_seconds,
         cached: false,
+        photo_size: None,
     })
 }
 
@@ -756,6 +778,7 @@ mod tests {
             processed_image: "b".repeat(500_000),
             time_seconds: 0.0,
             cached: false,
+            photo_size: None,
         };
         for index in 0..100 {
             cache.insert(index.to_string(), response.clone());

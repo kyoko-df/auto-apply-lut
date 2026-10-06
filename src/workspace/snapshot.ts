@@ -4,6 +4,8 @@ import type {
   Clip,
   VideoInfo,
   WorkspaceSnapshot,
+  MediaMode,
+  SourceInterpretation,
 } from "./types";
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -34,6 +36,19 @@ function restoreInfo(value: unknown, clip: Clip): VideoInfo | undefined {
     color_matrix: text(value.color_matrix),
     color_range: text(value.color_range),
   };
+}
+
+function restoreSource(value: unknown): SourceInterpretation {
+  if (
+    record(value) &&
+    value.mode === "assign" &&
+    ["srgb", "adobe-rgb", "display-p3"].includes(String(value.space))
+  )
+    return {
+      mode: "assign",
+      space: value.space as "srgb" | "adobe-rgb" | "display-p3",
+    };
+  return { mode: "embedded" };
 }
 
 function restoreBatch(value: unknown): BatchProgress | null {
@@ -79,28 +94,42 @@ function restoreBatch(value: unknown): BatchProgress | null {
 /** Restores editing state only. An interrupted encoder is never resumed automatically. */
 export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
   if (value == null) return null;
-  if (!record(value) || value.version !== 1 || !Array.isArray(value.clips))
+  if (
+    !record(value) ||
+    (value.version !== 1 && value.version !== 2) ||
+    !Array.isArray(value.clips)
+  )
     throw new Error("工作区格式无法识别，原文件已保留。");
   const seen = new Set<string>();
   const clips: Clip[] = [];
   for (const raw of value.clips) {
     if (!record(raw) || typeof raw.path !== "string")
       throw new Error("工作区素材记录损坏，原文件已保留。");
-    const base = appendClips([], [raw.path])[0];
+    if (
+      value.version === 2 &&
+      raw.kind !== undefined &&
+      !["photo", "video"].includes(String(raw.kind))
+    )
+      throw new Error("工作区媒体类型无法识别，原文件已保留。");
+    const base = appendClips(
+      [],
+      [raw.path],
+      100,
+      value.version === 2 && raw.kind === "photo" ? "photo" : "video"
+    )[0];
     if (!base) throw new Error("工作区包含无法识别的素材记录，原文件已保留。");
     if (seen.has(base.id)) continue;
     seen.add(base.id);
     const interrupted = raw.status === "queued" || raw.status === "processing";
     const status = ["ready", "completed", "failed", "cancelled"].includes(
-      String(raw.status),
+      String(raw.status)
     )
       ? (String(raw.status) as Clip["status"])
       : interrupted
-        ? "cancelled"
-        : "ready";
-    clips.push({
+      ? "cancelled"
+      : "ready";
+    const common = {
       ...base,
-      info: restoreInfo(raw.info, base),
       metadataError: text(raw.metadataError),
       lutPath: text(raw.lutPath) ?? null,
       intensity: clampPercent(finite(raw.intensity) ?? 100),
@@ -114,24 +143,40 @@ export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
         : undefined,
       error: interrupted ? "上次导出未完成，请重试。" : text(raw.error),
       encoder: text(raw.encoder),
-    });
+    };
+    clips.push(
+      base.kind === "photo"
+        ? {
+            ...common,
+            kind: "photo",
+            info: undefined,
+            sourceInterpretation: restoreSource(raw.sourceInterpretation),
+            lutSpace: raw.lutSpace === "srgb" ? "srgb" : null,
+            lutFingerprint:
+              typeof raw.lutFingerprint === "string" &&
+              /^[a-f0-9]{64}$/.test(raw.lutFingerprint)
+                ? raw.lutFingerprint
+                : null,
+          }
+        : { ...common, kind: base.kind, info: restoreInfo(raw.info, base) }
+    );
   }
   const activeId =
     typeof value.activeId === "string" && seen.has(pathKey(value.activeId))
       ? pathKey(value.activeId)
-      : (clips[0]?.id ?? null);
+      : clips[0]?.id ?? null;
   const selectedIds = Array.isArray(value.selectedIds)
     ? [
         ...new Set(
           value.selectedIds
             .filter((id): id is string => typeof id === "string")
             .map(pathKey)
-            .filter((id) => seen.has(id)),
+            .filter((id) => seen.has(id))
         ),
       ]
     : activeId
-      ? [activeId]
-      : [];
+    ? [activeId]
+    : [];
   const history = Array.isArray(value.history)
     ? value.history
         .map(restoreBatch)
@@ -141,11 +186,60 @@ export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
   const batch = restoreBatch(value.batch);
   if (batch && !history.some((item) => item.batch_id === batch.batch_id))
     history.push(batch);
+  const mediaMode: MediaMode = value.mediaMode === "photo" ? "photo" : "video";
+  const visible = clips.filter(
+    (c) => (c.kind === "photo" ? "photo" : "video") === mediaMode
+  );
+  const scopedActive = visible.some((c) => c.id === activeId)
+    ? activeId
+    : visible[0]?.id ?? null;
+  const scopedSelected = selectedIds.filter((id) =>
+    visible.some((c) => c.id === id)
+  );
   return {
-    version: 1,
+    version: 2,
+    mediaMode,
+    mediaSelection: record(value.mediaSelection)
+      ? Object.fromEntries(
+          (["video", "photo"] as MediaMode[]).map((mode) => {
+            const raw =
+              value.mediaSelection && record(value.mediaSelection)
+                ? value.mediaSelection[mode]
+                : null;
+            const ids = new Set(
+              clips
+                .filter(
+                  (c) => (c.kind === "photo" ? "photo" : "video") === mode
+                )
+                .map((c) => c.id)
+            );
+            return [
+              mode,
+              {
+                activeId:
+                  record(raw) &&
+                  typeof raw.activeId === "string" &&
+                  ids.has(raw.activeId)
+                    ? raw.activeId
+                    : null,
+                selectedIds:
+                  record(raw) && Array.isArray(raw.selectedIds)
+                    ? raw.selectedIds.filter(
+                        (id): id is string =>
+                          typeof id === "string" && ids.has(id)
+                      )
+                    : [],
+              },
+            ];
+          })
+        )
+      : {
+          video: { activeId, selectedIds },
+          photo: { activeId: null, selectedIds: [] },
+        },
     clips,
-    activeId,
-    selectedIds,
+    activeId: scopedActive,
+    selectedIds: scopedSelected,
     batch,
     history: history.slice(-50),
   };

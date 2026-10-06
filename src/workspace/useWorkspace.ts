@@ -10,7 +10,7 @@ import {
   errorMessage,
   extension,
   isBatchFinished,
-  invalidateCompleted,
+  invalidateForSettings,
   rememberOutput,
   LUT_EXTENSIONS,
   mergeLuts,
@@ -19,6 +19,7 @@ import {
   reconcileBatch,
   updateLook,
   VIDEO_EXTENSIONS,
+  PHOTO_EXTENSIONS,
 } from "./model";
 import type {
   AppSettings,
@@ -32,6 +33,8 @@ import type {
   Notice,
   ScanResult,
   VideoInfo,
+  PhotoInfo,
+  MediaMode,
   WorkspaceSnapshot,
   SelectionOptions,
 } from "./types";
@@ -39,7 +42,7 @@ import type {
 const desktopAvailable = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const desktopMessage =
-  "请在桌面应用中使用本地视频、LUT 预览和导出。浏览器仅提供界面预览。";
+  "请在桌面应用中使用本地视频、照片、LUT 预览和导出。浏览器仅提供界面预览。";
 
 const EXPORT_SETTING_KEYS: Array<keyof AppSettings> = [
   "default_output_dir",
@@ -58,19 +61,27 @@ const EXPORT_SETTING_KEYS: Array<keyof AppSettings> = [
 async function mapLimit<T>(
   items: T[],
   limit: number,
-  work: (item: T) => Promise<void>,
+  work: (item: T) => Promise<void>
 ) {
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
       while (next < items.length) await work(items[next++]);
-    }),
+    })
   );
 }
 
 export function useWorkspace() {
   const isDesktop = desktopAvailable();
   const [clips, setClips] = useState<Clip[]>([]);
+  const [mediaMode, setMediaModeState] = useState<MediaMode>("video");
+  const mediaModeRef = useRef<MediaMode>("video");
+  const mediaSelectionRef = useRef<
+    Record<MediaMode, { activeId: string | null; selectedIds: string[] }>
+  >({
+    video: { activeId: null, selectedIds: [] },
+    photo: { activeId: null, selectedIds: [] },
+  });
   const [activeId, setActiveIdState] = useState<string | null>(null);
   const [selectedIds, setSelectedIdsState] = useState<string[]>([]);
   const [canUndo, setCanUndo] = useState(false);
@@ -93,7 +104,7 @@ export function useWorkspace() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [workspaceSaveError, setWorkspaceSaveError] = useState<string | null>(
-    null,
+    null
   );
   const [runningBatchId, setRunningBatchId] = useState<string | null>(null);
 
@@ -107,6 +118,11 @@ export function useWorkspace() {
     clips: Clip[];
     activeId: string | null;
     selectedIds: string[];
+    mediaMode: MediaMode;
+    mediaSelection: Record<
+      MediaMode,
+      { activeId: string | null; selectedIds: string[] }
+    >;
   } | null>(null);
   const importingRef = useRef(false);
   const importCancelledRef = useRef(false);
@@ -120,7 +136,7 @@ export function useWorkspace() {
   const workspaceWritesRef = useRef<Promise<void>>(Promise.resolve());
   const persistedWorkspaceKeyRef = useRef("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
+    undefined
   );
   const lutsRef = useRef(luts);
   const settingsRef = useRef(settings);
@@ -148,11 +164,13 @@ export function useWorkspace() {
     const next =
       typeof value === "function" ? value(activeIdRef.current) : value;
     activeIdRef.current = next;
+    mediaSelectionRef.current[mediaModeRef.current].activeId = next;
     if (mountedRef.current) setActiveIdState(next);
   }, []);
 
   const setSelectedIds = useCallback((ids: string[]) => {
     selectedIdsRef.current = ids;
+    mediaSelectionRef.current[mediaModeRef.current].selectedIds = ids;
     if (mountedRef.current) setSelectedIdsState(ids);
   }, []);
 
@@ -166,7 +184,7 @@ export function useWorkspace() {
       if (next?.batch_id && isBatchFinished(next.status)) {
         const entries = [
           ...historyRef.current.filter(
-            (item) => item.batch_id !== next.batch_id,
+            (item) => item.batch_id !== next.batch_id
           ),
           next,
         ].slice(-50);
@@ -174,19 +192,21 @@ export function useWorkspace() {
         if (mountedRef.current) setHistory(entries);
       }
     },
-    [],
+    []
   );
 
   const getSnapshot = useCallback(
     (): WorkspaceSnapshot => ({
-      version: 1,
+      version: 2,
+      mediaMode: mediaModeRef.current,
+      mediaSelection: mediaSelectionRef.current,
       clips: clipsRef.current,
       activeId: activeIdRef.current,
       selectedIds: selectedIdsRef.current,
       batch: batchRef.current,
       history: historyRef.current,
     }),
-    [],
+    []
   );
 
   const flushWorkspace = useCallback(async () => {
@@ -238,7 +258,7 @@ export function useWorkspace() {
               [...saved.clips, ...clipsRef.current].map((clip) => [
                 clip.id,
                 clip,
-              ]),
+              ])
             ).values(),
           ],
           activeId: activeIdRef.current ?? saved.activeId,
@@ -251,12 +271,19 @@ export function useWorkspace() {
               [...saved.history, ...historyRef.current].map((item) => [
                 item.batch_id,
                 item,
-              ]),
+              ])
             ).values(),
           ].slice(-50),
         };
       }
       if (saved) {
+        mediaModeRef.current = saved.mediaMode ?? "video";
+        setMediaModeState(mediaModeRef.current);
+        mediaSelectionRef.current = {
+          video: { activeId: null, selectedIds: [] },
+          photo: { activeId: null, selectedIds: [] },
+          ...saved.mediaSelection,
+        };
         clipsRef.current = saved.clips;
         setClips(saved.clips);
         setActiveId(saved.activeId);
@@ -279,7 +306,7 @@ export function useWorkspace() {
       workspaceLoadedRef.current = true;
       setWorkspaceSaveError(null);
     },
-    [setActiveId, setSelectedIds],
+    [setActiveId, setSelectedIds]
   );
 
   const retryWorkspaceSave = useCallback(async () => {
@@ -321,13 +348,16 @@ export function useWorkspace() {
       const request = Promise.resolve().then(async () => {
         if (metadataSlotsRef.current >= 3)
           await new Promise<void>((resolve) =>
-            metadataWaitersRef.current.push(resolve),
+            metadataWaitersRef.current.push(resolve)
           );
         else metadataSlotsRef.current += 1;
         try {
-          const info = await invoke<VideoInfo>("get_video_info", {
-            path: clip.path,
-          });
+          const info = await invoke<VideoInfo | PhotoInfo>(
+            clip.kind === "photo" ? "get_photo_info" : "get_video_info",
+            {
+              path: clip.path,
+            }
+          );
           if (
             mountedRef.current &&
             generation === metadataGenerationRef.current
@@ -335,9 +365,19 @@ export function useWorkspace() {
             changeClips((current) =>
               current.map((item) =>
                 item.id === clip.id
-                  ? { ...item, info, metadataError: undefined }
-                  : item,
-              ),
+                  ? item.kind === "photo"
+                    ? {
+                        ...item,
+                        info: info as PhotoInfo,
+                        metadataError: undefined,
+                      }
+                    : {
+                        ...item,
+                        info: info as VideoInfo,
+                        metadataError: undefined,
+                      }
+                  : item
+              )
             );
           }
         } catch (error) {
@@ -349,8 +389,8 @@ export function useWorkspace() {
               current.map((item) =>
                 item.id === clip.id
                   ? { ...item, metadataError: errorMessage(error) }
-                  : item,
-              ),
+                  : item
+              )
             );
           }
         } finally {
@@ -363,7 +403,7 @@ export function useWorkspace() {
       metadataRequestsRef.current.set(key, request);
       return request;
     },
-    [changeClips],
+    [changeClips]
   );
 
   const refreshEngine = useCallback(async () => {
@@ -380,7 +420,7 @@ export function useWorkspace() {
         setFfmpeg({ status: "ready", info });
         // Fixing the engine must also recover the duration and seek range of already imported clips.
         const missingMetadata = clipsRef.current.filter(
-          (clip) => !clip.info || clip.metadataError,
+          (clip) => !clip.info || clip.metadataError
         );
         await mapLimit(missingMetadata, 3, readVideoMetadata);
       }
@@ -425,7 +465,7 @@ export function useWorkspace() {
       if (results[2].status === "rejected") {
         workspaceLoadedRef.current = true;
         setWorkspaceSaveError(
-          `读取工作区失败，自动保存已暂停：${errorMessage(results[2].reason)}`,
+          `读取工作区失败，自动保存已暂停：${errorMessage(results[2].reason)}`
         );
       }
       loadingRef.current = false;
@@ -449,6 +489,7 @@ export function useWorkspace() {
     };
   }, [
     clips,
+    mediaMode,
     activeId,
     selectedIds,
     batch,
@@ -469,16 +510,19 @@ export function useWorkspace() {
         invoke<LutLibraryItem[]>("list_lut_library"),
       ]);
       const next = normalizeSettings(storedSettings);
+      const previous = persistedSettingsRef.current;
       if (
-        EXPORT_SETTING_KEYS.some(
-          (key) => persistedSettingsRef.current[key] !== next[key],
-        )
+        EXPORT_SETTING_KEYS.some((key) => previous[key] !== next[key]) ||
+        JSON.stringify(previous.photo_options) !==
+          JSON.stringify(next.photo_options)
       ) {
-        changeClips(invalidateCompleted);
+        changeClips((current) =>
+          invalidateForSettings(current, previous, next)
+        );
         if (undoRef.current)
           undoRef.current = {
             ...undoRef.current,
-            clips: invalidateCompleted(undoRef.current.clips),
+            clips: invalidateForSettings(undoRef.current.clips, previous, next),
           };
       }
       persistedSettingsRef.current = next;
@@ -514,7 +558,7 @@ export function useWorkspace() {
         setBatch(
           cancelRequestedRef.current && !isBatchFinished(progress.status)
             ? { ...progress, status: "cancelling" }
-            : progress,
+            : progress
         );
         if (isBatchFinished(progress.status)) {
           batchIdRef.current = null;
@@ -528,14 +572,14 @@ export function useWorkspace() {
               progress.failed_items > 0
                 ? "error"
                 : progress.cancelled_items > 0
-                  ? "info"
-                  : "success",
+                ? "info"
+                : "success",
             message:
               progress.failed_items > 0
                 ? `导出结束：${progress.completed_items} 个完成，${progress.failed_items} 个失败。可以重试失败项目。`
                 : progress.cancelled_items > 0
-                  ? `已取消导出，${progress.completed_items} 个文件已完成。`
-                  : `${progress.completed_items} 个视频导出完成。`,
+                ? `已取消导出，${progress.completed_items} 个文件已完成。`
+                : `${progress.completed_items} 个文件导出完成。`,
           });
           return;
         }
@@ -554,8 +598,8 @@ export function useWorkspace() {
                     status: "failed",
                     error: "后台队列已失效，请重新导出。",
                   }
-                : clip,
-            ),
+                : clip
+            )
           );
           exportingRef.current = false;
           cancelRequestedRef.current = false;
@@ -564,7 +608,7 @@ export function useWorkspace() {
           setIsExporting(false);
           void setExportGuard(false).catch(() => {});
           setBatch((current) =>
-            current ? { ...current, status: "failed" } : current,
+            current ? { ...current, status: "failed" } : current
           );
           setNotice({ kind: "error", message: "后台队列已失效，请重新导出。" });
           return;
@@ -578,7 +622,7 @@ export function useWorkspace() {
       if (active)
         timer = setTimeout(
           () => void poll(),
-          Math.min(5000, 750 * Math.max(1, failures)),
+          Math.min(5000, 750 * Math.max(1, failures))
         );
     };
     void poll();
@@ -601,13 +645,23 @@ export function useWorkspace() {
             await invoke("update_app_settings", { settings: next });
           const previous = persistedSettingsRef.current;
           persistedSettingsRef.current = next;
-          if (EXPORT_SETTING_KEYS.some((key) => previous[key] !== next[key])) {
-            changeClips(invalidateCompleted);
+          if (
+            EXPORT_SETTING_KEYS.some((key) => previous[key] !== next[key]) ||
+            JSON.stringify(previous.photo_options) !==
+              JSON.stringify(next.photo_options)
+          ) {
+            changeClips((current) =>
+              invalidateForSettings(current, previous, next)
+            );
             // Undoing an older edit must not revive a completed result for obsolete encoding settings.
             if (undoRef.current)
               undoRef.current = {
                 ...undoRef.current,
-                clips: invalidateCompleted(undoRef.current.clips),
+                clips: invalidateForSettings(
+                  undoRef.current.clips,
+                  previous,
+                  next
+                ),
               };
           }
           if (previous.ffmpeg_path !== next.ffmpeg_path)
@@ -622,7 +676,7 @@ export function useWorkspace() {
                 setNotice((current) =>
                   current?.message.startsWith("设置保存失败")
                     ? { kind: "success", message: "设置已重新保存。" }
-                    : current,
+                    : current
                 );
             }
           }
@@ -652,17 +706,17 @@ export function useWorkspace() {
         void write.then(refreshEngine);
       return write;
     },
-    [changeClips, refreshEngine],
+    [changeClips, refreshEngine]
   );
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
       if (exportingRef.current || loadingRef.current) return Promise.resolve();
       return persistSettings(
-        normalizeSettings({ ...settingsRef.current, ...patch }),
+        normalizeSettings({ ...settingsRef.current, ...patch })
       );
     },
-    [persistSettings],
+    [persistSettings]
   );
 
   const retrySettings = useCallback(() => {
@@ -677,7 +731,7 @@ export function useWorkspace() {
     settingsErrorRef.current = null;
     setSettingsError(null);
     setNotice((current) =>
-      current?.message.startsWith("设置保存失败") ? null : current,
+      current?.message.startsWith("设置保存失败") ? null : current
     );
   }, [isSavingSettings]);
 
@@ -717,6 +771,7 @@ export function useWorkspace() {
         clipsRef.current,
         paths,
         settingsRef.current.lut_intensity,
+        mediaModeRef.current
       ).filter((clip) => !existingIds.has(clip.id));
       let added = 0;
       setImportProgress((current) => ({
@@ -732,7 +787,14 @@ export function useWorkspace() {
           return;
         changeClips((current) => [...current, clip]);
         added += 1;
-        if (!activeIdRef.current) {
+        if (
+          !activeIdRef.current ||
+          !clipsRef.current.some(
+            (c) =>
+              c.id === activeIdRef.current &&
+              (c.kind === "photo" ? "photo" : "video") === mediaModeRef.current
+          )
+        ) {
           setActiveId(clip.id);
           setSelectedIds([clip.id]);
           selectionAnchorRef.current = clip.id;
@@ -746,7 +808,7 @@ export function useWorkspace() {
       });
       return added;
     },
-    [changeClips, readVideoMetadata, setActiveId, setSelectedIds],
+    [changeClips, readVideoMetadata, setActiveId, setSelectedIds]
   );
 
   const addLuts = useCallback(
@@ -759,7 +821,7 @@ export function useWorkspace() {
       replaceLuts(mergeLuts(lutsRef.current, items));
       return items.length;
     },
-    [replaceLuts],
+    [replaceLuts]
   );
 
   const importVideos = useCallback(
@@ -769,9 +831,17 @@ export function useWorkspace() {
         const picked =
           paths ??
           (await open({
-            title: "导入视频",
+            title: mediaModeRef.current === "photo" ? "导入照片" : "导入视频",
             multiple: true,
-            filters: [{ name: "视频", extensions: VIDEO_EXTENSIONS }],
+            filters: [
+              {
+                name: mediaModeRef.current === "photo" ? "照片" : "视频",
+                extensions:
+                  mediaModeRef.current === "photo"
+                    ? PHOTO_EXTENSIONS
+                    : VIDEO_EXTENSIONS,
+              },
+            ],
           }));
         if (!picked || importCancelledRef.current) return;
         const rawPaths = Array.isArray(picked) ? picked : [picked];
@@ -788,20 +858,27 @@ export function useWorkspace() {
           try {
             const info = await invoke<{ is_directory: boolean }>(
               "get_file_info",
-              { path },
+              { path }
             );
             if (info.is_directory) {
               const scanned = await invoke<ScanResult>(
-                "scan_directory_for_videos",
-                { directory: path },
+                mediaModeRef.current === "photo"
+                  ? "scan_directory_for_photos"
+                  : "scan_directory_for_videos",
+                { directory: path }
               );
               discovered.set(path, {
                 videos: scanned.video_files.sort((a, b) =>
-                  a.localeCompare(b, "zh-CN", { numeric: true }),
+                  a.localeCompare(b, "zh-CN", { numeric: true })
                 ),
                 luts: scanned.lut_files,
               });
-            } else if (VIDEO_EXTENSIONS.includes(extension(path)))
+            } else if (
+              (mediaModeRef.current === "photo"
+                ? PHOTO_EXTENSIONS
+                : VIDEO_EXTENSIONS
+              ).includes(extension(path))
+            )
               discovered.set(path, { videos: [path], luts: [] });
             else if (LUT_EXTENSIONS.includes(extension(path)))
               discovered.set(path, { videos: [], luts: [path] });
@@ -812,17 +889,25 @@ export function useWorkspace() {
         });
         // Preserve the selection order even when metadata reads complete out of order.
         const videos = selected.flatMap(
-          (path) => discovered.get(path)?.videos ?? [],
+          (path) => discovered.get(path)?.videos ?? []
         );
         const lookPaths = selected.flatMap(
-          (path) => discovered.get(path)?.luts ?? [],
+          (path) => discovered.get(path)?.luts ?? []
         );
         const videoCount = await addVideos(videos);
         const lutCount = await addLuts(lookPaths);
         if (exportingRef.current) return;
         setNotice({
           kind: issues.length ? "error" : "success",
-          message: `${importCancelledRef.current ? "导入已停止，保留 " : "已导入 "}${videoCount} 个视频${lutCount ? `、${lutCount} 个 LUT` : ""}${issues.length ? `；${issues.length} 个文件无法导入：${issues[0]}` : "。重复素材已自动跳过。"}`,
+          message: `${
+            importCancelledRef.current ? "导入已停止，保留 " : "已导入 "
+          }${videoCount} 个${
+            mediaModeRef.current === "photo" ? "照片" : "视频"
+          }${lutCount ? `、${lutCount} 个 LUT` : ""}${
+            issues.length
+              ? `；${issues.length} 个文件无法导入：${issues[0]}`
+              : "。重复素材已自动跳过。"
+          }`,
         });
       } catch (error) {
         setNotice({
@@ -833,33 +918,44 @@ export function useWorkspace() {
         endImport();
       }
     },
-    [addLuts, addVideos, beginImport, endImport],
+    [addLuts, addVideos, beginImport, endImport]
   );
 
   const importDirectory = useCallback(async () => {
     if (!beginImport()) return;
     try {
       const directory = await open({
-        title: "导入视频文件夹",
+        title:
+          mediaModeRef.current === "photo"
+            ? "导入照片文件夹"
+            : "导入视频文件夹",
         directory: true,
         multiple: false,
       });
       if (!directory || Array.isArray(directory) || importCancelledRef.current)
         return;
-      const result = await invoke<ScanResult>("scan_directory_for_videos", {
-        directory,
-      });
+      const result = await invoke<ScanResult>(
+        mediaModeRef.current === "photo"
+          ? "scan_directory_for_photos"
+          : "scan_directory_for_videos",
+        {
+          directory,
+        }
+      );
       const count = await addVideos(
         result.video_files.sort((a, b) =>
-          a.localeCompare(b, "zh-CN", { numeric: true }),
-        ),
+          a.localeCompare(b, "zh-CN", { numeric: true })
+        )
       );
+      await addLuts(result.lut_files);
       if (exportingRef.current) return;
       setNotice({
         kind: count ? "success" : "info",
         message: count
-          ? `已从文件夹导入 ${count} 个视频。`
-          : "文件夹中没有新的视频素材。",
+          ? `已从文件夹导入 ${count} 个${
+              mediaModeRef.current === "photo" ? "照片" : "视频"
+            }。`
+          : "文件夹中没有新的当前类型素材。",
       });
     } catch (error) {
       setNotice({
@@ -869,7 +965,7 @@ export function useWorkspace() {
     } finally {
       endImport();
     }
-  }, [addVideos, beginImport, endImport]);
+  }, [addVideos, addLuts, beginImport, endImport]);
 
   const importLuts = useCallback(
     async (paths?: string[]) => {
@@ -897,7 +993,7 @@ export function useWorkspace() {
         endImport();
       }
     },
-    [addLuts, beginImport, endImport],
+    [addLuts, beginImport, endImport]
   );
 
   const importLutDirectory = useCallback(async () => {
@@ -936,16 +1032,14 @@ export function useWorkspace() {
         undoRef.current = null;
         setCanUndo(false);
         replaceLuts(
-          lutsRef.current.filter(
-            (item) => pathKey(item.path) !== pathKey(path),
-          ),
+          lutsRef.current.filter((item) => pathKey(item.path) !== pathKey(path))
         );
         changeClips((current) =>
           current.map((clip) =>
             clip.lutPath && pathKey(clip.lutPath) === pathKey(path)
               ? updateLook(clip, { lutPath: null })
-              : clip,
-          ),
+              : clip
+          )
         );
       } catch (error) {
         setNotice({
@@ -956,7 +1050,7 @@ export function useWorkspace() {
         endImport();
       }
     },
-    [beginImport, changeClips, endImport, replaceLuts],
+    [beginImport, changeClips, endImport, replaceLuts]
   );
 
   const rememberUndo = useCallback(() => {
@@ -964,6 +1058,11 @@ export function useWorkspace() {
       clips: clipsRef.current,
       activeId: activeIdRef.current,
       selectedIds: selectedIdsRef.current,
+      mediaMode: mediaModeRef.current,
+      mediaSelection: {
+        video: { ...mediaSelectionRef.current.video },
+        photo: { ...mediaSelectionRef.current.photo },
+      },
     };
     setCanUndo(true);
   }, []);
@@ -980,7 +1079,14 @@ export function useWorkspace() {
       return [
         ...previous.clips.map((clip) => {
           const latest = byId.get(clip.id);
-          return latest
+          if (!latest || latest.kind !== clip.kind) return clip;
+          return clip.kind === "photo" && latest.kind === "photo"
+            ? {
+                ...clip,
+                info: latest.info,
+                metadataError: latest.metadataError,
+              }
+            : clip.kind !== "photo" && latest.kind !== "photo"
             ? {
                 ...clip,
                 info: latest.info,
@@ -991,6 +1097,9 @@ export function useWorkspace() {
         ...current.filter((clip) => !beforeIds.has(clip.id)),
       ];
     });
+    mediaModeRef.current = previous.mediaMode;
+    mediaSelectionRef.current = previous.mediaSelection;
+    setMediaModeState(previous.mediaMode);
     setActiveId(previous.activeId);
     setSelectedIds(previous.selectedIds);
   }, [changeClips, setActiveId, setSelectedIds]);
@@ -1001,7 +1110,12 @@ export function useWorkspace() {
       const known = new Set(clipsRef.current.map((clip) => clip.id));
       const order =
         options.visibleIds?.filter((candidate) => known.has(candidate)) ??
-        clipsRef.current.map((clip) => clip.id);
+        clipsRef.current
+          .filter(
+            (c) =>
+              (c.kind === "photo" ? "photo" : "video") === mediaModeRef.current
+          )
+          .map((clip) => clip.id);
       let ids: string[];
       if (
         options.range &&
@@ -1013,7 +1127,7 @@ export function useWorkspace() {
         const target = order.indexOf(id);
         const range = order.slice(
           Math.min(anchor, target),
-          Math.max(anchor, target) + 1,
+          Math.max(anchor, target) + 1
         );
         ids = options.toggle
           ? [...new Set([...selectedIdsRef.current, ...range])]
@@ -1030,7 +1144,7 @@ export function useWorkspace() {
       setSelectedIds(ids);
       setActiveId(id);
     },
-    [setActiveId, setSelectedIds],
+    [setActiveId, setSelectedIds]
   );
 
   const selectAll = useCallback(
@@ -1038,16 +1152,22 @@ export function useWorkspace() {
       const known = new Set(clipsRef.current.map((clip) => clip.id));
       const next = ids
         ? [...new Set(ids.filter((id) => known.has(id)))]
-        : [...known];
+        : clipsRef.current
+            .filter(
+              (c) =>
+                (c.kind === "photo" ? "photo" : "video") ===
+                mediaModeRef.current
+            )
+            .map((c) => c.id);
       setSelectedIds(next);
       if (next.length && !next.includes(activeIdRef.current ?? ""))
         setActiveId(next[0]);
     },
-    [setActiveId, setSelectedIds],
+    [setActiveId, setSelectedIds]
   );
   const clearSelection = useCallback(
     () => setSelectedIds([]),
-    [setSelectedIds],
+    [setSelectedIds]
   );
 
   const removeClips = useCallback(
@@ -1056,26 +1176,34 @@ export function useWorkspace() {
       const removed = new Set(ids);
       rememberUndo();
       const next = changeClips((current) =>
-        current.filter((clip) => !removed.has(clip.id)),
+        current.filter((clip) => !removed.has(clip.id))
       );
       setSelectedIds(selectedIdsRef.current.filter((id) => !removed.has(id)));
       if (activeIdRef.current && removed.has(activeIdRef.current))
         setActiveId(next[0]?.id ?? null);
     },
-    [changeClips, rememberUndo, setActiveId, setSelectedIds],
+    [changeClips, rememberUndo, setActiveId, setSelectedIds]
   );
 
   const removeClip = useCallback(
     (id: string) => removeClips([id]),
-    [removeClips],
+    [removeClips]
   );
   const removeSelected = useCallback(
     () => removeClips(selectedIdsRef.current),
-    [removeClips],
+    [removeClips]
   );
   const clearClips = useCallback(
-    () => removeClips(clipsRef.current.map((clip) => clip.id)),
-    [removeClips],
+    () =>
+      removeClips(
+        clipsRef.current
+          .filter(
+            (c) =>
+              (c.kind === "photo" ? "photo" : "video") === mediaModeRef.current
+          )
+          .map((clip) => clip.id)
+      ),
+    [removeClips]
   );
 
   const setClipLook = useCallback(
@@ -1083,20 +1211,20 @@ export function useWorkspace() {
       if (exportingRef.current) return;
       const previous = clipsRef.current;
       const next = previous.map((clip) =>
-        clip.id === id ? updateLook(clip, patch) : clip,
+        clip.id === id ? updateLook(clip, patch) : clip
       );
       if (next.every((clip, index) => clip === previous[index])) return;
       rememberUndo();
       changeClips(() => next);
     },
-    [changeClips, rememberUndo],
+    [changeClips, rememberUndo]
   );
 
   const applyLook = useCallback(
     (ids: string[], sourceId?: string) => {
       if (exportingRef.current) return;
       const source = clipsRef.current.find(
-        (clip) => clip.id === (sourceId ?? activeIdRef.current),
+        (clip) => clip.id === (sourceId ?? activeIdRef.current)
       );
       if (!source) return;
       const chosen = new Set(ids);
@@ -1106,8 +1234,10 @@ export function useWorkspace() {
           ? updateLook(clip, {
               lutPath: source.lutPath,
               intensity: source.intensity,
+              lutSpace: source.lutSpace,
+              lutFingerprint: source.lutFingerprint,
             })
-          : clip,
+          : clip
       );
       if (next.some((clip, index) => clip !== previous[index])) {
         rememberUndo();
@@ -1115,31 +1245,55 @@ export function useWorkspace() {
       }
       setNotice({
         kind: "success",
-        message: `已将当前风格和强度应用到 ${chosen.size} 个视频。`,
+        message: `已将当前风格和强度应用到 ${chosen.size} 个素材。`,
       });
     },
-    [changeClips, rememberUndo],
+    [changeClips, rememberUndo]
   );
 
   const applyLookToAll = useCallback(
     (sourceId?: string) =>
       applyLook(
-        clipsRef.current.map((clip) => clip.id),
-        sourceId,
+        clipsRef.current
+          .filter(
+            (c) =>
+              (c.kind === "photo" ? "photo" : "video") === mediaModeRef.current
+          )
+          .map((clip) => clip.id),
+        sourceId
       ),
-    [applyLook],
+    [applyLook]
   );
   const applyLookToSelected = useCallback(
     (sourceId?: string) => applyLook(selectedIdsRef.current, sourceId),
-    [applyLook],
+    [applyLook]
   );
+
+  const applyInputToSelected = useCallback(() => {
+    if (exportingRef.current) return;
+    const source = clipsRef.current.find((c) => c.id === activeIdRef.current);
+    if (source?.kind !== "photo") return;
+    const ids = new Set(selectedIdsRef.current);
+    rememberUndo();
+    changeClips((current) =>
+      current.map((c) =>
+        c.kind === "photo" && ids.has(c.id)
+          ? updateLook(c, {
+              sourceInterpretation: source.sourceInterpretation ?? {
+                mode: "embedded",
+              },
+            })
+          : c
+      )
+    );
+  }, [changeClips, rememberUndo]);
 
   const cancelExport = useCallback(async () => {
     if (!exportingRef.current || cancelRequestedRef.current) return true;
     setCancelError(null);
     cancelRequestedRef.current = true;
     setBatch((current) =>
-      current ? { ...current, status: "cancelling" } : current,
+      current ? { ...current, status: "cancelling" } : current
     );
     const batchId = batchIdRef.current;
     if (!batchId) return true; // startExport sends cancellation after it receives the ID.
@@ -1158,7 +1312,7 @@ export function useWorkspace() {
       setBatch((current) =>
         current && !isBatchFinished(current.status)
           ? { ...current, status: "running" }
-          : current,
+          : current
       );
       setNotice({
         kind: "error",
@@ -1174,25 +1328,28 @@ export function useWorkspace() {
         return;
       if (importingRef.current) importCancelledRef.current = true;
       const chosen = ids ? new Set(ids) : null;
-      const queue = clipsRef.current.filter((clip) =>
-        chosen ? chosen.has(clip.id) : clip.status !== "completed",
+      const queue = clipsRef.current.filter(
+        (clip) =>
+          (clip.kind === "photo" ? "photo" : "video") ===
+            mediaModeRef.current &&
+          (chosen ? chosen.has(clip.id) : clip.status !== "completed")
       );
       if (!queue.length) {
         setNotice({
           kind: "info",
-          message: "没有待导出的视频。请导入素材或修改风格后重新导出。",
+          message: "没有待导出的素材。请导入或修改风格后重新导出。",
         });
         return;
       }
       const invalidLuts = new Set(
         lutsRef.current
           .filter((lut) => !lut.is_valid)
-          .map((lut) => pathKey(lut.path)),
+          .map((lut) => pathKey(lut.path))
       );
       // Restored clips may reference valid files absent from a rebuilt library.
       // The backend validates every LUT path before any job is started.
       const invalid = queue.find(
-        (clip) => clip.lutPath && invalidLuts.has(pathKey(clip.lutPath)),
+        (clip) => clip.lutPath && invalidLuts.has(pathKey(clip.lutPath))
       );
       if (invalid) {
         setNotice({
@@ -1226,8 +1383,8 @@ export function useWorkspace() {
                 eta_seconds: undefined,
                 message: undefined,
               }
-            : clip,
-        ),
+            : clip
+        )
       );
       setBatch({
         batch_id: "",
@@ -1245,11 +1402,16 @@ export function useWorkspace() {
         await settingsWritesRef.current;
         if (settingsErrorRef.current)
           throw new Error(`请先解决设置保存错误：${settingsErrorRef.current}`);
-        const result = await invoke<BatchResponse>("start_batch_processing", {
-          request: buildBatchRequest(queue, {
-            ...persistedSettingsRef.current,
-          }),
-        });
+        const result = await invoke<BatchResponse>(
+          queue[0].kind === "photo"
+            ? "start_photo_batch_processing"
+            : "start_batch_processing",
+          {
+            request: buildBatchRequest(queue, {
+              ...persistedSettingsRef.current,
+            }),
+          }
+        );
         batchIdRef.current = result.batch_id;
         setBatch((current) =>
           current
@@ -1260,7 +1422,7 @@ export function useWorkspace() {
                   ? "cancelling"
                   : result.status,
               }
-            : current,
+            : current
         );
         setRunningBatchId(result.batch_id);
         if (cancelRequestedRef.current) {
@@ -1273,7 +1435,7 @@ export function useWorkspace() {
             setBatch((current) =>
               current && !isBatchFinished(current.status)
                 ? { ...current, status: "running" }
-                : current,
+                : current
             );
             setNotice({
               kind: "error",
@@ -1291,8 +1453,8 @@ export function useWorkspace() {
           current.map((clip) =>
             queuedIds.has(clip.id)
               ? { ...clip, status: "failed", error: message }
-              : clip,
-          ),
+              : clip
+          )
         );
         setBatch((current) =>
           current
@@ -1302,17 +1464,17 @@ export function useWorkspace() {
                 failed_items: queue.length,
                 errors: [message],
               }
-            : current,
+            : current
         );
         setNotice({ kind: "error", message: `无法开始导出：${message}` });
       }
     },
-    [changeClips, requireDesktop, setBatch, setExportGuard],
+    [changeClips, requireDesktop, setBatch, setExportGuard]
   );
 
   const exportSelected = useCallback(
     () => startExport(selectedIdsRef.current),
-    [startExport],
+    [startExport]
   );
 
   const retryFailed = useCallback(
@@ -1320,11 +1482,11 @@ export function useWorkspace() {
       startExport(
         clipsRef.current
           .filter(
-            (clip) => clip.status === "failed" || clip.status === "cancelled",
+            (clip) => clip.status === "failed" || clip.status === "cancelled"
           )
-          .map((clip) => clip.id),
+          .map((clip) => clip.id)
       ),
-    [startExport],
+    [startExport]
   );
 
   const pickOutputDirectory = useCallback(async () => {
@@ -1356,8 +1518,61 @@ export function useWorkspace() {
     }
   }, [requireDesktop, updateSettings]);
 
+  const setMediaMode = useCallback(
+    (mode: MediaMode) => {
+      if (
+        exportingRef.current ||
+        importingRef.current ||
+        loadingRef.current ||
+        mediaModeRef.current === mode
+      )
+        return;
+      mediaModeRef.current = mode;
+      const visible = clipsRef.current.filter(
+        (c) => (c.kind === "photo" ? "photo" : "video") === mode
+      );
+      const remembered = mediaSelectionRef.current[mode];
+      const active = visible.some((c) => c.id === remembered.activeId)
+        ? remembered.activeId
+        : visible[0]?.id ?? null;
+      setActiveId(active);
+      setSelectedIds(
+        remembered.selectedIds.filter((id) => visible.some((c) => c.id === id))
+      );
+      setMediaModeState(mode);
+      selectionAnchorRef.current = active;
+    },
+    [setActiveId, setSelectedIds]
+  );
+
+  const refreshMetadata = useCallback(
+    async (id: string) => {
+      if (exportingRef.current || loadingRef.current) return;
+      const clip = clipsRef.current.find((c) => c.id === id);
+      if (!clip) return;
+      changeClips((current) =>
+        current.map((c) =>
+          c.id === id ? { ...c, info: undefined, metadataError: undefined } : c
+        )
+      );
+      await readVideoMetadata(clip);
+    },
+    [changeClips, readVideoMetadata]
+  );
+
+  const visibleClips = clips.filter(
+    (c) => (c.kind === "photo" ? "photo" : "video") === mediaMode
+  );
+  const visiblePaths = new Set(visibleClips.map((clip) => clip.path));
+  const belongsToMode = (progress: BatchProgress) =>
+    progress.items.some((item) => visiblePaths.has(item.input_path));
   return {
-    clips,
+    clips: visibleClips,
+    allClips: clips,
+    mediaMode,
+    setMediaMode,
+    refreshMetadata,
+    applyInputToSelected,
     activeId,
     setActiveId,
     selectedIds,
@@ -1398,7 +1613,7 @@ export function useWorkspace() {
     retryFailed,
     cancelExport,
     cancelError,
-    batch,
+    batch: batch && belongsToMode(batch) ? batch : null,
     isExporting,
     notice,
     setNotice,

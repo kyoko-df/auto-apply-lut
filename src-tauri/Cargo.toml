@@ -51,6 +51,12 @@ regex = "1"
 md-5 = "0.10"
 digest = "0.10"
 async-recursion = "1.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
+png = "0.18"
+tiff = "0.11"
+lcms2 = { version = "6.2", features = ["static"] }
+little_exif = "0.6.23"
+crc32fast = "1"
 
 # Optional FFmpeg native binding for static linking (disabled by default)
 ffmpeg-next = { version = "6", default-features = false, optional = true, features = ["build", "static"] }

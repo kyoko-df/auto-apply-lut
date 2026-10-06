@@ -1,6 +1,10 @@
 use crate::commands::encoding_options::{build_encoding_settings, ProcessingOptions};
-use crate::core::ffmpeg::processor::{ProcessingProgress, VideoProcessor};
+use crate::core::ffmpeg::processor::{ProcessingProgress, ProcessingResult, VideoProcessor};
 use crate::core::lut::LutManager;
+use crate::core::photo::{
+    processor::{PhotoControl, PhotoJob, PhotoProcessor},
+    PhotoItemOptions, PhotoSettings, SourceInterpretation,
+};
 use crate::core::task::{TaskManager, TaskType};
 use crate::types::LutFormat;
 use crate::utils::config::ConfigManager;
@@ -26,9 +30,11 @@ pub fn has_unfinished_batches() -> bool {
 struct BatchLifetime;
 
 impl BatchLifetime {
-    fn new() -> Self {
-        UNFINISHED_BATCHES.fetch_add(1, Ordering::SeqCst);
-        Self
+    fn try_new() -> Result<Self, String> {
+        UNFINISHED_BATCHES
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "已有批次正在启动或导出，请等待其实际结束".to_string())?;
+        Ok(Self)
     }
 }
 
@@ -47,6 +53,8 @@ pub struct BatchItem {
     #[serde(default)]
     pub lut_path: Option<String>,
     pub intensity: f32,
+    #[serde(default)]
+    pub photo: Option<PhotoItemOptions>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -59,6 +67,8 @@ pub struct BatchRequest {
     pub max_concurrent: Option<usize>,
     #[serde(flatten)]
     pub options: ProcessingOptions,
+    #[serde(default)]
+    pub photo_options: Option<PhotoSettings>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -166,6 +176,7 @@ struct BatchRuntime {
     errors: Vec<String>,
     item_states: Vec<BatchItemRuntime>,
     processor: Option<Arc<VideoProcessor>>,
+    photo_controls: Vec<PhotoControl>,
 }
 
 type BatchStateMap = HashMap<String, Arc<AsyncMutex<BatchRuntime>>>;
@@ -216,35 +227,7 @@ pub(super) fn available_output_path(
     path: &Path,
     reserved: &mut HashSet<PathBuf>,
 ) -> Result<PathBuf, String> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let parent =
-        std::fs::canonicalize(parent).map_err(|e| format!("Invalid output directory: {}", e))?;
-    let file_name = path.file_name().ok_or("Invalid output filename")?;
-    let initial = parent.join(file_name);
-    let stem = path
-        .file_stem()
-        .and_then(|v| v.to_str())
-        .unwrap_or("output");
-    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("mp4");
-    let mut candidate = initial.clone();
-    let mut index = 2;
-    while candidate.exists() || reserved.contains(&collision_key(&candidate)) {
-        candidate = parent.join(format!("{} ({}).{}", stem, index, extension));
-        index += 1;
-    }
-    reserved.insert(collision_key(&candidate));
-    Ok(candidate)
-}
-
-fn collision_key(path: &Path) -> PathBuf {
-    if cfg!(any(target_os = "macos", target_os = "windows")) {
-        PathBuf::from(path.to_string_lossy().to_lowercase())
-    } else {
-        path.to_path_buf()
-    }
+    crate::core::output::available_path(path, reserved)
 }
 
 fn common_input_parent(items: &[BatchItem]) -> Option<PathBuf> {
@@ -271,14 +254,14 @@ async fn ensure_output_parent_exists(output_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn lut_extensions() -> Vec<String> {
+pub(super) fn lut_extensions() -> Vec<String> {
     LutFormat::supported_extensions()
         .into_iter()
         .map(|ext| ext.to_string())
         .collect()
 }
 
-fn scan_recursive(
+pub(super) fn scan_recursive(
     path: &Path,
     video_exts: &[&str],
     lut_exts: &[String],
@@ -448,14 +431,20 @@ pub async fn start_batch_processing(
     video_processor: State<'_, VideoProcessor>,
     lut_manager: State<'_, LutManager>,
     config_manager: State<'_, std::sync::Mutex<ConfigManager>>,
+    photo_processor: State<'_, PhotoProcessor>,
 ) -> Result<BatchResponse, String> {
+    let batch_lifetime = Arc::new(BatchLifetime::try_new()?);
+    let photo_options = request.photo_options.clone();
+    let photo_processor = photo_processor.inner().clone();
+    let prepared_directory = Arc::new(tempfile::tempdir().map_err(|e| e.to_string())?);
+    let mut frozen_luts = HashMap::<String, String>::new();
     logger::log_info(&format!(
         "Starting batch processing with {} items",
         request.items.len()
     ));
 
-    if request.items.is_empty() {
-        return Err("Batch request must contain at least one item".to_string());
+    if request.items.is_empty() || request.items.len() > 10000 {
+        return Err("批次需要包含 1–10000 个素材".to_string());
     }
 
     if !request.output_directory.trim().is_empty() {
@@ -464,13 +453,22 @@ pub async fn start_batch_processing(
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    let mut settings = build_encoding_settings(&request.options)?;
-    let format = request
-        .options
-        .output_format
-        .as_deref()
-        .unwrap_or("mp4")
-        .trim_start_matches('.');
+    let mut settings = if photo_options.is_some() {
+        crate::core::ffmpeg::EncodingSettings::default()
+    } else {
+        build_encoding_settings(&request.options)?
+    };
+    let format = photo_options
+        .as_ref()
+        .map(|p| p.output.extension())
+        .unwrap_or_else(|| {
+            request
+                .options
+                .output_format
+                .as_deref()
+                .unwrap_or("mp4")
+                .trim_start_matches('.')
+        });
     let structure_root = if request.preserve_structure {
         common_input_parent(&request.items)
     } else {
@@ -479,7 +477,7 @@ pub async fn start_batch_processing(
     let mut reserved = HashSet::new();
     let mut validated_luts = HashSet::new();
     let mut normalized_items = Vec::with_capacity(request.items.len());
-    for item in request.items {
+    for mut item in request.items {
         if !item.intensity.is_finite() || !(0.0..=1.0).contains(&item.intensity) {
             return Err("LUT intensity must be between 0 and 1".to_string());
         }
@@ -489,6 +487,35 @@ pub async fn start_batch_processing(
             .unwrap_or(false)
         {
             return Err(format!("Input file does not exist: {}", item.input_path));
+        }
+
+        if let Some(options) = &photo_options {
+            let path = PathBuf::from(&item.input_path);
+            let info = photo_processor
+                .inspect(&path, &tokio_util::sync::CancellationToken::new())
+                .await?
+                .info;
+            options.output.validate(info.has_alpha)?;
+            let photo = item.photo.get_or_insert_with(PhotoItemOptions::default);
+            if matches!(photo.source_interpretation, SourceInterpretation::Embedded)
+                && !matches!(info.color_status.as_str(), "embedded" | "srgb")
+            {
+                return Err(format!("{}：请明确指定输入照片的色彩空间", item.input_path));
+            }
+            if photo
+                .source_version
+                .as_ref()
+                .is_some_and(|v| *v != info.source_version)
+            {
+                return Err(format!("{}：源照片已变化，请重新读取", item.input_path));
+            }
+            photo.source_version = Some(info.source_version);
+            if (item.lut_path.is_some() || !item.lut_paths.is_empty())
+                && item.intensity > 0.0
+                && photo.lut_space != Some(crate::core::photo::PhotoSpace::Srgb)
+            {
+                return Err("请明确按 sRGB 输入和输出使用照片 LUT".into());
+            }
         }
 
         let mut lut_paths = item.lut_paths.clone();
@@ -520,6 +547,59 @@ pub async fn start_batch_processing(
                 ));
             }
             validated_luts.insert(lut_path.clone());
+        }
+
+        if photo_options.is_some() && item.intensity > 0.0 {
+            for path in &lut_paths {
+                let hash = super::photo::lut_digest(
+                    Path::new(path),
+                    &photo_processor,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await?;
+                if item
+                    .photo
+                    .as_ref()
+                    .and_then(|p| p.lut_fingerprint.as_deref())
+                    != Some(hash.as_str())
+                {
+                    return Err("照片 LUT 已变化或尚未确认，请重新确认 sRGB 用法".into());
+                }
+            }
+        }
+        if photo_options.is_some() && item.intensity > 0.0 {
+            for path in &mut lut_paths {
+                if let Some(frozen) = frozen_luts.get(path) {
+                    *path = frozen.clone();
+                    continue;
+                }
+                let directory = prepared_directory.path().join(Uuid::new_v4().to_string());
+                fs::create_dir(&directory)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let frozen =
+                    crate::core::ffmpeg::lut::prepare_luts(&[PathBuf::from(&*path)], &directory)
+                        .await
+                        .map_err(|e| e.to_string())?[0]
+                        .to_string_lossy()
+                        .to_string();
+                let hash = super::photo::lut_digest(
+                    Path::new(path),
+                    &photo_processor,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await?;
+                if item
+                    .photo
+                    .as_ref()
+                    .and_then(|p| p.lut_fingerprint.as_deref())
+                    != Some(hash.as_str())
+                {
+                    return Err("照片 LUT 在准备期间变化，请重新确认 sRGB 用法".into());
+                }
+                frozen_luts.insert(path.clone(), frozen.clone());
+                *path = frozen;
+            }
         }
 
         let output_path = resolve_output_path(
@@ -567,14 +647,14 @@ pub async fn start_batch_processing(
     let max_concurrent = request
         .max_concurrent
         .unwrap_or(configured_concurrent)
-        .clamp(1, 4);
+        .clamp(1, if photo_options.is_some() { 2 } else { 4 });
     settings.extra_params.insert(
         "__threads__".into(),
         (num_cpus::get() / max_concurrent).clamp(1, 8).to_string(),
     );
 
     let mut processor = video_processor.clone_for_task();
-    processor.set_ffmpeg_path(ffmpeg_path);
+    processor.set_ffmpeg_path(ffmpeg_path.clone());
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProcessingProgress>();
     processor.set_progress_sender(progress_tx);
     let processor = Arc::new(processor);
@@ -598,10 +678,14 @@ pub async fn start_batch_processing(
                 message: None,
             })
             .collect(),
+        photo_controls: if photo_options.is_some() {
+            (0..total_items).map(|_| PhotoControl::default()).collect()
+        } else {
+            Vec::new()
+        },
         processor: Some(processor.clone()),
     }));
 
-    let batch_lifetime = Arc::new(BatchLifetime::new());
     {
         let mut states = batch_states().lock().await;
         states.insert(batch_id.clone(), runtime.clone());
@@ -649,6 +733,7 @@ pub async fn start_batch_processing(
 
     tokio::spawn(async move {
         let batch_lifetime = batch_lifetime;
+        let photo_controls = runtime_for_worker.lock().await.photo_controls.clone();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
         let mut handles = Vec::with_capacity(normalized_items.len());
 
@@ -660,9 +745,15 @@ pub async fn start_batch_processing(
             let settings_for_item = settings_for_worker.clone();
             let batch_label = batch_id_for_worker.clone();
             let item_lifetime = batch_lifetime.clone();
+            let frozen_lease = prepared_directory.clone();
+            let photo_control = photo_controls.get(index).cloned();
+            let photo_options = photo_options.clone();
+            let photo_processor = photo_processor.clone();
+            let photo_engine = ffmpeg_path.clone();
 
             handles.push(tokio::spawn(async move {
                 let _item_lifetime = item_lifetime;
+                let _frozen_lease = frozen_lease;
                 let permit = match permit_pool.acquire_owned().await {
                     Ok(permit) => permit,
                     Err(_) => return,
@@ -683,7 +774,11 @@ pub async fn start_batch_processing(
                 }
 
                 let task_id = match task_manager_for_item.create_task(
-                    TaskType::VideoProcessing,
+                    if photo_options.is_some() {
+                        TaskType::PhotoProcessing
+                    } else {
+                        TaskType::VideoProcessing
+                    },
                     format!("Batch {}: {}", batch_label, item.input_path),
                 ) {
                     Ok(id) => id,
@@ -729,16 +824,61 @@ pub async fn start_batch_processing(
 
                 let lut_paths = item.lut_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
 
-                let result = processor_for_item
-                    .apply_luts_with_task_id(
-                        Path::new(&item.input_path),
-                        Path::new(&item.output_path),
-                        &lut_paths,
-                        &settings_for_item,
-                        task_id.clone(),
-                        item.intensity,
-                    )
-                    .await;
+                let result = if let (Some(options), Some(control)) = (photo_options, photo_control)
+                {
+                    let photo = item.photo.clone().unwrap_or_default();
+                    let runtime = runtime_for_item.clone();
+                    let stage_id = task_id.clone();
+                    let stage_sender = task_manager_for_item.clone();
+                    let stage = Arc::new(move |message: &str| {
+                        let _ = stage_sender.update_description(&stage_id, message.to_string());
+                        if let Ok(mut rt) = runtime.try_lock() {
+                            if let Some(state) = rt.item_states.get_mut(index) {
+                                state.message = Some(message.to_string());
+                            }
+                        }
+                    });
+                    let started = std::time::Instant::now();
+                    photo_processor
+                        .process(
+                            &photo_engine,
+                            PhotoJob {
+                                input: item.input_path.clone().into(),
+                                output: item.output_path.clone().into(),
+                                luts: lut_paths,
+                                intensity: item.intensity,
+                                lut_space: photo.lut_space,
+                                source: photo.source_interpretation,
+                                format: options.output,
+                                preserve_metadata: options.preserve_metadata,
+                                preserve_gps: options.preserve_gps,
+                                expected_version: photo.source_version,
+                            },
+                            control,
+                            stage,
+                        )
+                        .await
+                        .map(|path| ProcessingResult {
+                            task_id: task_id.clone(),
+                            success: true,
+                            file_size: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                            output_path: Some(path),
+                            error: None,
+                            elapsed: started.elapsed(),
+                        })
+                        .map_err(crate::types::AppError::InvalidInput)
+                } else {
+                    processor_for_item
+                        .apply_luts_with_task_id(
+                            Path::new(&item.input_path),
+                            Path::new(&item.output_path),
+                            &lut_paths,
+                            &settings_for_item,
+                            task_id.clone(),
+                            item.intensity,
+                        )
+                        .await
+                };
 
                 let mut rt = runtime_for_item.lock().await;
                 let cancel_requested = rt.cancel_requested;
@@ -749,6 +889,9 @@ pub async fn start_batch_processing(
                         Ok(processing_result) if processing_result.success => {
                             let _ = task_manager_for_item.update_progress(&task_id, 100.0);
                             let _ = task_manager_for_item.complete_task(&task_id);
+                            if let Some(path) = processing_result.output_path {
+                                state.output_path = path.to_string_lossy().into();
+                            }
                             state.status = BatchItemRuntimeStatus::Completed;
                             state.progress = 100.0;
                             state.error = None;
@@ -906,7 +1049,18 @@ pub async fn cancel_batch(
 
     let (running_task_ids, processor) = {
         let mut rt = runtime.lock().await;
+        if matches!(
+            rt.status,
+            BatchRuntimeStatus::Completed
+                | BatchRuntimeStatus::Failed
+                | BatchRuntimeStatus::Cancelled
+        ) {
+            return Ok("Batch already finished".into());
+        }
         rt.cancel_requested = true;
+        for control in &rt.photo_controls {
+            control.cancel();
+        }
         if matches!(rt.status, BatchRuntimeStatus::Running) {
             rt.status = BatchRuntimeStatus::Cancelling;
         }
@@ -967,6 +1121,7 @@ pub async fn generate_batch_from_directory(
             lut_paths: vec![lut_path.clone()],
             lut_path: Some(lut_path.clone()),
             intensity,
+            photo: None,
         });
     }
 
@@ -984,6 +1139,7 @@ mod tests {
             lut_paths: vec![],
             lut_path: None,
             intensity: 1.0,
+            photo: None,
         }
     }
 
@@ -1019,6 +1175,7 @@ mod tests {
             cancel_requested: true,
             errors: vec![],
             processor: None,
+            photo_controls: Vec::new(),
             item_states: vec![
                 BatchItemRuntime {
                     input_path: "a".into(),

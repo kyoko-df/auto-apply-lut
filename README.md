@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-A local desktop workbench for batch LUT color grading of videos. The interface is built with React 19 + TypeScript, Tauri 2 / Rust manages files and tasks, and FFmpeg performs the actual video processing.
+A local desktop workbench for batch LUT color grading of videos and photos. React 19 + TypeScript provides the interface; Tauri 2 / Rust manages files, photo color conversion and tasks; FFmpeg performs video processing and the shared LUT operation.
 
 ## Workflow
 
@@ -34,6 +34,14 @@ Fast preview scales the working frame first; accurate preview applies the LUT be
 **Color range**: the default preserves the source interpretation with no implicit gamut conversion; the UI displays gamut, transfer function, and bit depth. You can explicitly choose Rec.709 interpretation, or convert Rec.2020 PQ / HLG to Rec.709 SDR before applying the creative LUT. This option applies to the whole batch — process different input spaces in separate batches. HEVC supports 8/10-bit 4:2:0, H.264 is 8-bit, and ProRes HQ is 10-bit 4:2:2. Camera Log is not detected automatically, and there is no HDR / Dolby Vision mastering workflow.
 
 **Recovery and limits**: the workspace atomically saves clips, settings, selection, output paths, and the most recent batch. A normal exit waits for the save; quitting during export requires cancelling and waiting for processes to finish. Tasks interrupted by an abnormal exit are restored as retryable and re-exported from the beginning — there is no encode resume. Corrupt settings/library files keep their original bytes as a backup with a recovery entry point, and persistent save failures are surfaced. Previews are seekable still frames, not real-time graded playback. Browser mode is for viewing the UI only; actual file processing requires the desktop app.
+
+## Photo mode
+
+Switch the top selector to photos to import JPEG, PNG and single-page integer RGB/grayscale TIFF. Confirm a selected LUT uses sRGB input and output, adjust its strength, and apply the look to selected or all photos. Fit and 100% region previews share the same ICC conversion and LUT graph as full-size exports; fast previews are approximate.
+
+Embedded ICC or an explicit sRGB declaration determines the input color. Untagged/invalid inputs require manual sRGB, Adobe RGB or Display P3 assignment. Exports contain converted sRGB pixels and an sRGB ICC: JPEG 8-bit, PNG/TIFF 8/16-bit, default PNG 16-bit. PNG preserves alpha; JPEG/TIFF require explicit background compositing for transparent inputs. Capture metadata is allowlisted; GPS defaults off. The two-job photo limit also obeys a weighted memory budget. Synchronous codecs use cooperative cancellation and finish their current phase before cleanup.
+
+RAW, HEIC, AVIF, HDR photos, CMYK, transparent/float/multipage TIFF, APNG, BigTIFF, curves, masks and Lightroom/Capture One presets are outside this first release. Inputs must fit the 512 MiB / 64 MP / 32768-side limits **and** the memory budget; export resolution is never silently reduced. Photo/video editing state and selection survive restart.
 
 ## Local development
 

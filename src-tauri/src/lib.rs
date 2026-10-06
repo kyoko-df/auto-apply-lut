@@ -74,6 +74,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::preview::PreviewState::default())
+        .manage(commands::photo::PhotoPreviewState::default())
+        .manage(core::photo::processor::PhotoProcessor::default())
         .manage(lut_manager)
         .manage(gpu_manager)
         .manage(task_manager)
@@ -114,7 +116,14 @@ pub fn run() {
             commands::gpu_manager::test_hardware_acceleration,
             commands::file_manager::open_folder,
             commands::file_manager::open_file_location,
+            commands::file_manager::get_file_info,
             commands::processor::get_video_info,
+            commands::photo::get_photo_info,
+            commands::photo::get_photo_lut_fingerprint,
+            commands::photo::scan_directory_for_photos,
+            commands::photo::generate_photo_preview,
+            commands::photo::cancel_photo_preview,
+            commands::photo::start_photo_batch_processing,
             commands::preview::generate_video_preview,
             commands::preview::cancel_video_preview,
             // LUT

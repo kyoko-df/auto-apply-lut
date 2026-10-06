@@ -267,6 +267,7 @@ fn command_interfaces_system() {
             output_bit_depth: "8".into(),
             input_color_space: "auto".into(),
             preview_quality: "fast".into(),
+            photo_options: Default::default(),
             two_pass_encoding: true,
             preserve_metadata: false,
         };
@@ -402,11 +403,13 @@ fn command_interfaces_batch() {
                 lut_paths: vec![lut_path.to_string_lossy().to_string()],
                 lut_path: Some(lut_path.to_string_lossy().to_string()),
                 intensity: 1.0,
+                photo: None,
             }],
             output_directory: output_dir.to_string_lossy().to_string(),
             preserve_structure: false,
             max_concurrent: None,
             options: default_processing_options(),
+            photo_options: None,
         };
         let start_result = run_async(batch_manager::start_batch_processing(
             req,
@@ -414,6 +417,7 @@ fn command_interfaces_batch() {
             state_ref(&video_processor),
             state_ref(&lut_manager),
             state_ref(&config_manager),
+            state_ref(&crate::core::photo::processor::PhotoProcessor::default()),
         ));
         assert!(start_result.is_err());
 

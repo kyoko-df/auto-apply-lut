@@ -27,6 +27,7 @@ pub enum TaskStatus {
 pub enum TaskType {
     /// 视频处理
     VideoProcessing,
+    PhotoProcessing,
     /// LUT应用
     LutApplication,
     /// 批处理

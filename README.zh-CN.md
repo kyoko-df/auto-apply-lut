@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文 | [日本語](README.ja.md)
 
-用于批量视频 LUT 调色的本地桌面工作台。React 19 + TypeScript 构建界面，Tauri 2 / Rust 管理文件与任务，FFmpeg 执行真实视频处理。
+用于批量视频与照片 LUT 调色的本地桌面工作台。React 19 + TypeScript 构建界面，Tauri 2 / Rust 管理文件、色彩与任务，FFmpeg 执行视频处理及共用 LUT 运算。
 
 ## 工作流
 
@@ -34,6 +34,16 @@
 **色彩范围**：默认保持输入，不做隐式色域转换；界面展示色域、传递函数和位深。可明确选择 Rec.709 解读，或将 Rec.2020 PQ / HLG 转为 Rec.709 SDR，再应用风格 LUT。此选项作用于整个批次，不同输入空间请分批处理。HEVC 支持 8/10-bit 4:2:0，H.264 为 8-bit，ProRes HQ 为 10-bit 4:2:2。不会自动识别相机 Log，也不提供 HDR / Dolby Vision 母版工作流。
 
 **恢复与边界**：工作区会原子保存素材、参数、选择、输出路径和最近批次。正常退出前等待保存，导出中退出需取消并等待进程结束；异常退出后的未完成任务恢复为待重试，从头重新导出，不做编码断点续传。损坏设置/资料库保留备份并提供恢复入口，保存失败有明确提示。预览仍是可定位的静态帧，不是实时调色视频播放。浏览器模式仅用于查看界面，实际文件处理需要桌面应用。
+
+## 照片模式
+
+顶部切换为「照片」，导入 JPEG、PNG 或单页 TIFF。选择 LUT 后确认按 sRGB 输入和输出使用，再调整强度；可同步到多选或全部照片。预览支持原图、调色后、分割对比、适应窗口和 100% 局部查看；快速模式是近似效果，100% 局部始终使用精确流程。
+
+照片先按内嵌 ICC 或明确的 sRGB 声明转换到 16 位 sRGB，再应用与视频共用的 LUT 强度算法。未标记或无效配置需要手动指定 sRGB、Adobe RGB 或 Display P3。导出保持方向校正后的原尺寸，支持 JPEG 8 位、PNG/TIFF 8 或 16 位，默认 PNG 16 位，嵌入 sRGB ICC。PNG 可以保留透明通道；透明照片导出 JPEG/TIFF 前必须选择合成背景。
+
+照片批次最多并行 2 项，同时受内存预算约束。主要拍摄信息按允许列表保留，定位信息默认不保留；不复制原缩略图、MakerNote 和完整 XMP。同步库的解码与编码采用合作取消，取消中会等待当前不可中断阶段返回并清理后再结束。照片与视频的队列、选择和编辑参数随工作区恢复。
+
+首版不包含 RAW/HEIC/AVIF、CMYK、HDR 照片、透明/浮点/多页 TIFF、APNG、BigTIFF、曝光曲线或局部蒙版，也不能导入 Lightroom/Capture One 预设。文件限额为 512 MiB、6400 万像素、单边 32768，同时必须满足内存预算；超限会明确拒绝，导出不会悄悄缩小。
 
 ## 本地开发
 
@@ -84,7 +94,15 @@ node scripts/verify-macos-release.mjs \
 
 `tauri:build:full:mac` 构建当前 Mac 架构；`tauri:build:full:mac:universal` 需要额外提供 Intel 和 ARM 两套静态引擎及 Rust target。`tauri:build:full:win` 需要在 Windows 构建机提供经验证的 x64 静态引擎，配置已包含离线 WebView2 安装器；本次没有完成 Intel、Windows 或 Linux 实机验收。Lite 版本仍依赖外部 FFmpeg，不属于免依赖发行包。
 
-标签 CI 默认构建 macOS ARM Full **草稿发布**；Windows 是手动任务，需配置已审计的 `FFMPEG_WINDOWS_VENDOR_URL` 和 `FFMPEG_WINDOWS_VENDOR_SHA256`。本地 macOS 包使用 ad-hoc 签名，尚无 Apple Developer ID 签名与公证。对外公开分发前还需补齐对应源码交付材料，详见 [第三方许可与来源记录](THIRD_PARTY_NOTICES.md)。
+标签 CI 默认构建 macOS ARM Full **草稿发布**；Windows 是手动任务，需配置已审计的 `FFMPEG_WINDOWS_VENDOR_URL` 和 `FFMPEG_WINDOWS_VENDOR_SHA256` 仓库变量。vendor 压缩包必须是包含 `windows/x86_64/ffmpeg.exe` 和 `windows/x86_64/ffprobe.exe` 的 ZIP。上游构建（gyan.dev、martin-riedl.de 等）不提供这种目录结构，需用 `scripts/package-windows-vendor.mjs` 对已审计的压缩包重新打包：
+
+```bash
+node scripts/package-windows-vendor.mjs --archive ffmpeg-9.0.2-essentials_build.zip --output lutlab-ffmpeg-vendor.zip
+```
+
+每个二进制都会按发布构建相同的架构与系统 DLL 规则重新检查；ZIP 是确定性的（固定时间戳和条目顺序），同一输入重复执行会得到相同的 SHA256。将产物上传到稳定的 HTTPS 地址，并把脚本输出的值设为 `FFMPEG_WINDOWS_VENDOR_SHA256`。
+
+本地 macOS 包使用 ad-hoc 签名，尚无 Apple Developer ID 签名与公证。对外公开分发前还需补齐对应源码交付材料，详见 [第三方许可与来源记录](THIRD_PARTY_NOTICES.md)。
 
 ## 验证
 

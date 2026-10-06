@@ -26,11 +26,73 @@ export type ClipStatus =
   | "failed"
   | "cancelled";
 
-export interface Clip {
+export type MediaMode = "video" | "photo";
+export type PhotoSpace = "srgb" | "adobe-rgb" | "display-p3";
+export type SourceInterpretation =
+  | { mode: "embedded" }
+  | { mode: "assign"; space: PhotoSpace };
+export type AlphaPolicy =
+  | { mode: "preserve" }
+  | { mode: "flatten"; color: [number, number, number] };
+export type PhotoOutput =
+  | { format: "jpeg"; quality: number; alpha_policy: AlphaPolicy }
+  | { format: "png" | "tiff"; bit_depth: 8 | 16; alpha_policy: AlphaPolicy };
+export interface PhotoSettings {
+  output: PhotoOutput;
+  preserve_metadata: boolean;
+  preserve_gps: boolean;
+}
+export interface PhotoInfo {
+  path: string;
+  filename: string;
+  size: number;
+  format: string;
+  width: number;
+  height: number;
+  stored_width: number;
+  stored_height: number;
+  bit_depth: number;
+  has_alpha: boolean;
+  orientation: number;
+  color_profile: string;
+  color_status: "embedded" | "srgb" | "unknown" | "invalid";
+  source_version: string;
+}
+export interface PhotoPreviewRequest {
+  photo_path: string;
+  lut_path: string | null;
+  intensity: number;
+  source_interpretation: SourceInterpretation;
+  lut_space: "srgb" | null;
+  lut_fingerprint: string | null;
+  viewport:
+    | { kind: "fit"; max_edge: number }
+    | { kind: "region"; x: number; y: number; width: number; height: number };
+  quality: "fast" | "accurate";
+  alpha_policy: AlphaPolicy;
+  client_id: string;
+  request_id: string;
+}
+export interface PhotoPreviewResponse {
+  original_image: string;
+  processed_image: string;
+  request_id: string;
+  source_version: string;
+  width: number;
+  height: number;
+  cached: boolean;
+}
+export interface PreviewFrame {
+  original_image: string;
+  processed_image: string;
+  time_seconds: number;
+  cached: boolean;
+}
+
+interface MediaItemBase {
   id: string;
   path: string;
   name: string;
-  info?: VideoInfo;
   metadataError?: string;
   lutPath: string | null;
   intensity: number;
@@ -43,7 +105,19 @@ export interface Clip {
   eta_seconds?: number;
   message?: string;
   error?: string;
+  sourceInterpretation?: SourceInterpretation;
+  lutSpace?: "srgb" | null;
+  lutFingerprint?: string | null;
 }
+export interface VideoClip extends MediaItemBase {
+  kind?: "video";
+  info?: VideoInfo;
+}
+export interface PhotoClip extends MediaItemBase {
+  kind: "photo";
+  info?: PhotoInfo;
+}
+export type Clip = VideoClip | PhotoClip;
 
 export interface LutLibraryItem {
   id?: number | null;
@@ -82,6 +156,7 @@ export interface AppSettings {
   output_bit_depth: "8" | "10";
   input_color_space: "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg";
   preview_quality: "fast" | "accurate";
+  photo_options: PhotoSettings;
 }
 
 export interface FfmpegInfo {
@@ -142,10 +217,21 @@ export interface Notice {
   message: string;
 }
 
-export type LookPatch = Pick<Partial<Clip>, "lutPath" | "intensity">;
+export type LookPatch = Pick<
+  Partial<Clip>,
+  | "lutPath"
+  | "intensity"
+  | "sourceInterpretation"
+  | "lutSpace"
+  | "lutFingerprint"
+>;
 
 export interface WorkspaceSnapshot {
-  version: 1;
+  version: 1 | 2;
+  mediaMode?: MediaMode;
+  mediaSelection?: Partial<
+    Record<MediaMode, { activeId: string | null; selectedIds: string[] }>
+  >;
   clips: Clip[];
   activeId: string | null;
   selectedIds: string[];

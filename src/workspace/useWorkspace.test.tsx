@@ -93,6 +93,167 @@ async function loadedWorkspace() {
 }
 
 describe("desktop workspace", () => {
+  it("shows a finished batch only in its media mode while preserving shared history", async () => {
+    const original = mockedInvoke.getMockImplementation()!;
+    mockedInvoke.mockImplementation((command, args) =>
+      command === "get_batch_progress"
+        ? Promise.resolve({
+            ...running,
+            status: "completed",
+            completed_items: 1,
+            overall_progress: 100,
+            items: running.items.map((item) => ({
+              ...item,
+              status: "completed",
+              progress: 100,
+            })),
+          })
+        : original(command, args)
+    );
+    const { result } = await loadedWorkspace();
+    await act(async () => result.current.startExport());
+    await waitFor(() => expect(result.current.isExporting).toBe(false));
+    expect(result.current.batch?.batch_id).toBe("batch-1");
+    await act(async () => result.current.setMediaMode("photo"));
+    expect(result.current.batch).toBeNull();
+    expect(result.current.history).toHaveLength(1);
+    await act(async () => result.current.setMediaMode("video"));
+    expect(result.current.batch?.batch_id).toBe("batch-1");
+  });
+  it("imports photos independently, remembers media selections, and freezes a cancellable photo batch", async () => {
+    const original = mockedInvoke.getMockImplementation()!;
+    const start = deferred<{
+      batch_id: string;
+      status: string;
+      total_items: number;
+      message: string;
+    }>();
+    mockedInvoke.mockImplementation((command, args) => {
+      if (command === "get_photo_info")
+        return Promise.resolve({
+          path: (args as { path: string }).path,
+          filename: "a.png",
+          size: 100,
+          format: "png",
+          width: 800,
+          height: 600,
+          stored_width: 800,
+          stored_height: 600,
+          bit_depth: 16,
+          has_alpha: true,
+          orientation: 1,
+          color_profile: "sRGB",
+          color_status: "embedded",
+          source_version: "v1",
+        });
+      if (command === "start_photo_batch_processing") return start.promise;
+      return original(command, args);
+    });
+    const { result } = await loadedWorkspace();
+    await act(async () => result.current.setMediaMode("photo"));
+    await act(async () =>
+      result.current.importVideos(["/a.png", "/b.tif", "/wrong.mov"])
+    );
+    expect(result.current.clips.map((c) => c.path)).toEqual([
+      "/a.png",
+      "/b.tif",
+    ]);
+    expect(result.current.allClips).toHaveLength(3);
+    await act(async () => result.current.setMediaMode("video"));
+    expect(result.current.activeClip?.path).toBe("/a.mov");
+    await act(async () => result.current.setMediaMode("photo"));
+    expect(result.current.activeClip?.path).toBe("/a.png");
+    act(() =>
+      result.current.setClipLook("/a.png", {
+        intensity: 50,
+        lutPath: "/film.cube",
+        lutSpace: "srgb",
+        lutFingerprint: "a".repeat(64),
+      })
+    );
+    let exporting!: Promise<void>;
+    act(() => {
+      exporting = result.current.startExport();
+      void result.current.startExport();
+      result.current.setClipLook("/a.png", { intensity: 10 });
+    });
+    await waitFor(() =>
+      expect(
+        mockedInvoke.mock.calls.filter(
+          ([name]) => name === "start_photo_batch_processing"
+        )
+      ).toHaveLength(1)
+    );
+    expect(
+      mockedInvoke.mock.calls.find(
+        ([name]) => name === "start_photo_batch_processing"
+      )?.[1]
+    ).toMatchObject({
+      request: {
+        items: [
+          {
+            input_path: "/a.png",
+            intensity: 0.5,
+            photo: {
+              lut_space: "srgb",
+              lut_fingerprint: "a".repeat(64),
+              source_version: "v1",
+            },
+          },
+          { input_path: "/b.tif" },
+        ],
+        photo_options: { output: { format: "png", bit_depth: 16 } },
+      },
+    });
+    await act(async () => result.current.cancelExport());
+    await act(async () => {
+      start.resolve({
+        batch_id: "photo-batch",
+        status: "running",
+        total_items: 2,
+        message: "",
+      });
+      await exporting;
+    });
+    expect(mockedInvoke).toHaveBeenCalledWith("cancel_batch", {
+      batchId: "photo-batch",
+    });
+    expect(result.current.clips[0].intensity).toBe(50);
+  });
+  it("undo restores the edited media mode and keeps metadata read after the edit", async () => {
+    const original = mockedInvoke.getMockImplementation()!;
+    mockedInvoke.mockImplementation((command, args) =>
+      command === "get_photo_info"
+        ? Promise.resolve({
+            path: "/photo.png",
+            filename: "photo.png",
+            size: 100,
+            format: "png",
+            width: 20,
+            height: 30,
+            stored_width: 20,
+            stored_height: 30,
+            bit_depth: 16,
+            has_alpha: false,
+            orientation: 1,
+            color_profile: "sRGB",
+            color_status: "embedded",
+            source_version: "v1",
+          })
+        : original(command, args)
+    );
+    const { result } = await loadedWorkspace();
+    act(() => result.current.setClipLook("/a.mov", { intensity: 40 }));
+    await act(async () => result.current.setMediaMode("photo"));
+    await act(async () => result.current.importVideos(["/photo.png"]));
+    act(() => result.current.undo());
+    expect(result.current.mediaMode).toBe("video");
+    expect(result.current.activeClip?.path).toBe("/a.mov");
+    expect(result.current.activeClip?.intensity).toBe(100);
+    expect(
+      result.current.allClips.find((c) => c.kind === "photo")?.info?.width
+    ).toBe(20);
+  });
   it("locks immediately against duplicate starts and keeps the submitted look immutable", async () => {
     const start = deferred<{
       batch_id: string;
@@ -104,7 +265,7 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "start_batch_processing"
         ? start.promise
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     let request!: Promise<void>;
@@ -117,9 +278,9 @@ describe("desktop workspace", () => {
     await waitFor(() =>
       expect(
         mockedInvoke.mock.calls.filter(
-          ([cmd]) => cmd === "start_batch_processing",
-        ),
-      ).toHaveLength(1),
+          ([cmd]) => cmd === "start_batch_processing"
+        )
+      ).toHaveLength(1)
     );
     expect(result.current.clips[0].intensity).toBe(100);
     expect(result.current.isExporting).toBe(true);
@@ -133,7 +294,7 @@ describe("desktop workspace", () => {
       await request;
     });
     await waitFor(() =>
-      expect(result.current.clips[0].status).toBe("processing"),
+      expect(result.current.clips[0].status).toBe("processing")
     );
   });
 
@@ -148,7 +309,7 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "start_batch_processing"
         ? start.promise
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     let request!: Promise<void>;
@@ -159,7 +320,7 @@ describe("desktop workspace", () => {
       await result.current.cancelExport();
     });
     expect(
-      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "cancel_batch"),
+      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "cancel_batch")
     ).toHaveLength(0);
     await act(async () => {
       start.resolve({
@@ -208,7 +369,7 @@ describe("desktop workspace", () => {
       await result.current.cancelExport();
     });
     expect(
-      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "cancel_batch"),
+      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "cancel_batch")
     ).toHaveLength(2);
   });
 
@@ -300,7 +461,7 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "start_batch_processing"
         ? Promise.reject("encoder unavailable")
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     await act(async () => {
@@ -317,7 +478,7 @@ describe("desktop workspace", () => {
       await result.current.retryFailed();
     });
     await waitFor(() =>
-      expect(result.current.clips[0].status).toBe("processing"),
+      expect(result.current.clips[0].status).toBe("processing")
     );
   });
 
@@ -325,14 +486,14 @@ describe("desktop workspace", () => {
     const poll = deferred<BatchProgress>();
     const original = mockedInvoke.getMockImplementation()!;
     mockedInvoke.mockImplementation((command, args) =>
-      command === "get_batch_progress" ? poll.promise : original(command, args),
+      command === "get_batch_progress" ? poll.promise : original(command, args)
     );
     const { result } = await loadedWorkspace();
     await act(async () => {
       await result.current.startExport();
     });
     expect(
-      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "get_batch_progress"),
+      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "get_batch_progress")
     ).toHaveLength(1);
     expect(result.current.isExporting).toBe(true);
     await act(async () => {
@@ -355,7 +516,7 @@ describe("desktop workspace", () => {
               { ...running.items[0], progress: 100, status: "completed" },
             ],
           })
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     await act(async () => {
@@ -437,8 +598,8 @@ describe("desktop workspace", () => {
     await waitFor(() => expect(writes).toBe(1));
     expect(
       mockedInvoke.mock.calls.filter(
-        ([cmd]) => cmd === "start_batch_processing",
-      ),
+        ([cmd]) => cmd === "start_batch_processing"
+      )
     ).toHaveLength(0);
     await act(async () => {
       firstWrite.resolve();
@@ -446,7 +607,7 @@ describe("desktop workspace", () => {
     });
     expect(writes).toBe(2);
     const request = mockedInvoke.mock.calls.find(
-      ([cmd]) => cmd === "start_batch_processing",
+      ([cmd]) => cmd === "start_batch_processing"
     )?.[1];
     expect(request).toMatchObject({
       request: { output_format: "mov", video_codec: "prores_ks" },
@@ -459,7 +620,7 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "get_video_info" && failMetadata
         ? Promise.reject("ffprobe not found")
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     expect(result.current.activeClip?.metadataError).toBe("ffprobe not found");
@@ -468,7 +629,11 @@ describe("desktop workspace", () => {
       await result.current.updateSettings({ ffmpeg_path: "/new/ffmpeg" });
     });
     await waitFor(() =>
-      expect(result.current.activeClip?.info?.duration).toBe(10),
+      expect(
+        result.current.activeClip?.kind !== "photo"
+          ? result.current.activeClip?.info?.duration
+          : undefined
+      ).toBe(10)
     );
     expect(result.current.activeClip?.metadataError).toBeUndefined();
   });
@@ -517,7 +682,7 @@ describe("desktop workspace", () => {
     expect(maxInFlight).toBe(3);
     expect(result.current.clips).toHaveLength(5);
     expect(
-      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "get_file_info"),
+      mockedInvoke.mock.calls.filter(([cmd]) => cmd === "get_file_info")
     ).toHaveLength(5);
   });
 
@@ -573,7 +738,7 @@ describe("desktop workspace", () => {
         ? ++writes === 1
           ? first.promise
           : second.promise
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     let done!: Promise<void>;
@@ -596,7 +761,7 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "update_app_settings"
         ? Promise.reject("third failed")
-        : original(command, args),
+        : original(command, args)
     );
     await act(async () => {
       await result.current.updateSettings({ output_format: "mkv" });
@@ -629,7 +794,7 @@ describe("desktop workspace", () => {
             batch: running,
             history: [],
           })
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = renderHook(() => useWorkspace());
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -642,18 +807,18 @@ describe("desktop workspace", () => {
     expect(result.current.isExporting).toBe(false);
     expect(result.current.batch?.status).toBe("cancelled");
     expect(
-      mockedInvoke.mock.calls.some(([cmd]) => cmd === "start_batch_processing"),
+      mockedInvoke.mock.calls.some(([cmd]) => cmd === "start_batch_processing")
     ).toBe(false);
     await act(async () => {
       result.current.setClipLook("/a.mov", { intensity: 60 });
       await result.current.flushWorkspace();
     });
     const saves = mockedInvoke.mock.calls.filter(
-      ([cmd]) => cmd === "save_workspace",
+      ([cmd]) => cmd === "save_workspace"
     );
     expect(saves.slice(-1)[0]?.[1]).toMatchObject({
       snapshot: {
-        version: 1,
+        version: 2,
         selectedIds: ["/a.mov"],
         clips: [{ intensity: 60, status: "ready" }],
       },
@@ -665,16 +830,16 @@ describe("desktop workspace", () => {
     mockedInvoke.mockImplementation((command, args) =>
       command === "load_workspace"
         ? Promise.reject("permission denied")
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = renderHook(() => useWorkspace());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.workspaceSaveError).toContain("自动保存已暂停");
     await expect(result.current.flushWorkspace()).rejects.toThrow(
-      "工作区读取失败",
+      "工作区读取失败"
     );
     expect(
-      mockedInvoke.mock.calls.some(([cmd]) => cmd === "save_workspace"),
+      mockedInvoke.mock.calls.some(([cmd]) => cmd === "save_workspace")
     ).toBe(false);
   });
 
@@ -687,7 +852,7 @@ describe("desktop workspace", () => {
         ? ++writes === 1
           ? first.promise
           : Promise.resolve()
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     let flush!: Promise<void>;
@@ -706,7 +871,7 @@ describe("desktop workspace", () => {
     expect(
       mockedInvoke.mock.calls
         .filter(([cmd]) => cmd === "save_workspace")
-        .slice(-1)[0]?.[1],
+        .slice(-1)[0]?.[1]
     ).toMatchObject({ snapshot: { clips: [{ intensity: 25 }] } });
   });
 
@@ -783,7 +948,7 @@ describe("desktop workspace", () => {
     expect(reads).toHaveLength(3);
     expect(result.current.clips).toHaveLength(3);
     const request = mockedInvoke.mock.calls.find(
-      ([cmd]) => cmd === "start_batch_processing",
+      ([cmd]) => cmd === "start_batch_processing"
     )?.[1] as { request: { items: unknown[] } };
     expect(request.request.items).toHaveLength(3);
   });
@@ -818,7 +983,9 @@ describe("desktop workspace", () => {
     });
     expect(result.current.clips).toHaveLength(3);
     expect(
-      result.current.clips.every((clip) => clip.info?.duration === 10),
+      result.current.clips.every(
+        (clip) => clip.kind !== "photo" && clip.info?.duration === 10
+      )
     ).toBe(true);
     expect(result.current.isImporting).toBe(false);
     expect(result.current.importProgress).toEqual({ completed: 3, total: 4 });
@@ -847,7 +1014,7 @@ describe("desktop workspace", () => {
                   { ...running.items[0], status: "completed", progress: 100 },
                 ],
               }
-            : { ...running, batch_id: "batch-2" },
+            : { ...running, batch_id: "batch-2" }
         );
       if (
         command === "set_export_guard" &&
@@ -874,7 +1041,7 @@ describe("desktop workspace", () => {
     expect(
       mockedInvoke.mock.calls
         .filter(([cmd]) => cmd === "set_export_guard")
-        .map(([, args]) => (args as { active: boolean }).active),
+        .map(([, args]) => (args as { active: boolean }).active)
     ).toEqual([true, false, true]);
   });
 
@@ -904,7 +1071,7 @@ describe("desktop workspace", () => {
       await result.current.retryWorkspaceSave();
     });
     expect(
-      result.current.clips.map((clip) => [clip.path, clip.intensity]),
+      result.current.clips.map((clip) => [clip.path, clip.intensity])
     ).toEqual([
       ["/old.mov", 70],
       ["/a.mov", 35],
@@ -925,7 +1092,7 @@ describe("desktop workspace", () => {
               { ...running.items[0], status: "completed", progress: 100 },
             ],
           })
-        : original(command, args),
+        : original(command, args)
     );
     const { result } = await loadedWorkspace();
     await act(async () => {
@@ -966,9 +1133,7 @@ describe("desktop workspace", () => {
         });
       if (command === "list_lut_library")
         return Promise.resolve(
-          restored
-            ? []
-            : [{ path: "/warm.cube", name: "warm", is_valid: true }],
+          restored ? [] : [{ path: "/warm.cube", name: "warm", is_valid: true }]
         );
       return original(command, args);
     });
@@ -1026,7 +1191,7 @@ describe("desktop workspace", () => {
     });
     expect(releaseAttempts).toBe(2);
     expect(
-      mockedInvoke.mock.calls.some(([command]) => command === "save_workspace"),
+      mockedInvoke.mock.calls.some(([command]) => command === "save_workspace")
     ).toBe(true);
   });
 

@@ -6,6 +6,13 @@ use std::path::{Path, PathBuf};
 
 /// 获取应用数据目录
 pub fn get_app_data_dir() -> AppResult<PathBuf> {
+    // Debug desktop smoke tests use isolated data without repurposing HOME.
+    #[cfg(debug_assertions)]
+    if let Some(directory) = env::var_os("LUTLAB_DATA_DIR") {
+        let path = PathBuf::from(directory);
+        if !path.is_absolute() { return Err(AppError::InvalidInput("LUTLAB_DATA_DIR 必须是绝对路径".into())); }
+        return Ok(path);
+    }
     let app_name = "auto-apply-lut";
 
     #[cfg(target_os = "macos")]

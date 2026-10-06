@@ -5,6 +5,8 @@ pub mod ffmpeg;
 pub mod file;
 pub mod gpu;
 pub mod lut;
+pub mod photo;
+pub mod output;
 pub mod system;
 pub mod task;
 pub mod video;

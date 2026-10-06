@@ -58,6 +58,7 @@ pub struct AppConfig {
     pub two_pass_encoding: bool,
     /// 是否保留元数据
     pub preserve_metadata: bool,
+    pub photo_options: crate::core::photo::PhotoSettings,
 }
 
 impl Default for AppConfig {
@@ -88,6 +89,7 @@ impl Default for AppConfig {
             preview_quality: "fast".into(),
             two_pass_encoding: false,
             preserve_metadata: true,
+            photo_options: Default::default(),
         }
     }
 }

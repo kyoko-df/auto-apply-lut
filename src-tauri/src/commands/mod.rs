@@ -8,6 +8,7 @@ pub mod gpu_manager;
 pub mod lut_manager;
 pub mod preview;
 pub mod processor;
+pub mod photo;
 pub mod startup;
 pub mod system_manager;
 pub mod workspace;

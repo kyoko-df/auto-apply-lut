@@ -34,6 +34,12 @@ This software is based in part on the work of the Independent JPEG Group.
 
 ## Source and build provenance
 
+The photo pipeline statically links Little CMS through `lcms2` / `lcms2-sys`
+and uses Rust `image`, `png`, `tiff`, `little_exif` and `crc32fast`. Pinned
+versions, upstream links and included license files are recorded in
+[PHOTO-DEPENDENCIES.md](src-tauri/resources/licenses/PHOTO-DEPENDENCIES.md).
+Cargo.lock remains the version/checksum record for transitive Rust dependencies.
+
 See [FFMPEG-SOURCE.md](src-tauri/resources/licenses/FFMPEG-SOURCE.md) for the exact
 download locations, source references, recorded evidence and outstanding source
 delivery work. FFmpeg's [license documentation](https://ffmpeg.org/doxygen/trunk/md_LICENSE.html)
