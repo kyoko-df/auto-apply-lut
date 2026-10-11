@@ -479,6 +479,22 @@ pub async fn start_batch_processing(
     } else {
         None
     };
+    let (configured_concurrent, configured_ffmpeg) = {
+        let manager = config_manager
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        (
+            manager.get_config().max_concurrent_tasks,
+            manager.get_config().ffmpeg_path.clone(),
+        )
+    };
+    let ffmpeg_path = match configured_ffmpeg.filter(|path| !path.trim().is_empty()) {
+        Some(path) => crate::core::ffmpeg::resolve_executable_path(std::path::Path::new(&path)),
+        None => tokio::task::spawn_blocking(crate::core::ffmpeg::discover_ffmpeg_path)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?,
+    };
     let mut reserved = HashSet::new();
     let mut validated_luts = HashSet::new();
     let mut normalized_items = Vec::with_capacity(request.items.len());
@@ -504,7 +520,11 @@ pub async fn start_batch_processing(
         if let Some(options) = &photo_options {
             let path = PathBuf::from(&item.input_path);
             let info = photo_processor
-                .inspect(&path, &tokio_util::sync::CancellationToken::new())
+                .inspect(
+                    Some(&ffmpeg_path),
+                    &path,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
                 .await?
                 .info;
             options.output.validate(info.has_alpha)?;
@@ -671,22 +691,6 @@ pub async fn start_batch_processing(
 
     let batch_id = Uuid::new_v4().to_string();
     let total_items = normalized_items.len();
-    let (configured_concurrent, configured_ffmpeg) = {
-        let manager = config_manager
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        (
-            manager.get_config().max_concurrent_tasks,
-            manager.get_config().ffmpeg_path.clone(),
-        )
-    };
-    let ffmpeg_path = match configured_ffmpeg.filter(|path| !path.trim().is_empty()) {
-        Some(path) => PathBuf::from(path),
-        None => tokio::task::spawn_blocking(crate::core::ffmpeg::discover_ffmpeg_path)
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?,
-    };
     let max_concurrent = request
         .max_concurrent
         .unwrap_or(configured_concurrent)

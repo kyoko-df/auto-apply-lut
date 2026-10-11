@@ -27,8 +27,10 @@ dist-ssr
 src-tauri/resources/bin/macos/
 src-tauri/resources/bin/windows/
 src-tauri/resources/bin/linux/
+src-tauri/.cache/
 
 docs/*
+!docs/photo-native-inputs.md
 .pnpm-store/*
 tmp/*
 

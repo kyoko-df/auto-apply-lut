@@ -227,10 +227,20 @@ pub async fn get_photo_lut_fingerprint(
 #[tauri::command]
 pub async fn get_photo_info(
     path: String,
+    config_manager: State<'_, Mutex<ConfigManager>>,
     photo_processor: State<'_, PhotoProcessor>,
 ) -> Result<PhotoInfo, String> {
+    let engine = if photo::is_heif(Path::new(&path)) {
+        Some(current_engine(&config_manager).await?)
+    } else {
+        None
+    };
     Ok(photo_processor
-        .inspect(Path::new(&path), &CancellationToken::new())
+        .inspect(
+            engine.as_deref(),
+            Path::new(&path),
+            &CancellationToken::new(),
+        )
         .await?
         .info)
 }
@@ -246,7 +256,9 @@ pub async fn scan_directory_for_photos(
         let mut size = 0;
         super::batch_manager::scan_recursive(
             &path,
-            &["jpg", "jpeg", "png", "tif", "tiff"],
+            &[
+                "jpg", "jpeg", "png", "tif", "tiff", "hif", "heif", "heic", "arw",
+            ],
             &super::batch_manager::lut_extensions(),
             &mut files,
             &mut luts,
@@ -489,6 +501,53 @@ mod tests {
         }
     }
     #[tokio::test]
+    #[ignore = "requires generated HEIF fixture; see docs/photo-native-inputs.md"]
+    async fn generated_heif_preview_uses_native_decode_and_region_geometry() {
+        let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
+        let path = dir.join("generated-orientation-6.heic");
+        let engine = engine().expect("real FFmpeg required");
+        let state = PreviewState::default();
+        let photos = PhotoPreviewState::default();
+        let processor = PhotoProcessor::with_budget(256 * 1024 * 1024);
+        let mut full_request = request(&path);
+        full_request.source_interpretation = SourceInterpretation::Assign {
+            space: PhotoSpace::Srgb,
+        };
+        let full = generate_with_resolver(
+            full_request,
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!((full.width, full.height), (48, 64));
+        assert!(!full.cached);
+        let mut region = request(&path);
+        region.source_interpretation = SourceInterpretation::Assign {
+            space: PhotoSpace::Srgb,
+        };
+        region.viewport = PhotoViewport::Region {
+            x: 4,
+            y: 8,
+            width: 16,
+            height: 24,
+        };
+        let region = generate_with_resolver(
+            region,
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine)),
+        )
+        .await
+        .unwrap();
+        assert_eq!((region.width, region.height), (16, 24));
+        assert_ne!(region.original_image, full.original_image);
+    }
+
+    #[tokio::test]
     async fn actual_preview_caches_bypass_shared_slots_and_invalidate_for_changed_source_and_region(
     ) {
         let Some(engine) = engine() else {
@@ -660,7 +719,7 @@ async fn generate_with_resolver(
     let token = active.token.clone();
     let engine = tokio::select! { biased; _ = token.cancelled() => return Err(ui_err("preview.cancelled", "预览已取消")), engine = resolver => engine? };
     let header = photo_processor
-        .inspect(Path::new(&request.photo_path), &token)
+        .inspect(Some(&engine), Path::new(&request.photo_path), &token)
         .await?;
     let lut_hash = if let Some(path) = request
         .lut_path
@@ -685,7 +744,9 @@ async fn generate_with_resolver(
         String::new()
     };
     let mut base = Sha256::new();
-    base.update(b"photo-normalized-v1");
+    base.update(b"photo-normalized-portable-v2-libraw-0.21.4");
+    base.update(engine.as_os_str().to_string_lossy().as_bytes());
+    base.update(photo::metadata::version(&engine)?.as_bytes());
     base.update(header.info.source_version.as_bytes());
     base.update(request.photo_path.as_bytes());
     base.update(serde_json::to_vec(&request.source_interpretation).map_err(|e| e.to_string())?);
@@ -699,7 +760,6 @@ async fn generate_with_resolver(
     hash.update(serde_json::to_vec(&request.viewport).map_err(|e| e.to_string())?);
     hash.update(request.quality.as_bytes());
     hash.update(serde_json::to_vec(&request.alpha_policy).map_err(|e| e.to_string())?);
-    hash.update(photo::metadata::version(&engine)?.as_bytes());
     let key = format!("photo:{:x}", hash.finalize());
     let response = |images: VideoPreviewResponse, width, height| PhotoPreviewResponse {
         original_image: images.original_image,
@@ -744,12 +804,14 @@ async fn generate_with_resolver(
     let cancellation = token.clone();
     let lease = memory.clone();
     let slot = render.clone();
+    let decode_engine = engine.clone();
     let (mut frame, artifact) = tokio::task::spawn_blocking(move || {
         let (_lease, _slot) = (lease, slot);
         if let Some(cached) = cached {
             return Ok::<_, String>((cached.load(&cancellation)?, None));
         }
-        let frame = photo::codec::decode(&path, &source, &cancellation)?;
+        let frame =
+            photo::codec::decode_with_engine(&path, &source, &cancellation, Some(&decode_engine))?;
         let bytes = frame.rgb.len() * 2 + frame.alpha.as_ref().map_or(0, |a| a.len() * 2);
         let artifact = if bytes <= 256 * 1024 * 1024 {
             Some(Arc::new(Normalized::store(&frame)?))

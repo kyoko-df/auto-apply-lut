@@ -155,7 +155,7 @@ export default {
     recheckEngine: "再検出",
     previewExportTitle: "プレビューと書き出し",
     previewPhotoDesc:
-      "写真プレビューは先に sRGB に変換し、sRGB 使用を確認したクリエイティブ LUT を適用します。高速モードはルック選び用、正確モードと 100% 局部は確認用です。書き出しは元のサイズを維持します。初版は JPEG、PNG、TIFF に対応し、RAW 現像は含みません。",
+      "写真プレビューは先に sRGB に変換し、sRGB 使用を確認したクリエイティブ LUT を適用します。高速モードはルック選び用、正確モードと 100% 局部は確認用です。書き出しは元のサイズを維持します。JPEG、PNG、TIFF に対応。SDR HIF/HEIF には対応する FFmpeg 9+ が必要です。Sony ARW はフル解像度で現像します。HLG/PQ 写真は先に SDR に変換してください。",
     previewVideoDesc:
       "プレビューは縮小した実フレームに LUT 演算を適用し、書き出しは設定したフル解像度を使用します。プレビューはシーク可能な静止フレームです。自動モードは入力変換を行いません。PQ または HLG を選択すると LUT の前に Rec.709 SDR に変換します。",
     helpStep1Title: "素材と LUT のインポート",
@@ -290,6 +290,7 @@ export default {
     profileInvalid: "ICC が無効、またはチャンネルが一致しません",
     profileEmbedded: "埋め込み ICC",
     profilePending: "写真情報を待機中",
+    rawInputHint: "ARW は撮影時のホワイトバランスと 固定の LibRaw 現像設定で、フル解像度の 16-bit SDR sRGB に変換します。",
     profileOutput: "{{profile}} · 出力はすべて sRGB に変換されます。",
     applyInputToSelected: "現在の入力解釈を選択中の写真に適用",
     rereadInfo: "写真情報を再読み込み",
@@ -312,7 +313,7 @@ export default {
     outputLocation: "書き出し先",
     sourceFolder: "元写真のフォルダー",
     outputHint:
-      "新規ファイルとして保存し、元写真や既存の出力を上書きしません。初版に RAW 現像は含みません。",
+      "新規ファイルとして保存し、元写真や既存の出力を上書きしません。ARW は LibRaw のフル解像度現像で 16-bit sRGB に変換します。HDR 写真は非対応です。",
     scopeAll: "すべての書き出し待ち写真",
     scopeSelected: "選択中の写真のみ",
     cancelling: "キャンセル中、クリーンアップを待機…",

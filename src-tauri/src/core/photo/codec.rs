@@ -14,7 +14,19 @@ pub fn decode(
     source: &SourceInterpretation,
     cancel: &CancellationToken,
 ) -> Result<PhotoFrame, String> {
+    decode_with_engine(path, source, cancel, None)
+}
+
+pub fn decode_with_engine(
+    path: &Path,
+    source: &SourceInterpretation,
+    cancel: &CancellationToken,
+    engine: Option<&Path>,
+) -> Result<PhotoFrame, String> {
     check_cancel(cancel)?;
+    if super::native::format(path).is_some() {
+        return super::native::decode_with_engine(path, source, cancel, engine);
+    }
     let header = metadata::header(path)?;
     let icc = match source {
         SourceInterpretation::Assign { space } => metadata::assigned_icc(*space)?,
@@ -171,6 +183,9 @@ pub fn capture_metadata(path: &Path, preserve: bool, gps: bool) -> Result<Metada
     if !preserve {
         return Ok(result);
     }
+    if super::native::format(path).is_some() {
+        return super::native::capture_metadata(path, gps);
+    }
     let reader = metadata::reader(path)?;
     if reader.format() != Some(image::ImageFormat::Tiff) {
         let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
@@ -185,7 +200,12 @@ pub fn capture_metadata(path: &Path, preserve: bool, gps: bool) -> Result<Metada
     let source = std::panic::catch_unwind(|| Metadata::new_from_path(path))
         .map_err(|_| "照片元数据解析失败")?
         .map_err(|e| format!("无法保留照片元数据：{e}"))?;
-    for tag in &source {
+    Ok(metadata_allowlist(&source, gps))
+}
+
+pub(super) fn metadata_allowlist(source: &Metadata, gps: bool) -> Metadata {
+    let mut result = Metadata::new();
+    for tag in source {
         let id = tag.as_u16();
         let allowed = matches!(
             id,
@@ -217,7 +237,7 @@ pub fn capture_metadata(path: &Path, preserve: bool, gps: bool) -> Result<Metada
             result.set_tag(tag.clone());
         }
     }
-    Ok(result)
+    result
 }
 
 pub fn write_metadata(

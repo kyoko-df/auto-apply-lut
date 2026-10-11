@@ -129,17 +129,19 @@ impl PhotoProcessor {
     }
     pub async fn inspect(
         &self,
+        engine: Option<&Path>,
         path: &Path,
         token: &CancellationToken,
     ) -> Result<metadata::PhotoHeader, String> {
         let bytes = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
         let lease = self.reserve(128 * 1024 * 1024 + bytes, token).await?;
         let path = path.to_path_buf();
+        let engine = engine.map(Path::to_path_buf);
         let token = token.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
             check_cancel(&token)?;
-            let result = metadata::header(&path)?;
+            let result = metadata::header_with_engine(&path, engine.as_deref(), &token)?;
             check_cancel(&token)?;
             Ok(result)
         })
@@ -164,7 +166,9 @@ impl PhotoProcessor {
             return Err("照片输出已存在，禁止覆盖".into());
         }
         progress(PhotoStage::Read.as_str());
-        let header = self.inspect(&job.input, &control.token).await?;
+        let header = self
+            .inspect(Some(engine), &job.input, &control.token)
+            .await?;
         check_cancel(&control.token)?;
         if job
             .expected_version
@@ -190,9 +194,10 @@ impl PhotoProcessor {
         let source = job.source.clone();
         let token = control.token.clone();
         let lease = permit.clone();
+        let decode_engine = engine.to_path_buf();
         let (mut frame, metadata) = tokio::task::spawn_blocking(move || {
             let _lease = lease;
-            let frame = codec::decode(&path, &source, &token)?;
+            let frame = codec::decode_with_engine(&path, &source, &token, Some(&decode_engine))?;
             check_cancel(&token)?;
             let metadata = codec::capture_metadata(&path, job.preserve_metadata, job.preserve_gps)?;
             Ok::<_, String>((frame, metadata))

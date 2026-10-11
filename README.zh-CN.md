@@ -37,13 +37,15 @@
 
 ## 照片模式
 
-顶部切换为「照片」，导入 JPEG、PNG 或单页 TIFF。选择 LUT 后确认按 sRGB 输入和输出使用，再调整强度；可同步到多选或全部照片。预览支持原图、调色后、分割对比、适应窗口和 100% 局部查看；快速模式是近似效果，100% 局部始终使用精确流程。
+顶部切换为「照片」，导入 JPEG、PNG 或单页 TIFF；也支持 SDR Sony HIF/HEIF/HEIC 和 Sony ARW。选择 LUT 后确认按 sRGB 输入和输出使用，再调整强度；可同步到多选或全部照片。预览支持原图、调色后、分割对比、适应窗口和 100% 局部查看；快速模式是近似效果，100% 局部始终使用精确流程。
 
 照片先按内嵌 ICC 或明确的 sRGB 声明转换到 16 位 sRGB，再应用与视频共用的 LUT 强度算法。未标记或无效配置需要手动指定 sRGB、Adobe RGB 或 Display P3。导出保持方向校正后的原尺寸，支持 JPEG 8 位、PNG/TIFF 8 或 16 位，默认 PNG 16 位，嵌入 sRGB ICC。PNG 可以保留透明通道；透明照片导出 JPEG/TIFF 前必须选择合成背景。
 
 照片批次最多并行 2 项，同时受内存预算约束。主要拍摄信息按允许列表保留，定位信息默认不保留；不复制原缩略图、MakerNote 和完整 XMP。同步库的解码与编码采用合作取消，取消中会等待当前不可中断阶段返回并清理后再结束。照片与视频的队列、选择和编辑参数随工作区恢复。
 
-首版不包含 RAW/HEIC/AVIF、CMYK、HDR 照片、透明/浮点/多页 TIFF、APNG、BigTIFF、曝光曲线或局部蒙版，也不能导入 Lightroom/Capture One 预设。文件限额为 512 MiB、6400 万像素、单边 32768，同时必须满足内存预算；超限会明确拒绝，导出不会悄悄缩小。
+macOS、Windows、Linux 共用照片解码与色彩处理：HIF/HEIF/HEIC 由支持完整主图像及 grid 的 FFmpeg/ffprobe 9+ 解码；外部预编译并静态链接的 LibRaw 0.21.4 完整显影 Sony ARW，使用拍摄白平衡和固定参数，不提取内嵌 JPEG 作为成片。LittleCMS 将 RGB16 正确规范到 SDR sRGB；已是 sRGB 的图像跳过恒等转换，再套照片 LUT。ARW 暂不提供曝光/白平衡编辑，效果不保证与相机 JPEG 或其他 RAW 软件相同。不支持的引擎或相机压缩格式会明确报错。HLG/PQ 即使手动指定 sRGB 也会拒绝，需先明确转换为 SDR。照片 sRGB LUT 与 S-Log3 视频流程独立。目前仅在 Apple Silicon Mac 完成运行验证；Windows/Linux 仍需各自完成原生构建和运行验收。详见 [输入说明与测试](docs/photo-native-inputs.md)。
+
+首版不包含 AVIF、CMYK、HDR 照片、透明/浮点/多页 TIFF、APNG、BigTIFF、曝光曲线或局部蒙版，也不能导入 Lightroom/Capture One 预设。文件限额为 512 MiB、6400 万像素、单边 32768，同时必须满足内存预算；超限会明确拒绝，导出不会悄悄缩小。
 
 ## 本地开发
 
@@ -51,6 +53,7 @@
 
 ```bash
 pnpm install
+pnpm prepare:libraw  # macOS / Windows: pinned official static library
 pnpm tauri dev
 ```
 
@@ -71,7 +74,7 @@ pnpm tauri build --debug --bundles app
 
 ## 独立 release 应用
 
-**Full 版本内置 FFmpeg 和 ffprobe，使用者不需要安装 Node.js、Rust、Homebrew 或 FFmpeg。** 当前已配置可复现下载的目标为 **Apple Silicon / macOS 12+**，固定使用 FFmpeg 9.0.2 静态构建。系统自带的 WebKit 和系统库仍是平台运行环境。
+**Full 版本内置 FFmpeg 和 ffprobe，使用者不需要安装 Node.js、Rust、Homebrew 或 FFmpeg。** 当前已配置可复现下载的目标为 **Apple Silicon / macOS 15+**，固定使用 FFmpeg 9.0.2 静态构建。系统自带的 WebKit 和系统库仍是平台运行环境。
 
 ```bash
 # 开发机首次构建：下载固定引擎、验证 SHA256、编译 release 并打包

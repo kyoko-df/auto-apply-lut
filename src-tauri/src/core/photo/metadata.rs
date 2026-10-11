@@ -121,6 +121,17 @@ fn png_srgb(path: &Path) -> Result<bool, String> {
 }
 
 pub fn header(path: &Path) -> Result<PhotoHeader, String> {
+    header_with_engine(path, None, &tokio_util::sync::CancellationToken::new())
+}
+
+pub fn header_with_engine(
+    path: &Path,
+    engine: Option<&Path>,
+    token: &tokio_util::sync::CancellationToken,
+) -> Result<PhotoHeader, String> {
+    if super::native::format(path).is_some() {
+        return super::native::header_with_engine(path, engine, token);
+    }
     let source_version = version(path)?;
     let reader = reader(path)?;
     let format = reader.format().ok_or("无法识别照片格式")?;

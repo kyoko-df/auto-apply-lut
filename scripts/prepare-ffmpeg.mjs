@@ -60,17 +60,28 @@ export async function verifyRuntime(directory, names) {
   const [ffmpeg, ffprobe] = names.map((name) => path.join(directory, name));
   for (const executable of [ffmpeg, ffprobe]) {
     const { stdout } = await execute(executable, ['-version']);
+    const major = Number(stdout.split(/\s+/)[2]?.split('.')[0]);
+    if (!Number.isInteger(major) || major < 9) throw new Error('Full photo inputs require FFmpeg and ffprobe 9+ for complete HEIF primary grids.');
     console.log(`[prepare-ffmpeg] ${stdout.split(/\r?\n/)[0]}`);
   }
-  const [{ stdout: encoders }, { stdout: filters }, { stdout: muxers }] = await Promise.all([
+  const [{ stdout: encoders }, { stdout: filters }, { stdout: muxers }, { stdout: decoders }] = await Promise.all([
     execute(ffmpeg, ['-hide_banner', '-encoders']), execute(ffmpeg, ['-hide_banner', '-filters']),
-    execute(ffmpeg, ['-hide_banner', '-muxers']),
+    execute(ffmpeg, ['-hide_banner', '-muxers']), execute(ffmpeg, ['-hide_banner', '-decoders']),
   ]);
+  requireCapabilities(decoders, ['hevc'], 'decoder');
   requireCapabilities(encoders, ['libx264', 'libx265', 'prores_ks', 'aac', 'mjpeg', 'ffv1'], 'encoder');
-  requireCapabilities(filters, ['lut3d', 'lut1d', 'blend', 'split', 'format', 'scale', 'setsar', 'pad', 'zscale', 'tonemap'], 'filter');
+  requireCapabilities(filters, ['lut3d', 'lut1d', 'blend', 'split', 'format', 'scale', 'setsar', 'pad', 'zscale', 'tonemap', 'xstack', 'crop'], 'filter');
   requireCapabilities(muxers, ['mp4', 'mov', 'matroska', 'image2', 'nut'], 'muxer');
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'lutlab-bundle-check-'));
   try {
+    const grid = path.join(root, 'scripts/fixtures/owned-srgb-grid.heic');
+    const { stdout: gridInfo } = await execute(ffprobe, ['-v', 'error', '-show_stream_groups', '-of', 'json', grid]);
+    const group = JSON.parse(gridInfo).stream_groups?.find(item => item.type === 'Tile Grid');
+    if (group?.components?.[0]?.width !== 128 || group?.nb_streams !== 2) throw new Error('FFprobe did not identify the complete synthetic HEIF primary grid.');
+    const rawGrid = path.join(workspace, 'primary.rgb16');
+    await execute(ffmpeg, ['-hide_banner', '-v', 'error', '-i', grid, '-frames:v', '1', '-pix_fmt', 'rgb48le', '-f', 'rawvideo', rawGrid]);
+    if ((await stat(rawGrid)).size !== 128 * 48 * 6) throw new Error('HEIF decoding returned a tile/preview instead of the complete RGB16 image.');
+    console.log('[prepare-ffmpeg] Complete 128x48 10-bit HEIF grid → RGB16 passed.');
     await writeFile(path.join(workspace, 'identity.cube'), 'LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n');
     for (const [codec, pixelFormat, extension] of [
       ['libx264', 'yuv420p', 'mp4'], ['libx265', 'yuv420p', 'mp4'], ['prores_ks', 'yuv422p10le', 'mov'],

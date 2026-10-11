@@ -1331,9 +1331,9 @@ export function useWorkspace() {
       current.map((c) =>
         c.kind === "photo" && ids.has(c.id)
           ? updateLook(c, {
-              sourceInterpretation: source.sourceInterpretation ?? {
-                mode: "embedded",
-              },
+              sourceInterpretation: c.info?.format === "arw" || extension(c.path) === "arw"
+                ? { mode: "embedded" }
+                : source.sourceInterpretation ?? { mode: "embedded" },
             })
           : c
       )

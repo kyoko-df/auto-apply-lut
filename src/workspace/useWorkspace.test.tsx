@@ -120,6 +120,30 @@ describe("desktop workspace", () => {
     await act(async () => result.current.setMediaMode("video"));
     expect(result.current.batch?.batch_id).toBe("batch-1");
   });
+  it("keeps ARW automatic when copying a photo RGB input assignment", async () => {
+    const original = mockedInvoke.getMockImplementation()!;
+    mockedInvoke.mockImplementation((command, args) => {
+      if (command === "get_photo_info") {
+        const path = (args as { path: string }).path;
+        return Promise.resolve({ path, filename: path, size: 100, format: path.endsWith("ARW") ? "arw" : "heif",
+          width: 64, height: 48, stored_width: 64, stored_height: 48, bit_depth: 16, has_alpha: false,
+          orientation: 1, color_profile: "sRGB", color_status: "srgb", source_version: "v1" });
+      }
+      return original(command, args);
+    });
+    const { result } = await loadedWorkspace();
+    await act(async () => result.current.setMediaMode("photo"));
+    await act(async () => result.current.importVideos(["/a.HIF", "/b.ARW"]));
+    act(() => {
+      result.current.selectClip("/a.HIF");
+      result.current.setClipLook("/a.HIF", { sourceInterpretation: { mode: "assign", space: "adobe-rgb" } });
+      result.current.selectAll();
+    });
+    act(() => result.current.applyInputToSelected());
+    expect(result.current.clips.find((c) => c.path === "/a.HIF")?.sourceInterpretation).toEqual({ mode: "assign", space: "adobe-rgb" });
+    expect(result.current.clips.find((c) => c.path === "/b.ARW")?.sourceInterpretation).toEqual({ mode: "embedded" });
+  });
+
   it("imports photos independently, remembers media selections, and freezes a cancellable photo batch", async () => {
     const original = mockedInvoke.getMockImplementation()!;
     const start = deferred<{

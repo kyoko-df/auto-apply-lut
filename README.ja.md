@@ -43,7 +43,7 @@ UI は中国語のダークワークベンチ、素材検索、LUT ライブラ�
 
 写真バッチは最大 2 項目並行で、メモリ予算の制約も受けます。主な撮影情報は許可リストに基づき保持され、位置情報はデフォルトで保持されません。元のサムネイル、MakerNote、完全な XMP はコピーしません。同期ライブラリのデコードとエンコードは協調キャンセルを採用し、キャンセル中は現在の中断不可フェーズが戻ってクリーンアップされるまで待機してから終了します。写真と動画のキュー、選択、編集パラメーターはワークスペースとともに復元されます。
 
-初版には RAW/HEIC/AVIF、CMYK、HDR 写真、透明/浮動小数点/複数ページ TIFF、APNG、BigTIFF、露光曲線、局部マスクは含まれず、Lightroom/Capture One プリセットのインポートもできません。ファイル制限は 512 MiB、6400 万画素、片辺 32768 で、メモリ予算も満たす必要があります。超過時は明示的に拒否され、書き出しで暗黙に縮小されることはありません。
+初版には AVIF、CMYK、HDR 写真、透明/浮動小数点/複数ページ TIFF、APNG、BigTIFF、露光曲線、局部マスクは含まれず、Lightroom/Capture One プリセットのインポートもできません。ファイル制限は 512 MiB、6400 万画素、片辺 32768 で、メモリ予算も満たす必要があります。超過時は明示的に拒否され、書き出しで暗黙に縮小されることはありません。
 
 ## ローカル開発
 
@@ -51,6 +51,7 @@ Node.js、pnpm、Rust、およびプラットフォームに対応する Tauri �
 
 ```bash
 pnpm install
+pnpm prepare:libraw  # macOS / Windows: pinned official static library
 pnpm tauri dev
 ```
 
@@ -71,7 +72,7 @@ pnpm tauri build --debug --bundles app
 
 ## スタンドアロンリリースアプリ
 
-**Full 版には FFmpeg と ffprobe が内蔵されており、ユーザーは Node.js、Rust、Homebrew、FFmpeg をインストールする必要がありません。** 現在、再現可能なダウンロードが設定されているターゲットは **Apple Silicon / macOS 12+** で、FFmpeg 9.0.2 の静的ビルドに固定されています。システムの WebKit とシステムライブラリはプラットフォームランタイムの一部です。
+**Full 版には FFmpeg と ffprobe が内蔵されており、ユーザーは Node.js、Rust、Homebrew、FFmpeg をインストールする必要がありません。** 現在、再現可能なダウンロードが設定されているターゲットは **Apple Silicon / macOS 15+** で、FFmpeg 9.0.2 の静的ビルドに固定されています。システムの WebKit とシステムライブラリはプラットフォームランタイムの一部です。
 
 ```bash
 # 開発機での初回ビルド: 固定エンジンのダウンロード、SHA256 検証、release コンパイルとバンドル
@@ -132,3 +133,7 @@ Rust の実動画テストは検出可能な FFmpeg で小型テスト素材を�
 - `src-tauri/src/core/ffmpeg/lut.rs`: プレビュー/書き出し共有の LUT 準備と強度フィルター。
 - `src-tauri/src/core/ffmpeg/processor.rs`: FFmpeg 子プロセス、進捗、キャンセル、エンコードフォールバック、安全な公開。
 - `src-tauri/src/database/`: LUT ライブラリと履歴タスクスナップショット。
+
+### HIF / ARW 入力
+
+macOS、Windows、Linux は同じ写真処理を使用します。SDR HIF/HEIF/HEIC は対応する FFmpeg/ffprobe 9+ で完全な主画像をデコードし、Sony ARW は外部のビルド済み静的ライブラリ LibRaw 0.21.4 でセンサー全体を現像します。撮影時のホワイトバランスと固定設定を使い、LittleCMS で 16-bit SDR sRGB に変換して写真用 LUT を適用します。埋め込み JPEG へのフォールバックはありません。HLG/PQ 写真は sRGB の手動指定でも拒否します。非対応のエンジンや RAW 形式は明確なエラーになります。実行確認済みの環境は Apple Silicon Mac のみです。Windows/Linux は各プラットフォームでのビルドと実行検証が必要です。詳細とテスト手順は [入力仕様](docs/photo-native-inputs.md) を参照してください。

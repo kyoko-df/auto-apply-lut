@@ -154,7 +154,7 @@ export default {
     recheckEngine: "Detect again",
     previewExportTitle: "Preview & export",
     previewPhotoDesc:
-      "Photo previews convert to sRGB first, then apply a creative LUT confirmed for sRGB use. Fast mode is for picking a look; accurate mode and the 100% region are for checking. Exports keep the original size. First release supports JPEG, PNG, TIFF — no RAW development.",
+      "Photo previews convert to sRGB first, then apply a creative LUT confirmed for sRGB use. Fast mode is for picking a look; accurate mode and the 100% region are for checking. Exports keep the original size. Supports JPEG, PNG and TIFF; SDR HIF/HEIF requires a compatible FFmpeg 9+ engine; Sony ARW is developed at full resolution. Convert HLG/PQ photos to SDR first.",
     previewVideoDesc:
       "Previews use scaled real frames plus the LUT; exports use the configured full resolution. Previews are seekable still frames. Auto mode does no input conversion; choosing PQ or HLG converts to Rec.709 SDR before the LUT.",
     helpStep1Title: "Import media and LUTs",
@@ -292,6 +292,7 @@ export default {
     profileInvalid: "Invalid ICC or channel mismatch",
     profileEmbedded: "Embedded ICC",
     profilePending: "Waiting for photo info",
+    rawInputHint: "ARW uses as-shot white balance and a fixed LibRaw development recipe at full resolution in 16-bit SDR sRGB.",
     profileOutput: "{{profile}} · Output is always converted to sRGB.",
     applyInputToSelected: "Apply this input interpretation to selected photos",
     rereadInfo: "Re-read photo info",
@@ -314,7 +315,7 @@ export default {
     outputLocation: "Output location",
     sourceFolder: "Source photo folder",
     outputHint:
-      "Saved as new files — originals and existing outputs are never overwritten. No RAW development in this release.",
+      "Saved as new files — originals and existing outputs are never overwritten. ARW uses full LibRaw development to 16-bit sRGB; HDR photos are unsupported.",
     scopeAll: "All pending photos",
     scopeSelected: "Selected photos only",
     cancelling: "Cancelling, cleaning up…",

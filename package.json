@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
+    "prepare:libraw": "node scripts/prepare-libraw.mjs",
+    "build:libraw": "node scripts/build-libraw.mjs",
     "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs --target aarch64-apple-darwin",
     "test:release": "node --test scripts/*.test.mjs",
     "release:mac:arm64": "pnpm fetch:ffmpeg && pnpm tauri:build:full:mac:arm64",

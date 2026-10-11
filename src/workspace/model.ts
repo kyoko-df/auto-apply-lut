@@ -22,7 +22,7 @@ export const VIDEO_EXTENSIONS = [
   "flv",
 ];
 export const LUT_EXTENSIONS = ["cube", "3dl", "csp", "m3d", "look", "lut"];
-export const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff"];
+export const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "hif", "heif", "heic", "arw"];
 export const DEFAULT_PHOTO_SETTINGS: PhotoSettings = {
   output: { format: "png", bit_depth: 16, alpha_policy: { mode: "preserve" } },
   preserve_metadata: true,

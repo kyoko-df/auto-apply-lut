@@ -257,7 +257,7 @@ export default function PhotoExportInspector({
                   ? active.sourceInterpretation.space
                   : "embedded"
               }
-              disabled={!active || locked}
+              disabled={!active || locked || active.info?.format === "arw"}
               onChange={(e) =>
                 active &&
                 w.setClipLook(active.id, {
@@ -281,6 +281,9 @@ export default function PhotoExportInspector({
               profile: photoProfileText(active?.info),
             })}
           </p>
+          {active?.info?.format === "arw" && (
+            <p className="field-hint">{t("photoInspector.rawInputHint")}</p>
+          )}
           <button
             className="text-button"
             disabled={!active || locked || w.selectedIds.length < 2}

@@ -1,7 +1,10 @@
 //! Native photo processing; never treats a photo as a zero-duration video.
 pub mod codec;
 pub mod color;
+mod heif;
+mod heif_decode;
 pub mod metadata;
+mod native;
 pub mod processor;
 
 use serde::{Deserialize, Serialize};
@@ -163,3 +166,7 @@ pub fn check_cancel(token: &tokio_util::sync::CancellationToken) -> Result<(), S
 
 #[cfg(test)]
 mod tests;
+
+pub fn is_heif(path: &std::path::Path) -> bool {
+    native::format(path) == Some("heif")
+}

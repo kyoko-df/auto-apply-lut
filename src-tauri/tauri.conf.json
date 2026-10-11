@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.kyokodf.auto-apply-lut",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm prepare:libraw && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm prepare:libraw && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "macOS": { "minimumSystemVersion": "15.0" },
     "targets": "all",
     "icon": [
       "icons/32x32.png",

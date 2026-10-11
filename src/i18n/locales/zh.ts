@@ -147,7 +147,7 @@ export default {
     recheckEngine: "重新检测",
     previewExportTitle: "预览与导出",
     previewPhotoDesc:
-      "照片预览先转换为 sRGB，再应用明确按 sRGB 使用的创意 LUT。快速模式用于选择风格，精确模式和 100% 局部用于检查效果；导出保持原尺寸。首版支持 JPEG、PNG、TIFF，不包含 RAW 显影。",
+      "照片预览先转换为 sRGB，再应用明确按 sRGB 使用的创意 LUT。快速模式用于选择风格，精确模式和 100% 局部用于检查效果；导出保持原尺寸。支持 JPEG、PNG、TIFF；SDR HIF/HEIF 需要支持该格式的 FFmpeg 9+；Sony ARW 完整显影。HLG/PQ 照片需先转换为 SDR。",
     previewVideoDesc:
       "预览使用缩小的真实视频帧与 LUT 运算；导出使用设置的完整分辨率。预览是可寻帧的静止画面。自动模式不转换输入色彩；手动选择 PQ 或 HLG 可转换为 Rec.709 SDR，再应用 LUT。",
     helpStep1Title: "导入素材与 LUT",
@@ -277,6 +277,7 @@ export default {
     profileInvalid: "无效或通道不匹配的 ICC",
     profileEmbedded: "嵌入 ICC",
     profilePending: "等待照片信息",
+    rawInputHint: "ARW 使用拍摄白平衡和固定的 LibRaw 显影参数，完整输出 16 位 SDR sRGB。",
     profileOutput: "{{profile}} · 输出统一转换为 sRGB。",
     applyInputToSelected: "将当前输入解释应用到已选照片",
     rereadInfo: "重新读取照片信息",
@@ -297,7 +298,7 @@ export default {
     keepGps: "同时保留定位信息",
     outputLocation: "导出位置",
     sourceFolder: "源照片所在文件夹",
-    outputHint: "另存为新文件，不覆盖原照片或已有输出。首版不包含 RAW 显影。",
+    outputHint: "另存为新文件，不覆盖原照片或已有输出。ARW 使用 LibRaw 完整显影为 16 位 sRGB；不支持 HDR 照片。",
     scopeAll: "全部待导出照片",
     scopeSelected: "仅已选照片",
     cancelling: "正在取消，等待清理…",

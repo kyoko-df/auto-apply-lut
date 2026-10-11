@@ -1,6 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "auto-apply-lut-lite",
-  "identifier": "com.kyokodf.auto-apply-lut.lite"
+  "identifier": "com.kyokodf.auto-apply-lut.lite",
+  "bundle": {
+    "resources": {
+      "resources/licenses/": "licenses/",
+      "resources/libraw-manifest.json": "libraw-manifest.json"
+    }
+  }
 }
-

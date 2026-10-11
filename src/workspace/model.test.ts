@@ -31,6 +31,13 @@ describe("workspace model", () => {
     expect(appendClips(clips, ["/a/Shot.mov"])).toHaveLength(3);
   });
 
+  it("imports HIF/HEIF/ARW in photo mode and keeps them out of video mode", () => {
+    const paths = ["/photos/DSC00001.HIF", "/photos/DSC00002.heif", "/photos/DSC00003.ARW", "/photos/DSC00004.heic"];
+    expect(appendClips([], paths, 100, "photo").map((clip) => clip.path)).toEqual(paths);
+    expect(appendClips([], paths, 100, "video")).toHaveLength(0);
+    expect(appendClips(appendClips([], paths, 100, "photo"), paths, 100, "photo")).toHaveLength(4);
+  });
+
   it("keeps an export snapshot independent of later LUT and settings changes", () => {
     const clips = appendClips([], ["/a.mov", "/b.mov"]);
     clips[0] = updateLook(clips[0], { lutPath: "/warm.cube", intensity: 35 });

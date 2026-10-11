@@ -21,3 +21,11 @@ package manifest. Before public distribution, resolve that binding notice and
 assemble the complete applicable transitive dependency notices. This record
 does not replace the existing FFmpeg GPL source-delivery requirements, and does
 not establish public distribution readiness.
+
+## LibRaw input backend
+
+LibRaw 0.21.4 is linked from an external precompiled static library. macOS (ARM64/Intel, minimum macOS 15) and Windows x64 use official distributions pinned by URL and SHA256 in `resources/libraw-manifest.json`. Only the matching headers and static library are extracted to a Git-ignored cache; app builds compile `raw_bridge.cpp` and link that library, never the upstream implementation. The official Mac package uses the system zlib; no LibRaw dylib/DLL or PATH-based RAW decoder is required.
+
+Linux uses separately built packages from unchanged upstream source, with the recipe in `scripts/build-libraw.mjs`. The resulting precompiled package can be cached or hosted separately for reuse. Normal app builds only consume it. Audited external packages can also be supplied using `LIBRAW_VENDOR_URL` and `LIBRAW_VENDOR_SHA256` or `prepare:libraw --archive ... --sha256 ...`.
+
+LUTlab selects **CDDL-1.0**. The license and copyright/third-party notices remain in `libraw-0.21.4-LICENSE-CDDL.txt` and `libraw-0.21.4-COPYRIGHT.txt`. `LibRaw-SOURCE.txt` provides exact download locations/checksums for matching sources (included in the official distributions), rather than embedding a source archive in every installer. No LibRaw implementation source is modified. The existing FFmpeg GPL source-delivery and other dependency-notice requirements above still apply. Local packaging alone does not establish public distribution readiness.

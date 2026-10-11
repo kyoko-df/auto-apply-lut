@@ -41,7 +41,9 @@ Switch the top selector to photos to import JPEG, PNG and single-page integer RG
 
 Embedded ICC or an explicit sRGB declaration determines the input color. Untagged/invalid inputs require manual sRGB, Adobe RGB or Display P3 assignment. Exports contain converted sRGB pixels and an sRGB ICC: JPEG 8-bit, PNG/TIFF 8/16-bit, default PNG 16-bit. PNG preserves alpha; JPEG/TIFF require explicit background compositing for transparent inputs. Capture metadata is allowlisted; GPS defaults off. The two-job photo limit also obeys a weighted memory budget. Synchronous codecs use cooperative cancellation and finish their current phase before cleanup.
 
-RAW, HEIC, AVIF, HDR photos, CMYK, transparent/float/multipage TIFF, APNG, BigTIFF, curves, masks and Lightroom/Capture One presets are outside this first release. Inputs must fit the 512 MiB / 64 MP / 32768-side limits **and** the memory budget; export resolution is never silently reduced. Photo/video editing state and selection survive restart.
+AVIF, HDR photos, CMYK, transparent/float/multipage TIFF, APNG, BigTIFF, curves, masks and Lightroom/Capture One presets are outside this first release. Inputs must fit the 512 MiB / 64 MP / 32768-side limits **and** the memory budget; export resolution is never silently reduced. Photo/video editing state and selection survive restart.
+
+Photo mode also accepts SDR HIF/HEIF/HEIC and Sony ARW on macOS, Windows and Linux through the same portable backend. HEIF requires a compatible FFmpeg/ffprobe 9+ engine and validates the complete primary grid. Externally prepared, statically linked LibRaw 0.21.4 develops the full RAW sensor with as-shot white balance and fixed settings; LittleCMS normalizes RGB16 to sRGB before the photo LUT. No embedded JPEG fallback is used. HLG/PQ photos are rejected even with an sRGB override. Unsupported engines/camera variants fail clearly. Only Apple Silicon macOS has been executed and verified locally; Windows/Linux require their own native verification. See [native photo input notes and repeatable tests](docs/photo-native-inputs.md). Photo sRGB LUTs remain separate from S-Log3 video processing.
 
 ## Local development
 
@@ -49,6 +51,7 @@ Requires Node.js, pnpm, Rust, and the platform-specific Tauri build tools. Insta
 
 ```bash
 pnpm install
+pnpm prepare:libraw  # macOS / Windows: pinned official static library
 pnpm tauri dev
 ```
 
@@ -69,7 +72,7 @@ pnpm tauri build --debug --bundles app
 
 ## Standalone release app
 
-**Full builds embed FFmpeg and ffprobe — users do not need Node.js, Rust, Homebrew, or FFmpeg installed.** The currently configured reproducible-download target is **Apple Silicon / macOS 12+**, pinned to a static FFmpeg 9.0.2 build. The system WebKit and system libraries remain part of the platform runtime.
+**Full builds embed FFmpeg and ffprobe — users do not need Node.js, Rust, Homebrew, or FFmpeg installed.** The currently configured reproducible-download target is **Apple Silicon / macOS 15+**, pinned to a static FFmpeg 9.0.2 build. The system WebKit and system libraries remain part of the platform runtime.
 
 ```bash
 # First build on a dev machine: download pinned engines, verify SHA256, compile release and bundle

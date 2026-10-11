@@ -48,6 +48,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: actions/cache@v4
+        with:
+          path: src-tauri/.cache/libraw/0.21.4/aarch64-apple-darwin
+          key: libraw-aarch64-apple-darwin-${{ hashFiles('src-tauri/resources/libraw-manifest.json', 'scripts/*libraw*.mjs') }}
+      - name: Fetch and verify pinned prebuilt LibRaw
+        run: pnpm prepare:libraw --target aarch64-apple-darwin
+
       - name: Fetch pinned standalone FFmpeg and ffprobe
         run: pnpm fetch:ffmpeg
 
@@ -61,7 +68,7 @@ jobs:
           pnpm test:release
           pnpm test
           pnpm build
-          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
 
       - name: Build standalone macOS application
         run: pnpm tauri build --target aarch64-apple-darwin --config src-tauri/tauri.full.conf.json --bundles app,dmg
@@ -132,6 +139,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: actions/cache@v4
+        with:
+          path: src-tauri/.cache/libraw/0.21.4/x86_64-pc-windows-msvc
+          key: libraw-x86_64-pc-windows-msvc-${{ hashFiles('src-tauri/resources/libraw-manifest.json', 'scripts/*libraw*.mjs') }}
+      - name: Fetch and verify pinned prebuilt LibRaw
+        run: pnpm prepare:libraw --target x86_64-pc-windows-msvc
+
       - name: Verify standalone binaries and enable actual media tests
         shell: pwsh
         run: |
@@ -148,7 +162,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build standalone Windows installer

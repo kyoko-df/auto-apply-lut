@@ -1,0 +1,24 @@
+LUTlab statically links LibRaw 0.21.4 under its CDDL-1.0 license option.
+See libraw-0.21.4-LICENSE-CDDL.txt and libraw-0.21.4-COPYRIGHT.txt.
+
+The official precompiled distributions include their matching source code,
+headers, build files and notices. You can obtain them at:
+
+macOS ARM64 / Intel (macOS 15+):
+https://www.libraw.org/data/LibRaw-0.21.4-macOS.zip
+SHA256: 7d08ac8b9f851eed81da0a10b1e62faeeb0d988778377d0c3d892941df3ec842
+
+Windows x64:
+https://www.libraw.org/data/LibRaw-0.21.4-Win64.zip
+SHA256: 400e288c9e2c0878483750a8cd8086f4123a05dadfad72e54ec003016b6f50a3
+
+Linux prebuilt packages use unchanged upstream source:
+https://codeload.github.com/LibRaw/LibRaw/tar.gz/refs/tags/0.21.4
+SHA256: 8baeb5253c746441fadad62e9c5c43ff4e414e41b0c45d6dcabccb542b2dff4b
+Build recipe: scripts/build-libraw.mjs in the corresponding LUTlab source
+release (C++11 Release/PIC, LIBRAW_NODLL; optional dependencies and OpenMP off).
+
+Only the project-owned C ABI bridge is compiled during an application build.
+Third-party implementation sources are not stored in the LUTlab repository
+or installed application. These source locations do not replace the separate
+source-delivery obligations for FFmpeg or other dependencies.

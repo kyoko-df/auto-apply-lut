@@ -9,10 +9,10 @@
     "resources": {
       "resources/bin/": "bin/",
       "resources/licenses/": "licenses/",
-      "resources/ffmpeg-manifest.json": "ffmpeg-manifest.json"
+      "resources/ffmpeg-manifest.json": "ffmpeg-manifest.json",
+      "resources/libraw-manifest.json": "libraw-manifest.json"
     },
     "macOS": {
-      "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
     },
     "windows": {

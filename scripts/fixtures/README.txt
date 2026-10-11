@@ -1,0 +1,1 @@
+owned-srgb-grid.heic is a self-generated 128x48 10-bit sRGB HEIF grid with two 64x48 tiles. Encoded pixels are from scripts/generate-heif-fixtures.swift (asymmetric synthetic quadrants). No camera/public sample pixels. This fixture is dedicated to the public domain under CC0-1.0 by its author for testing.
