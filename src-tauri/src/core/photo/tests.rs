@@ -672,6 +672,90 @@ async fn actual_sony_heif_arw_and_hdr_boundary() {
     }
 }
 
+#[tokio::test]
+#[ignore = "requires public Sony A7C II ARW outside the repository; see docs/photo-native-inputs.md"]
+async fn actual_sony_arw_decode_and_export() {
+    use sha2::{Digest, Sha256};
+    let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
+    let input = dir.join("a7c2.arw");
+    let before = Sha256::digest(std::fs::read(&input).expect("real ARW fixture required"));
+    assert_eq!(
+        format!("{before:x}"),
+        "32059163a294a43b37e4c6a487d922205e48af1631920c544b3e2b3994bfbe40"
+    );
+    let token = CancellationToken::new();
+    let header = camera_header(&input).unwrap().info;
+    assert_eq!(
+        (header.width, header.height, header.bit_depth),
+        (7008, 4672, 16)
+    );
+    assert_eq!(header.color_status, "srgb");
+    let frame = camera_decode(&input, &SourceInterpretation::Embedded, &token).unwrap();
+    assert_eq!((frame.width, frame.height), (7008, 4672));
+    assert!(frame.rgb.iter().any(|v| v % 257 != 0));
+    assert!(frame.rgb.iter().max().unwrap() - frame.rgb.iter().min().unwrap() > 10000);
+    let expected: Vec<_> = frame.rgb.iter().step_by(12347).copied().collect();
+    drop(frame);
+
+    let out = tempfile::tempdir().unwrap();
+    let output = out.path().join("sony-arw.png");
+    let lut = out.path().join("inversion.cube");
+    inversion(&lut);
+    let format = PhotoOutput::Png {
+        bit_depth: 16,
+        alpha_policy: AlphaPolicy::Preserve,
+    };
+    let mut request = job(&input, &output, format.clone());
+    request.luts = vec![lut];
+    request.intensity = 0.25;
+    request.lut_space = Some(PhotoSpace::Srgb);
+    request.expected_version = Some(header.source_version);
+    let processor = processor::PhotoProcessor::default();
+    processor
+        .process(
+            &engine().expect("real engine required"),
+            request,
+            processor::PhotoControl::default(),
+            Arc::new(|stage| println!("ARW export: {stage}")),
+        )
+        .await
+        .unwrap();
+    let info = metadata::header(&output).unwrap().info;
+    assert_eq!(
+        (info.width, info.height, info.bit_depth, info.orientation),
+        (7008, 4672, 16, 1)
+    );
+    assert_eq!(info.color_status, "embedded");
+    let exported = codec::decode(&output, &SourceInterpretation::Embedded, &token).unwrap();
+    for (value, original) in exported.rgb.iter().step_by(12347).zip(expected) {
+        let target =
+            (f64::from(original) * 0.75 + f64::from(65535 - original) * 0.25).round() as u16;
+        assert!(value.abs_diff(target) <= 5, "{value} != {target}");
+    }
+    drop(exported);
+    let output_hash = Sha256::digest(std::fs::read(&output).unwrap());
+    assert!(processor
+        .process(
+            &engine().unwrap(),
+            job(&input, &output, format),
+            processor::PhotoControl::default(),
+            Arc::new(|_| {})
+        )
+        .await
+        .is_err());
+    assert_eq!(Sha256::digest(std::fs::read(&output).unwrap()), output_hash);
+    assert_eq!(Sha256::digest(std::fs::read(&input).unwrap()), before);
+    let tags = little_exif::metadata::Metadata::new_from_path(&output).unwrap();
+    assert!(
+        matches!(tags.get_tag_by_hex(0x010f, None).next(), Some(little_exif::exif_tag::ExifTag::Make(value)) if value.trim_end_matches('\0') == "SONY")
+    );
+    assert!(
+        matches!(tags.get_tag_by_hex(0x9003, None).next(), Some(little_exif::exif_tag::ExifTag::DateTimeOriginal(value)) if value.trim_end_matches('\0') == "2023:08:09 13:52:26")
+    );
+    assert!(tags.get_tag_by_hex(0x8825, None).next().is_none());
+    println!("Verified real A7C II ARW: full RGB16 decode, 25% LUT PNG16 export, sRGB ICC/metadata, source and output SHA256 protection");
+}
+
 #[test]
 #[ignore = "requires public Sony samples; see docs/photo-native-inputs.md"]
 fn actual_sony_primary_color_metadata() {
@@ -752,6 +836,143 @@ fn owned_heif_grid_decodes_full_primary_in_rgb16() {
         );
     }
     assert!(frame.rgb.iter().any(|v| v % 257 != 0));
+}
+
+#[tokio::test]
+async fn owned_heif_single_tile_grid_decodes_and_exports_cropped_rgb16() {
+    let Some(engine) = engine() else {
+        return;
+    };
+    let original =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/fixtures/owned-srgb-grid.heic");
+    // Derive a valid 1x1 grid from the project-owned 2x1 fixture. Keep its
+    // 64x48 HEVC tile and declare a smaller 50x34 active image to exercise crop.
+    fn single_tile(data: &[u8]) -> Vec<u8> {
+        let mut result = Vec::new();
+        let mut cursor = 0;
+        while cursor < data.len() {
+            let size = u32::from_be_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize;
+            let kind = &data[cursor + 4..cursor + 8];
+            let mut value = data[cursor + 8..cursor + size].to_vec();
+            match kind {
+                b"meta" => {
+                    value = [value[..4].to_vec(), single_tile(&value[4..])].concat();
+                }
+                b"iprp" | b"ipco" => value = single_tile(&value),
+                b"iref" => {
+                    // Primary item 3 derives from only item 1; item 2 remains
+                    // an unrelated image. Removing its reference saves 2 bytes.
+                    value = [
+                        value[..4].to_vec(),
+                        14u32.to_be_bytes().to_vec(),
+                        b"dimg".to_vec(),
+                        vec![0, 3, 0, 1, 0, 1],
+                    ]
+                    .concat();
+                }
+                b"ispe" if value[4..] == [128u32.to_be_bytes(), 48u32.to_be_bytes()].concat() => {
+                    value[4..8].copy_from_slice(&50u32.to_be_bytes());
+                    value[8..12].copy_from_slice(&34u32.to_be_bytes());
+                }
+                b"iloc" => {
+                    // This owned fixture has three absolute, 32-bit extents.
+                    for offset in [14usize, 28, 42] {
+                        let old = u32::from_be_bytes(value[offset..offset + 4].try_into().unwrap());
+                        value[offset..offset + 4].copy_from_slice(&(old - 2).to_be_bytes());
+                    }
+                }
+                b"mdat" => {
+                    let grid = value.len() - 8;
+                    assert_eq!(&value[grid..], &[0, 0, 0, 1, 0, 128, 0, 48]);
+                    value[grid..].copy_from_slice(&[0, 0, 0, 0, 0, 50, 0, 34]);
+                }
+                _ => {}
+            }
+            result.extend(((value.len() + 8) as u32).to_be_bytes());
+            result.extend(kind);
+            result.extend(value);
+            cursor += size;
+        }
+        result
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("single-tile.heic");
+    let input_bytes = single_tile(&std::fs::read(&original).unwrap());
+    std::fs::write(&input, &input_bytes).unwrap();
+    let token = CancellationToken::new();
+    let header = metadata::header_with_engine(&input, Some(&engine), &token).unwrap();
+    assert_eq!(
+        (header.info.width, header.info.height, header.info.bit_depth),
+        (50, 34, 10)
+    );
+    assert!(header.declared_srgb);
+    let frame = codec::decode_with_engine(
+        &input,
+        &SourceInterpretation::Embedded,
+        &token,
+        Some(&engine),
+    )
+    .unwrap();
+    assert_eq!(
+        (frame.width, frame.height, frame.rgb.len()),
+        (50, 34, 50 * 34 * 3)
+    );
+    let reference = codec::decode_with_engine(
+        &original,
+        &SourceInterpretation::Embedded,
+        &token,
+        Some(&engine),
+    )
+    .unwrap();
+    for y in 0..34usize {
+        assert_eq!(
+            &frame.rgb[y * 50 * 3..(y + 1) * 50 * 3],
+            &reference.rgb[y * 128 * 3..(y * 128 + 50) * 3],
+        );
+    }
+    assert!(frame.rgb.iter().any(|v| v % 257 != 0));
+
+    let output = dir.path().join("single-tile.png");
+    let lut = dir.path().join("inversion.cube");
+    inversion(&lut);
+    let mut request = job(
+        &input,
+        &output,
+        PhotoOutput::Png {
+            bit_depth: 16,
+            alpha_policy: AlphaPolicy::Preserve,
+        },
+    );
+    request.luts = vec![lut];
+    request.lut_space = Some(PhotoSpace::Srgb);
+    request.intensity = 0.25;
+    processor::PhotoProcessor::with_budget(256 * 1024 * 1024)
+        .process(
+            &engine,
+            request,
+            processor::PhotoControl::default(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    let exported_info = metadata::header(&output).unwrap().info;
+    assert_eq!(
+        (
+            exported_info.width,
+            exported_info.height,
+            exported_info.bit_depth,
+            exported_info.orientation
+        ),
+        (50, 34, 16, 1)
+    );
+    assert_eq!(exported_info.color_status, "embedded");
+    let exported = codec::decode(&output, &SourceInterpretation::Embedded, &token).unwrap();
+    for (value, original) in exported.rgb.iter().zip(&frame.rgb) {
+        let expected =
+            (f64::from(*original) * 0.75 + f64::from(65535 - original) * 0.25).round() as u16;
+        assert!(value.abs_diff(expected) <= 5, "{value} != {expected}");
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), input_bytes);
 }
 
 #[test]

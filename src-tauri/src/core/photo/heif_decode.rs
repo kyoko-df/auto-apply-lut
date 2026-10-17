@@ -223,10 +223,15 @@ fn primary(probe: &Value, primary_id: u32) -> Result<Primary, String> {
         if area > metadata::MAX_PIXELS * 2 {
             return Err("HEIF 瓦片总像素超过限制".into());
         }
+        // A validated 1x1 grid already contains the complete coded image;
+        // xstack requires at least two inputs, so crop its tile directly.
+        let stack = if tiles.len() > 1 {
+            format!("xstack=inputs={}:layout={},", tiles.len(), layout.join("|"))
+        } else {
+            String::new()
+        };
         let graph = format!(
-            "{pads}xstack=inputs={}:layout={},crop={w}:{h}:{}:{},format=rgb48le[out]",
-            tiles.len(),
-            layout.join("|"),
+            "{pads}{stack}crop={w}:{h}:{}:{},format=rgb48le[out]",
             number(c, "horizontal_offset")?,
             number(c, "vertical_offset")?
         );

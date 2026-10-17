@@ -66,7 +66,24 @@ LUTLAB_PHOTO_FIXTURES=/tmp/lutlab-format-fixtures TZ=America/Los_Angeles \
   cargo test --offline --manifest-path src-tauri/Cargo.toml --lib actual_sony_primary_color_metadata -- --ignored --nocapture
 ```
 
-These tests fail if camera fixtures or the compatible engine are absent. The pipeline test verifies full dimensions, non-8-bit precision, actual 25% LUT pixels against an analytic reference, RGB16 PNG/sRGB ICC/Orientation=1, capture metadata, unchanged source identity, collision refusal and HLG refusal with an sRGB assignment. Four photo fixture tests and the existing manual 4K benchmark are ignored in the ordinary suite and must be reported separately.
+ARW can also be verified independently with only `a7c2.arw` in the fixture directory:
+
+```sh
+LUTLAB_PHOTO_FIXTURES=/tmp/lutlab-format-fixtures LUTLAB_REQUIRE_MEDIA_TESTS=1 TZ=America/Los_Angeles \
+  cargo test --offline --manifest-path src-tauri/Cargo.toml --lib actual_sony_arw -- --ignored --nocapture --test-threads=1
+```
+
+The ARW-only tests verify the exact public sample SHA256, full 7008 × 4672 RGB16 development, numerical 25% LUT PNG16 export, sRGB ICC/capture metadata, unchanged source and existing-output hashes, and the production preview command's fast/accurate fit views, cached display and 100% region beyond the embedded thumbnail's bounds. Preview assertions compare decoded pixels because separately created ICC profiles can have different creation timestamps. They use the default application memory budget. Samples and generated outputs remain outside the repository; missing samples are failures when these tests are explicitly invoked.
+
+These tests fail if camera fixtures or the compatible engine are absent. The combined pipeline test verifies full dimensions, non-8-bit precision, actual 25% LUT pixels against an analytic reference, RGB16 PNG/sRGB ICC/Orientation=1, capture metadata, unchanged source identity, collision refusal and HLG refusal with an sRGB assignment. Six photo fixture tests and the existing manual 4K benchmark are ignored in the ordinary suite and must be reported separately.
+
+## ARW merge verification (2026-10-17)
+
+Explicitly executed both ARW-only ignored tests outside the ordinary suite on Apple Silicon, with official static LibRaw 0.21.4, bundled FFmpeg 9.0.2 and `TZ=America/Los_Angeles`. Both passed using the exact 70,238,208-byte public A7C II ARW whose SHA256 is recorded below. Full 7008 × 4672 RGB16 development, numerical 25% LUT PNG16 export, sRGB ICC, capture metadata, collision refusal and source/existing-output SHA256 protection passed. Fast/accurate fit previews, display-cache hits with both render slots occupied and a 96 × 64 region at sensor coordinates (4000, 2000) passed through the production preview command. The corrected preview test took 70.56 seconds in this debug build; this is one test run, not a performance benchmark.
+
+A freshly built Full debug application was copied to a temporary directory, given its own bundle identifier and `LUTLAB_DATA_DIR`, and exercised through the native macOS UI. Import, actual-frame comparison in fit and 100% region views, sRGB LUT confirmation and 25% PNG16 export completed. Independent ffprobe and PNG/EXIF inspection verified the published 7008 × 4672 `rgb48be` output, embedded RGB ICC, Orientation=1, SONY make, original capture clock and absent GPS. The source SHA256 was unchanged. No camera sample or test export was added to Git.
+
+The ordinary required-media Rust suite passed 219 tests with 7 ignored; the two ARW-only tests above were explicitly executed separately. Offline Cargo check, Rust formatting and whitespace checks for the current edits passed. Full debug packaging included the real bundled-engine checks. No additional ARW processing defect was found; the single-tile HEIF fix has a non-ignored real decode/export regression test. Other ARW cameras/compression variants, Windows/Linux/Intel Mac runtime, macOS 15 hardware, optimized release performance and the remaining five ignored tests were not revalidated in this run.
 
 ## Scope cleanup verification (2026-10-11)
 

@@ -501,6 +501,147 @@ mod tests {
         }
     }
     #[tokio::test]
+    #[ignore = "requires public Sony A7C II ARW outside the repository; see docs/photo-native-inputs.md"]
+    async fn actual_sony_arw_preview_fit_region_and_cache() {
+        let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
+        let path = dir.join("a7c2.arw");
+        let before = Sha256::digest(std::fs::read(&path).expect("real ARW fixture required"));
+        assert_eq!(
+            format!("{before:x}"),
+            "32059163a294a43b37e4c6a487d922205e48af1631920c544b3e2b3994bfbe40"
+        );
+        let engine = engine().expect("real FFmpeg required");
+        let state = PreviewState::default();
+        let photos = PhotoPreviewState::default();
+        let processor = PhotoProcessor::default();
+        let out = tempfile::tempdir().unwrap();
+        let lut = out.path().join("inversion.cube");
+        std::fs::write(
+            &lut,
+            "LUT_3D_SIZE 2\n1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n",
+        )
+        .unwrap();
+        let fingerprint = lut_digest(&lut, &processor, &CancellationToken::new())
+            .await
+            .unwrap();
+        let mut input = request(&path);
+        input.viewport = PhotoViewport::Fit { max_edge: 320 };
+        input.quality = "fast".into();
+        input.intensity = 0.25;
+        input.lut_path = Some(lut.to_string_lossy().into());
+        input.lut_space = Some(PhotoSpace::Srgb);
+        input.lut_fingerprint = Some(fingerprint);
+        fn decode_display(data: &str) -> image::RgbImage {
+            let bytes = STANDARD
+                .decode(data.strip_prefix("data:image/png;base64,").unwrap())
+                .unwrap();
+            image::load_from_memory(&bytes).unwrap().into_rgb8()
+        }
+        fn compare_images(response: &PhotoPreviewResponse, dimensions: (u32, u32)) {
+            let original = decode_display(&response.original_image);
+            let graded = decode_display(&response.processed_image);
+            assert_eq!((response.width, response.height), dimensions);
+            assert_eq!(original.dimensions(), dimensions);
+            assert_eq!(graded.dimensions(), dimensions);
+            assert!(
+                original.as_raw().iter().max().unwrap() - original.as_raw().iter().min().unwrap()
+                    > 40
+            );
+            assert_ne!(original.as_raw(), graded.as_raw());
+            for (actual, source) in graded.as_raw().iter().zip(original.as_raw()) {
+                let expected =
+                    (f64::from(*source) * 0.75 + f64::from(255 - source) * 0.25).round() as u8;
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "preview LUT pixel {actual} != {expected}"
+                );
+            }
+        }
+        let fast = generate_with_resolver(
+            input.clone(),
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(!fast.cached);
+        compare_images(&fast, (320, 213));
+        println!("Verified real ARW fast fit preview: 320x213, actual LUT pixels");
+
+        let busy = state.permits.acquire_many(2).await.unwrap();
+        input.request_id = "arw-cache-hit".into();
+        let hit = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            generate_with_resolver(
+                input.clone(),
+                &state,
+                &photos,
+                &processor,
+                std::future::ready(Ok(engine.clone())),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(hit.cached);
+        assert_eq!(hit.request_id, "arw-cache-hit");
+        assert_eq!(hit.original_image, fast.original_image);
+        assert_eq!(hit.processed_image, fast.processed_image);
+        drop(busy);
+
+        input.quality = "accurate".into();
+        input.request_id = "arw-accurate-fit".into();
+        let accurate = generate_with_resolver(
+            input.clone(),
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(!accurate.cached);
+        assert_eq!((accurate.width, accurate.height), (320, 213));
+        // Accurate mode grades before resizing, so compare only its decoded
+        // image dimensions here; the 100% region below has no resize ambiguity.
+        let original = decode_display(&accurate.original_image);
+        let graded = decode_display(&accurate.processed_image);
+        assert_eq!(original.dimensions(), (320, 213));
+        assert_eq!(graded.dimensions(), (320, 213));
+        // Newly created ICC profiles may carry different creation timestamps.
+        assert_eq!(
+            original.as_raw(),
+            decode_display(&fast.original_image).as_raw()
+        );
+        assert_ne!(graded.as_raw(), original.as_raw());
+        println!("Verified real ARW accurate fit preview and display cache");
+
+        input.viewport = PhotoViewport::Region {
+            x: 4000,
+            y: 2000,
+            width: 96,
+            height: 64,
+        };
+        input.request_id = "arw-full-sensor-region".into();
+        let region = generate_with_resolver(
+            input,
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine)),
+        )
+        .await
+        .unwrap();
+        assert!(!region.cached);
+        compare_images(&region, (96, 64));
+        assert_eq!(region.source_version, fast.source_version);
+        assert_eq!(Sha256::digest(std::fs::read(&path).unwrap()), before);
+        println!("Verified real ARW 100% region beyond embedded thumbnail bounds and unchanged source SHA256");
+    }
+
+    #[tokio::test]
     #[ignore = "requires generated HEIF fixture; see docs/photo-native-inputs.md"]
     async fn generated_heif_preview_uses_native_decode_and_region_geometry() {
         let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
