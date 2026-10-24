@@ -66,7 +66,15 @@ function restoreInfo(value: unknown, clip: Clip): VideoInfo | undefined {
   };
 }
 
-function restoreSource(value: unknown): SourceInterpretation {
+function restoreSource(value: unknown, path: string): SourceInterpretation {
+  if (record(value) && value.mode === "raw") {
+    const exposure = finite(value.exposure_ev);
+    if (!/\.arw$/i.test(path) || exposure === null || exposure < -2 || exposure > 3 ||
+        !["camera", "daylight", "auto"].includes(String(value.white_balance)))
+      throw new Error(i18n.t("errors.photo.bad_raw_settings"));
+    return { mode: "raw", exposure_ev: exposure,
+      white_balance: value.white_balance as "camera" | "daylight" | "auto" };
+  }
   if (
     record(value) &&
     value.mode === "assign" &&
@@ -178,7 +186,7 @@ export function restoreWorkspace(value: unknown): WorkspaceSnapshot | null {
             ...common,
             kind: "photo",
             info: undefined,
-            sourceInterpretation: restoreSource(raw.sourceInterpretation),
+            sourceInterpretation: restoreSource(raw.sourceInterpretation, base.path),
             lutSpace: raw.lutSpace === "srgb" ? "srgb" : null,
             lutFingerprint:
               typeof raw.lutFingerprint === "string" &&

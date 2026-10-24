@@ -31,7 +31,11 @@
 
 快速预览先缩小工作帧，准确预览先调色再缩放；调节强度可以复用解码帧与已解析 LUT。引擎发现会缓存成对可执行文件，并在路径、环境或文件版本变化时失效。
 
+LUT 资料库使用当前视频首帧或当前照片生成真实缩略图，按 100% LUT 强度快速预览；仅渲染可见条目，后台最多串行处理一项。照片需先勾选按 sRGB 预览资料库 LUT；这不会替代导出前对当前 LUT 的确认。切换素材、输入解释、RAW 参数或引擎时会丢弃过期画面，浏览器模式不生成缩略图。
+
 **色彩范围**：默认保持输入，不做隐式色域转换；界面展示色域、传递函数和位深。可明确选择 Rec.709 解读，或将 Rec.2020 PQ / HLG 转为 Rec.709 SDR，再应用风格 LUT。此选项作用于整个批次，不同输入空间请分批处理。HEVC 支持 8/10-bit 4:2:0，H.264 为 8-bit，ProRes HQ 为 10-bit 4:2:2。不会自动识别相机 Log，也不提供 HDR / Dolby Vision 母版工作流。
+
+新增手动 Sony S-Log3 / S-Gamut3.Cine、S-Log3 / S-Gamut3 → Rec.709 SDR。选择后需确认整个批次均为对应的标准色域、全范围编码和 BT.709 YCbCr 矩阵；不适用于 limited 范围转码、VENICE 专用色域或其他 Log 曲线。转换按 [Sony 技术定义](https://www.sony.jp/ls-camera/knowledge/pdf/TechnicalSummary_for_S-Gamut3Cine_S-Gamut3_S-Log3_V1_00.pdf) 解码为浮点线性光、转换色域、固定 Mobius 高光压缩，再编码为 Rec.709 并应用创意 LUT；超出 Rec.709 色域的颜色会裁切。这是技术 SDR 渲染，不是 Sony s709/LC-709 创意外观。不要再叠加 Log 还原 LUT；自动模式仍不转换。
 
 **恢复与边界**：工作区会原子保存素材、参数、选择、输出路径和最近批次。正常退出前等待保存，导出中退出需取消并等待进程结束；异常退出后的未完成任务恢复为待重试，从头重新导出，不做编码断点续传。损坏设置/资料库保留备份并提供恢复入口，保存失败有明确提示。预览仍是可定位的静态帧，不是实时调色视频播放。浏览器模式仅用于查看界面，实际文件处理需要桌面应用。
 
@@ -43,9 +47,9 @@
 
 照片批次最多并行 2 项，同时受内存预算约束。主要拍摄信息按允许列表保留，定位信息默认不保留；不复制原缩略图、MakerNote 和完整 XMP。同步库的解码与编码采用合作取消，取消中会等待当前不可中断阶段返回并清理后再结束。照片与视频的队列、选择和编辑参数随工作区恢复。
 
-macOS、Windows、Linux 共用照片解码与色彩处理：HIF/HEIF/HEIC 由支持完整主图像及 grid 的 FFmpeg/ffprobe 9+ 解码；外部预编译并静态链接的 LibRaw 0.21.4 完整显影 Sony ARW，使用拍摄白平衡和固定参数，不提取内嵌 JPEG 作为成片。LittleCMS 将 RGB16 正确规范到 SDR sRGB；已是 sRGB 的图像跳过恒等转换，再套照片 LUT。ARW 暂不提供曝光/白平衡编辑，效果不保证与相机 JPEG 或其他 RAW 软件相同。不支持的引擎或相机压缩格式会明确报错。HLG/PQ 即使手动指定 sRGB 也会拒绝，需先明确转换为 SDR。照片 sRGB LUT 与 S-Log3 视频流程独立。目前仅在 Apple Silicon Mac 完成运行验证；Windows/Linux 仍需各自完成原生构建和运行验收。详见 [输入说明与测试](docs/photo-native-inputs.md)。
+macOS、Windows、Linux 共用照片解码与色彩处理：HIF/HEIF/HEIC 由支持完整主图像及 grid 的 FFmpeg/ffprobe 9+ 解码；外部预编译并静态链接的 LibRaw 0.21.4 完整显影 Sony ARW，默认使用拍摄白平衡和固定参数，不提取内嵌 JPEG 作为成片。LittleCMS 将 RGB16 正确规范到 SDR sRGB；已是 sRGB 的图像跳过恒等转换，再套照片 LUT。ARW 支持显影前 −2 至 +3 EV 曝光，以及拍摄时/日光/自动白平衡；可重置、撤销并同步至已选 ARW，参数随工作区保存并用于预览和导出。增加曝光可能裁切高光，效果不保证与相机 JPEG 或其他 RAW 软件相同。不支持的引擎或相机压缩格式会明确报错。HLG/PQ 即使手动指定 sRGB 也会拒绝，需先明确转换为 SDR。照片 sRGB LUT 与 S-Log3 视频流程独立。目前仅在 Apple Silicon Mac 完成运行验证；Windows/Linux 仍需各自完成原生构建和运行验收。详见 [输入说明与测试](docs/photo-native-inputs.md)。
 
-首版不包含 AVIF、CMYK、HDR 照片、透明/浮点/多页 TIFF、APNG、BigTIFF、曝光曲线或局部蒙版，也不能导入 Lightroom/Capture One 预设。文件限额为 512 MiB、6400 万像素、单边 32768，同时必须满足内存预算；超限会明确拒绝，导出不会悄悄缩小。
+首版不包含 AVIF、CMYK、HDR 照片、透明/浮点/多页 TIFF、APNG、BigTIFF、色调曲线或局部蒙版，也不能导入 Lightroom/Capture One 预设。文件限额为 512 MiB、6400 万像素、单边 32768，同时必须满足内存预算；超限会明确拒绝，导出不会悄悄缩小。
 
 ## 本地开发
 

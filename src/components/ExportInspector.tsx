@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CSSProperties } from "react";
 import {
@@ -34,6 +34,12 @@ export default function ExportInspector({
   onExportScopeChange,
 }: ExportInspectorProps) {
   const { t } = useTranslation();
+  const [pendingLog, setPendingLog] = useState<AppSettings["input_color_space"] | null>(null);
+  const logDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (pendingLog) logDialog.current?.showModal();
+    else logDialog.current?.close();
+  }, [pendingLog]);
   const [advanced, setAdvanced] = useState(false);
   const [exportScope, setExportScope] = useState<"pending" | "selected">(
     "pending"
@@ -286,21 +292,35 @@ export default function ExportInspector({
             <span>{t("inspector.inputColor")}</span>
             <select
               aria-label={t("inspector.inputColor")}
-              value={w.settings.input_color_space}
+              value={pendingLog ?? w.settings.input_color_space}
               disabled={locked}
-              onChange={(e) =>
-                w.updateSettings({
-                  input_color_space: e.target
-                    .value as AppSettings["input_color_space"],
-                })
-              }
+              onChange={(e) => {
+                const value = e.target.value as AppSettings["input_color_space"];
+                setPendingLog(value.startsWith("sony-") ? value : null);
+                if (!value.startsWith("sony-")) void w.updateSettings({ input_color_space: value });
+              }}
             >
               <option value="auto">{t("inspector.inputAuto")}</option>
               <option value="rec709">{t("inspector.inputRec709")}</option>
               <option value="rec2020-pq">Rec.2020 PQ → Rec.709</option>
               <option value="rec2020-hlg">Rec.2020 HLG → Rec.709</option>
+              <option value="sony-slog3-cine">Sony S-Log3 / S-Gamut3.Cine → Rec.709</option>
+              <option value="sony-slog3">Sony S-Log3 / S-Gamut3 → Rec.709</option>
             </select>
           </label>
+          {pendingLog && <dialog ref={logDialog} className="app-dialog" aria-label={t("inspector.confirmLog")}
+            onCancel={() => setPendingLog(null)}>
+            <div className="dialog-content">
+            <h2>{t("inspector.confirmLog")}</h2>
+            <p className="field-hint">{t("inspector.sonyLogConfirm", { gamut: pendingLog === "sony-slog3-cine" ? "S-Gamut3.Cine" : "S-Gamut3" })}</p>
+            <div className="dialog-buttons">
+              <button className="text-button" disabled={locked} onClick={() => {
+                void w.updateSettings({ input_color_space: pendingLog }); setPendingLog(null);
+              }}>{t("inspector.confirmLog")}</button>
+              <button className="text-button" disabled={locked} onClick={() => setPendingLog(null)}>{t("inspector.cancelLog")}</button>
+            </div>
+            </div>
+          </dialog>}
           <p className="field-hint">
             {t("inspector.inputColorHint")}
           </p>

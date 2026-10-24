@@ -760,6 +760,98 @@ mod tests {
         .contains("越界"));
     }
     #[tokio::test]
+    #[ignore = "requires public Sony A7C II ARW; see docs/photo-native-inputs.md"]
+    async fn actual_sony_arw_preview_development_cache() {
+        let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
+        let path = dir.join("a7c2.arw");
+        let engine = engine().expect("real FFmpeg required");
+        let state = PreviewState::default();
+        let photos = PhotoPreviewState::default();
+        let processor = PhotoProcessor::default();
+        let mut input = request(&path);
+        input.viewport = PhotoViewport::Region {
+            x: 4000,
+            y: 2000,
+            width: 64,
+            height: 48,
+        };
+        let first = generate_with_resolver(
+            input.clone(),
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        input.source_interpretation = SourceInterpretation::Raw {
+            exposure_ev: -1.0,
+            white_balance: photo::RawWhiteBalance::Camera,
+        };
+        let dark = generate_with_resolver(
+            input.clone(),
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(!dark.cached);
+        assert_ne!(first.processed_image, dark.processed_image);
+        input.request_id = "development-cache".into();
+        let cached = generate_with_resolver(
+            input.clone(),
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(cached.cached);
+        assert_eq!(cached.processed_image, dark.processed_image);
+        assert_eq!(cached.request_id, "development-cache");
+        input.source_interpretation = SourceInterpretation::Raw {
+            exposure_ev: -1.0,
+            white_balance: photo::RawWhiteBalance::Daylight,
+        };
+        let daylight = generate_with_resolver(
+            input,
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine)),
+        )
+        .await
+        .unwrap();
+        assert!(!daylight.cached);
+        assert_ne!(daylight.processed_image, dark.processed_image);
+    }
+
+    #[tokio::test]
+    async fn raw_preview_validation_precedes_engine_discovery() {
+        let mut input = request(Path::new("photo.arw"));
+        input.source_interpretation = SourceInterpretation::Raw {
+            exposure_ev: f32::NAN,
+            white_balance: photo::RawWhiteBalance::Camera,
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            generate_with_resolver(
+                input,
+                &PreviewState::default(),
+                &PhotoPreviewState::default(),
+                &PhotoProcessor::default(),
+                std::future::pending::<Result<PathBuf, String>>(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().contains("曝光"));
+    }
+
+    #[tokio::test]
     async fn photo_cancel_is_registered_before_engine_discovery_and_does_not_cancel_other_client() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("photo.png");
@@ -842,6 +934,9 @@ async fn generate_with_resolver(
     photo_processor: &PhotoProcessor,
     resolver: impl std::future::Future<Output = Result<PathBuf, String>>,
 ) -> Result<PhotoPreviewResponse, String> {
+    request
+        .source_interpretation
+        .validate(Path::new(&request.photo_path))?;
     if request.client_id.is_empty()
         || request.client_id.len() > 128
         || request.request_id.len() > 128

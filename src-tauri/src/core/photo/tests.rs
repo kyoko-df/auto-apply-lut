@@ -5,6 +5,117 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[test]
+fn raw_settings_reject_invalid_ranges_and_non_raw_inputs() {
+    for exposure in [f32::NAN, f32::INFINITY, -2.1, 3.1] {
+        assert!(SourceInterpretation::Raw {
+            exposure_ev: exposure,
+            white_balance: RawWhiteBalance::Camera
+        }
+        .validate(Path::new("photo.ARW"))
+        .is_err());
+    }
+    let source = SourceInterpretation::Raw {
+        exposure_ev: 1.0,
+        white_balance: RawWhiteBalance::Daylight,
+    };
+    assert!(source.validate(Path::new("photo.ARW")).is_ok());
+    assert!(source.validate(Path::new("photo.png")).is_err());
+    assert!(serde_json::from_str::<SourceInterpretation>(
+        r#"{"mode":"raw","white_balance":"guess"}"#
+    )
+    .is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires public Sony A7C II ARW; see docs/photo-native-inputs.md"]
+async fn actual_sony_arw_development_controls() {
+    use sha2::{Digest, Sha256};
+    let dir = PathBuf::from(std::env::var_os("LUTLAB_PHOTO_FIXTURES").expect("set fixtures"));
+    let input = dir.join("a7c2.arw");
+    let before = Sha256::digest(std::fs::read(&input).expect("real ARW fixture required"));
+    assert_eq!(
+        format!("{before:x}"),
+        "32059163a294a43b37e4c6a487d922205e48af1631920c544b3e2b3994bfbe40"
+    );
+    let token = CancellationToken::new();
+    let original = camera_decode(&input, &SourceInterpretation::Embedded, &token).unwrap();
+    let base: Vec<u16> = original.rgb.iter().step_by(997).copied().collect();
+    drop(original);
+    let source = SourceInterpretation::Raw {
+        exposure_ev: -1.0,
+        white_balance: RawWhiteBalance::Camera,
+    };
+    let developed = camera_decode(&input, &source, &token).unwrap();
+    assert_eq!((developed.width, developed.height), (7008, 4672));
+    let dark: Vec<u16> = developed.rgb.iter().step_by(997).copied().collect();
+    let linear = |v: u16| {
+        let s = f64::from(v) / 65535.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let mut ratios: Vec<_> = base
+        .iter()
+        .zip(&dark)
+        .filter(|(a, _)| **a > 10000 && **a < 40000)
+        .map(|(a, b)| linear(*b) / linear(*a))
+        .collect();
+    ratios.sort_by(f64::total_cmp);
+    assert!(ratios.len() > 100);
+    let median = ratios[ratios.len() / 2];
+    assert!(
+        (median - 0.5).abs() < 0.06,
+        "RAW −1 EV linear-light ratio: {median}"
+    );
+    drop(developed);
+    for white_balance in [RawWhiteBalance::Daylight, RawWhiteBalance::Auto] {
+        let adjusted = camera_decode(
+            &input,
+            &SourceInterpretation::Raw {
+                exposure_ev: 0.0,
+                white_balance,
+            },
+            &token,
+        )
+        .unwrap();
+        assert_eq!((adjusted.width, adjusted.height), (7008, 4672));
+        assert!(adjusted
+            .rgb
+            .iter()
+            .step_by(997)
+            .zip(&base)
+            .any(|(a, b)| a.abs_diff(*b) > 100));
+    }
+    let out = tempfile::tempdir().unwrap();
+    let output = out.path().join("raw-adjusted.png");
+    let mut request = job(
+        &input,
+        &output,
+        PhotoOutput::Png {
+            bit_depth: 16,
+            alpha_policy: AlphaPolicy::Preserve,
+        },
+    );
+    request.source = source;
+    processor::PhotoProcessor::default()
+        .process(
+            &engine().expect("real engine required"),
+            request,
+            processor::PhotoControl::default(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    let exported = codec::decode(&output, &SourceInterpretation::Embedded, &token).unwrap();
+    for (a, b) in exported.rgb.iter().step_by(997).zip(&dark) {
+        assert!(a.abs_diff(*b) <= 2);
+    }
+    assert_eq!(Sha256::digest(std::fs::read(&input).unwrap()), before);
+}
+
 fn engine() -> Option<PathBuf> {
     let bundled =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/bin/macos/aarch64/ffmpeg");

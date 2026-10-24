@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <cmath>
 struct RawInfo {
     uint32_t width, height, orientation;
     float iso, shutter, aperture, focal;
@@ -18,9 +19,12 @@ static int progress(void *p, enum LibRaw_progress, int, int) {
 }
 extern "C" const char *lutlab_raw_version() { return LibRaw::version(); }
 extern "C" int lutlab_raw(const uint8_t *data, size_t length, uint16_t *rgb, size_t samples,
+                          float exposure_ev, int white_balance,
                           RawInfo *info, int (*check)(void *), void *context, char *error, size_t error_size) {
     auto fail = [&](const char *s) { std::snprintf(error, error_size, "%s", s); return 0; };
     try {
+        if (!std::isfinite(exposure_ev) || exposure_ev < -2.0f || exposure_ev > 3.0f ||
+            white_balance < 0 || white_balance > 2) return fail("Invalid RAW development settings");
         LibRaw raw; Cancel cancel{check, context}; raw.set_progress_handler(progress, &cancel);
         raw.imgdata.rawparams.max_raw_memory_mb = 1024;
         int status = raw.open_buffer(data, length);
@@ -67,9 +71,13 @@ extern "C" int lutlab_raw(const uint8_t *data, size_t length, uint16_t *rgb, siz
         d.params.half_size = 0; d.params.four_color_rgb = 0; d.params.user_flip = 0;
         d.params.output_bps = 16; d.params.output_color = 1;
         d.params.gamm[0] = 1.0; d.params.gamm[1] = 1.0;
-        d.params.use_camera_wb = 1; d.params.use_auto_wb = 0;
+        d.params.use_camera_wb = white_balance == 0;
+        d.params.use_auto_wb = white_balance == 2;
         d.params.no_auto_bright = 1; d.params.adjust_maximum_thr = 0;
         d.params.bright = 1.0; d.params.highlight = 0; d.params.user_qual = 3;
+        d.params.exp_correc = exposure_ev != 0.0f;
+        d.params.exp_shift = std::exp2(exposure_ev);
+        d.params.exp_preser = 0.0f;
         if ((status = raw.unpack()) || (status = raw.dcraw_process())) return fail(LibRaw::strerror(status));
         libraw_processed_image_t *image = raw.dcraw_make_mem_image(&status);
         if (!image) return fail(LibRaw::strerror(status));

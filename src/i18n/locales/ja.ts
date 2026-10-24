@@ -17,6 +17,10 @@ export default {
     photo: "写真",
   },
   app: {
+    lutThumbnailAlt: "{{source}} · {{name}} · LUT 100% プレビュー",
+    lutThumbnailLoading: "LUT サムネイルを生成中",
+    lutPhotoThumbnails: "ライブラリ LUT を sRGB としてプレビュー · 現在の写真 · 100%",
+    lutVideoThumbnails: "現在の動画の先頭フレーム · LUT 100% · 高速プレビュー",
     ariaWorkspace: "LUT Lab ワークベンチ",
     ariaMainNav: "メインナビゲーション",
     ariaMediaMode: "メディアモード",
@@ -213,6 +217,9 @@ export default {
     bit10: "10-bit · 滑らかなグラデーション",
     inputColor: "入力色処理",
     inputAuto: "入力を維持 · 変換なし",
+    confirmLog: "Log 入力を確認して変換",
+    cancelLog: "キャンセル",
+    sonyLogConfirm: "このバッチの全動画が Sony S-Log3 / {{gamut}}、フルレンジ、BT.709 YCbCr 行列であることを確認してください。ハイライトを圧縮して Rec.709 SDR に変換した後、クリエイティブ LUT を適用します。Log 変換 LUT を重ねないでください。リミテッドレンジ変換済みの素材や他のカメラ曲線には対応しません。",
     inputRec709: "Rec.709 として解釈",
     inputColorHint:
       "この書き出しの全素材に適用され、変換は LUT の前に行われます。異なる色空間の素材は別バッチで処理してください。",
@@ -290,7 +297,14 @@ export default {
     profileInvalid: "ICC が無効、またはチャンネルが一致しません",
     profileEmbedded: "埋め込み ICC",
     profilePending: "写真情報を待機中",
-    rawInputHint: "ARW は撮影時のホワイトバランスと 固定の LibRaw 現像設定で、フル解像度の 16-bit SDR sRGB に変換します。",
+    rawInputHint: "RAW 現像時に露出とホワイトバランスを調整し、16-bit SDR sRGB に変換します。露出を上げるとハイライトが失われる場合があります。",
+    rawExposure: "RAW 露出",
+    rawWhiteBalance: "RAW ホワイトバランス",
+    rawWbCamera: "撮影時の設定",
+    rawWbDaylight: "昼光",
+    rawWbAuto: "自動",
+    rawReset: "RAW 現像設定をリセット",
+    applyRawToSelected: "現像設定を選択中の ARW に適用",
     profileOutput: "{{profile}} · 出力はすべて sRGB に変換されます。",
     applyInputToSelected: "現在の入力解釈を選択中の写真に適用",
     rereadInfo: "写真情報を再読み込み",
@@ -568,6 +582,8 @@ export default {
         "同名の出力が多すぎます。書き出し先またはファイル名を変更してください",
     },
     photo: {
+      bad_raw_settings: "RAW 設定は ARW 専用です。露出は −2～+3 EV の範囲で指定してください",
+      raw_profile: "ARW はセンサー RAW から現像するため、RGB 入力プロファイルは指定できません",
       input_profile_unknown:
         "写真にカラープロファイルがありません。入力色空間を明示的に指定してください。",
       input_profile_invalid:

@@ -142,6 +142,14 @@ describe("desktop workspace", () => {
     act(() => result.current.applyInputToSelected());
     expect(result.current.clips.find((c) => c.path === "/a.HIF")?.sourceInterpretation).toEqual({ mode: "assign", space: "adobe-rgb" });
     expect(result.current.clips.find((c) => c.path === "/b.ARW")?.sourceInterpretation).toEqual({ mode: "embedded" });
+    act(() => {
+      result.current.selectClip("/b.ARW");
+      result.current.setClipLook("/b.ARW", { sourceInterpretation: { mode: "raw", exposure_ev: 1, white_balance: "daylight" } });
+      result.current.selectAll();
+    });
+    act(() => result.current.applyInputToSelected());
+    expect(result.current.clips.find((c) => c.path === "/a.HIF")?.sourceInterpretation).toEqual({ mode: "assign", space: "adobe-rgb" });
+    expect(result.current.clips.find((c) => c.path === "/b.ARW")?.sourceInterpretation).toMatchObject({ mode: "raw", exposure_ev: 1 });
   });
 
   it("imports photos independently, remembers media selections, and freezes a cancellable photo batch", async () => {

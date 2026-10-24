@@ -156,6 +156,7 @@ impl PhotoProcessor {
         progress: Arc<dyn Fn(&str) + Send + Sync>,
     ) -> Result<PathBuf, String> {
         check_cancel(&control.token)?;
+        job.source.validate(&job.input)?;
         if !job.intensity.is_finite() || !(0.0..=1.0).contains(&job.intensity) {
             return Err("照片 LUT 强度必须在 0–1 之间".into());
         }

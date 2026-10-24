@@ -24,11 +24,13 @@ pub fn decode_with_engine(
     engine: Option<&Path>,
 ) -> Result<PhotoFrame, String> {
     check_cancel(cancel)?;
+    source.validate(path)?;
     if super::native::format(path).is_some() {
         return super::native::decode_with_engine(path, source, cancel, engine);
     }
     let header = metadata::header(path)?;
     let icc = match source {
+        SourceInterpretation::Raw { .. } => return Err("RAW 参数不能用于普通照片".into()),
         SourceInterpretation::Assign { space } => metadata::assigned_icc(*space)?,
         SourceInterpretation::Embedded => match header.icc {
             Some(icc) if header.info.color_status == "embedded" => icc,

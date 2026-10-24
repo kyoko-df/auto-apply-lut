@@ -76,11 +76,11 @@ describe("workspace exit protection", () => {
     });
     render(<WorkspaceStatus workspace={workspace()} />);
     await emit("workspace-close-requested");
-    expect(
-      await screen.findByText(
+    await waitFor(() => expect(
+      screen.getByText(
         "Cancel and wait for exports to finish before quitting."
       )
-    ).toBeVisible();
+    ).toBeVisible());
     await act(async () => {
       await i18n.changeLanguage("ja");
     });

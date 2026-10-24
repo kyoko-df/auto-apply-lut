@@ -10,7 +10,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import type { useWorkspace } from "../workspace/useWorkspace";
-import type { PhotoOutput, PhotoSpace } from "../workspace/types";
+import type { PhotoOutput, PhotoSpace, SourceInterpretation } from "../workspace/types";
 import { fileName, errorText, photoProfileText } from "../workspace/model";
 
 export default function PhotoExportInspector({
@@ -39,6 +39,8 @@ export default function PhotoExportInspector({
     };
   }, []);
   const active = w.activeClip?.kind === "photo" ? w.activeClip : null;
+  const raw: Extract<SourceInterpretation, { mode: "raw" }> = active?.sourceInterpretation?.mode === "raw"
+    ? active.sourceInterpretation : { mode: "raw", exposure_ev: 0, white_balance: "camera" };
   const locked = w.isExporting || w.loading;
   const options = w.settings.photo_options;
   const output = options.output;
@@ -244,7 +246,7 @@ export default function PhotoExportInspector({
             </select>
           </label>
         </section>
-        <section className="inspector-section">
+        <section className="inspector-section photo-input-section">
           <div className="section-heading">
             <h3>{t("photoInspector.inputSection")}</h3>
             <span className="section-number">02</span>
@@ -282,14 +284,36 @@ export default function PhotoExportInspector({
             })}
           </p>
           {active?.info?.format === "arw" && (
-            <p className="field-hint">{t("photoInspector.rawInputHint")}</p>
+            <>
+              <p className="field-hint">{t("photoInspector.rawInputHint")}</p>
+              <label className="field">
+                <span>{t("photoInspector.rawExposure")} <output>{raw.exposure_ev > 0 ? "+" : ""}{raw.exposure_ev.toFixed(1)} EV</output></span>
+                <input type="range" min="-2" max="3" step="0.1" value={raw.exposure_ev}
+                  aria-label={t("photoInspector.rawExposure")} disabled={locked}
+                  onChange={e => w.setClipLook(active.id, { sourceInterpretation: { ...raw, exposure_ev: Number(e.target.value) } })} />
+              </label>
+              <label className="field">
+                <span>{t("photoInspector.rawWhiteBalance")}</span>
+                <select value={raw.white_balance} disabled={locked} aria-label={t("photoInspector.rawWhiteBalance")}
+                  onChange={e => w.setClipLook(active.id, { sourceInterpretation: { ...raw,
+                    white_balance: e.target.value as typeof raw.white_balance } })}>
+                  <option value="camera">{t("photoInspector.rawWbCamera")}</option>
+                  <option value="daylight">{t("photoInspector.rawWbDaylight")}</option>
+                  <option value="auto">{t("photoInspector.rawWbAuto")}</option>
+                </select>
+              </label>
+              <button className="text-button" disabled={locked}
+                onClick={() => w.setClipLook(active.id, { sourceInterpretation: { mode: "embedded" } })}>
+                {t("photoInspector.rawReset")}
+              </button>
+            </>
           )}
           <button
             className="text-button"
             disabled={!active || locked || w.selectedIds.length < 2}
             onClick={() => w.applyInputToSelected()}
           >
-            {t("photoInspector.applyInputToSelected")}
+            {t(active?.info?.format === "arw" ? "photoInspector.applyRawToSelected" : "photoInspector.applyInputToSelected")}
           </button>
           <button
             className="text-button"

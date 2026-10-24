@@ -1,5 +1,5 @@
 //! Portable full-image inputs: explicitly configured FFmpeg and prebuilt LibRaw.
-use super::{check_cancel, color, metadata, PhotoFrame, SourceInterpretation};
+use super::{check_cancel, color, metadata, PhotoFrame, RawWhiteBalance, SourceInterpretation};
 use std::{
     ffi::{c_char, c_void, CStr},
     path::Path,
@@ -34,6 +34,8 @@ extern "C" {
         length: usize,
         rgb: *mut u16,
         samples: usize,
+        exposure_ev: f32,
+        white_balance: i32,
         info: *mut RawInfo,
         check: unsafe extern "C" fn(*mut c_void) -> i32,
         context: *mut c_void,
@@ -51,7 +53,27 @@ pub fn raw_version() -> String {
             .into_owned()
     }
 }
-fn raw(path: &Path, pixels: &mut [u16], token: &CancellationToken) -> Result<RawInfo, String> {
+fn raw(
+    path: &Path,
+    pixels: &mut [u16],
+    token: &CancellationToken,
+    source: &SourceInterpretation,
+) -> Result<RawInfo, String> {
+    source.validate(path)?;
+    let (exposure, balance) = match source {
+        SourceInterpretation::Raw {
+            exposure_ev,
+            white_balance,
+        } => (
+            *exposure_ev,
+            match white_balance {
+                RawWhiteBalance::Camera => 0,
+                RawWhiteBalance::Daylight => 1,
+                RawWhiteBalance::Auto => 2,
+            },
+        ),
+        _ => (0.0, 0),
+    };
     check_cancel(token)?;
     let version = metadata::version(path)?;
     // Rust opens paths (including Unicode on Windows); LibRaw receives a bounded buffer.
@@ -78,6 +100,8 @@ fn raw(path: &Path, pixels: &mut [u16], token: &CancellationToken) -> Result<Raw
                 pixels.as_mut_ptr()
             },
             pixels.len(),
+            exposure,
+            balance,
             &mut info,
             cancelled,
             token as *const _ as *mut c_void,
@@ -151,7 +175,7 @@ pub fn header_with_engine(
         return super::heif_decode::header(path, engine, token);
     }
     let version = metadata::version(path)?;
-    let report = raw(path, &mut [], token)?;
+    let report = raw(path, &mut [], token, &SourceInterpretation::Embedded)?;
     let header = make_header(
         path,
         report.width,
@@ -197,13 +221,11 @@ pub fn decode_with_engine(
     if format(path) == Some("heif") {
         return super::heif_decode::decode(path, source, token, engine);
     }
-    if !matches!(source, SourceInterpretation::Embedded) {
-        return Err("ARW 由 LibRaw 完整显影为 sRGB；请选择嵌入/自动输入解释，不可给传感器 RAW 指定 RGB 色彩空间".into());
-    }
+    source.validate(path)?;
     let header = header_with_engine(path, engine, token)?;
     let mut rgb =
         vec![0u16; header.info.stored_width as usize * header.info.stored_height as usize * 3];
-    let report = raw(path, &mut rgb, token)?;
+    let report = raw(path, &mut rgb, token, source)?;
     if (report.width, report.height, report.orientation)
         != (
             header.info.stored_width,
@@ -224,7 +246,12 @@ pub fn capture_metadata(path: &Path, gps: bool) -> Result<little_exif::metadata:
     if format(path) == Some("heif") {
         return super::heif::capture_metadata(path, gps);
     }
-    let r = raw(path, &mut [], &CancellationToken::new())?;
+    let r = raw(
+        path,
+        &mut [],
+        &CancellationToken::new(),
+        &SourceInterpretation::Embedded,
+    )?;
     let mut m = Metadata::new();
     let string = |value: &[c_char]| {
         unsafe { CStr::from_ptr(value.as_ptr()) }

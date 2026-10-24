@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { restoreWorkspace } from "./snapshot";
 
 describe("workspace snapshot recovery", () => {
+  it("restores RAW settings and preserves storage when RAW parameters are invalid", () => {
+    const source = { mode: "raw", exposure_ev: -1.3, white_balance: "auto" };
+    const data = { version: 2, mediaMode: "photo", clips: [
+      { kind: "photo", path: "/a.arw", sourceInterpretation: source },
+    ] };
+    expect(restoreWorkspace(data)?.clips[0].sourceInterpretation).toEqual(source);
+    expect(() => restoreWorkspace({ ...data, clips: [{ ...data.clips[0],
+      sourceInterpretation: { ...source, exposure_ev: 100 } }] })).toThrow();
+    expect(() => restoreWorkspace({ ...data, clips: [{ ...data.clips[0], path: "/a.png" }] })).toThrow();
+  });
   it("rejects unknown versions and corrupt clip records instead of silently replacing their storage", () => {
     expect(() => restoreWorkspace({ version: 3, clips: [] })).toThrow(
       "原文件已保留"

@@ -1329,11 +1329,10 @@ export function useWorkspace() {
     rememberUndo();
     changeClips((current) =>
       current.map((c) =>
-        c.kind === "photo" && ids.has(c.id)
+        c.kind === "photo" && ids.has(c.id) &&
+        (extension(c.path) === "arw") === (extension(source.path) === "arw")
           ? updateLook(c, {
-              sourceInterpretation: c.info?.format === "arw" || extension(c.path) === "arw"
-                ? { mode: "embedded" }
-                : source.sourceInterpretation ?? { mode: "embedded" },
+              sourceInterpretation: source.sourceInterpretation ?? { mode: "embedded" },
             })
           : c
       )

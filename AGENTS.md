@@ -4,13 +4,15 @@
 
 LUTlab is a local-first Tauri desktop app for applying LUTs to batches of videos. Keep the Chinese dark workspace focused on importing clips, choosing a look, comparing actual frames, and exporting reliably. User instructions take precedence. Historical files under `docs/superpowers/` are context, not current implementation requirements; do not restore the removed legacy UI or follow old CLAUDE workflows by default.
 
-Current limits must remain explicit: previews are seekable still frames, not real-time graded playback; automatic camera Log detection and HDR/Dolby Vision mastering are not implemented. Explicit Rec.2020 PQ/HLG to Rec.709 SDR conversion is supported; automatic input mode performs no conversion. Browser development mode is UI-only and must never claim that a real export succeeded. Do not fabricate sample jobs, timings, hardware availability or LUT thumbnails.
+Current limits must remain explicit: previews are seekable still frames, not real-time graded playback; automatic camera Log detection and HDR/Dolby Vision mastering are not implemented. Explicit Rec.2020 PQ/HLG and manually confirmed standard Sony S-Log3/S-Gamut3(.Cine) to Rec.709 SDR conversion are supported; Sony input requires native full-range codes and BT.709 YCbCr matrix. Automatic input mode performs no conversion. Browser development mode is UI-only and must never claim that a real export succeeded. Do not fabricate sample jobs, timings, hardware availability or LUT thumbnails.
 
 ## Architecture
 
 - `src/App.tsx`: workspace composition, media/library navigation, queue, dialogs, keyboard shortcuts and native drag/drop.
 - `src/components/ExportInspector.tsx`: per-clip LUT controls and export settings; only offer meaningful, compatible codec/container combinations.
 - `src/components/FramePreview.tsx`: debounced requests, unique preview client per component instance, stale response guards, comparison wipe and frame seeking.
+- `src/components/LutThumbnail.tsx`: actual current-media LUT previews at 100% strength, visibility gating, one background render at a time, per-generation cancellation and explicit photo sRGB consent. Reuse native preview services and their bounded caches.
+- `src-tauri/src/core/photo/native.rs` / `raw_bridge.cpp`: full ARW development, validated −2 to +3 EV pre-demosaic exposure and camera/daylight/automatic white balance in `SourceInterpretation::Raw`. Keep ABI layouts/signatures synchronized, include parameters in preview keys and batch snapshots, and never copy RAW settings to RGB photos.
 - `src/workspace/types.ts`: typed IPC and UI contracts. Rust request keys are snake_case inside `request`; top-level Tauri arguments use camelCase (for example `batchId`).
 - `src/workspace/model.ts`: pure setting migration, clip state transitions, request construction and batch reconciliation.
 - `src/workspace/useWorkspace.ts`: imports, bounded metadata work, serialized settings persistence, immutable export snapshots, atomic workspace snapshots, multi-selection/undo, non-overlapping polling, cancellation and retry.
@@ -19,7 +21,7 @@ Current limits must remain explicit: previews are seekable still frames, not rea
 - `src/components/WorkspaceStatus.tsx`: startup recovery, persistent save failures and native close coordination.
 - `src/components/WindowedList.tsx`: fixed-height window rendering above 80 rows. Keep virtual row geometry consistent with CSS.
 - `src-tauri/src/commands/workspace.rs` / `startup.rs`: bounded atomic snapshots, export exit guard and explicit storage recovery.
-- `src-tauri/src/core/ffmpeg/color.rs`: shared explicit input interpretation and HDR-to-SDR graph, applied before LUT.
+- `src-tauri/src/core/ffmpeg/color.rs`: shared explicit input interpretation, source-range decoding, HDR-to-SDR and prepared Sony Log-to-SDR graphs, applied before the creative LUT. Keep float highlights through tone mapping; preview and export must share the implementation and retain prepared files through process exit.
 - `src-tauri/src/core/ffmpeg/lut.rs`: shared LUT preparation and filter graph generation. Preview and export must use this implementation.
 - `src-tauri/src/core/ffmpeg/processor.rs`: actual encoding, audio mapping, progress, hardware fallback, cancellation and no-clobber publishing.
 - `src-tauri/src/core/video/mod.rs`: FFprobe metadata and timeout handling.

@@ -45,6 +45,48 @@ pub enum SourceInterpretation {
     Assign {
         space: PhotoSpace,
     },
+    Raw {
+        #[serde(default)]
+        exposure_ev: f32,
+        #[serde(default)]
+        white_balance: RawWhiteBalance,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RawWhiteBalance {
+    #[default]
+    Camera,
+    Daylight,
+    Auto,
+}
+
+impl SourceInterpretation {
+    pub fn validate(&self, path: &std::path::Path) -> Result<(), String> {
+        let raw = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("arw"));
+        match self {
+            Self::Raw { exposure_ev, .. } => {
+                if !raw || !exposure_ev.is_finite() || !(-2.0..=3.0).contains(exposure_ev) {
+                    return Err(crate::types::ui_err(
+                        "photo.bad_raw_settings",
+                        "RAW 显影参数仅适用于 ARW；曝光必须在 −2 至 +3 EV 之间",
+                    ));
+                }
+            }
+            Self::Assign { .. } if raw => {
+                return Err(crate::types::ui_err(
+                    "photo.raw_profile",
+                    "ARW 使用传感器 RAW 显影，不能指定 RGB 输入色彩空间",
+                ))
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

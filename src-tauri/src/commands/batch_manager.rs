@@ -519,6 +519,10 @@ pub async fn start_batch_processing(
 
         if let Some(options) = &photo_options {
             let path = PathBuf::from(&item.input_path);
+            item.photo
+                .get_or_insert_with(PhotoItemOptions::default)
+                .source_interpretation
+                .validate(&path)?;
             let info = photo_processor
                 .inspect(
                     Some(&ffmpeg_path),

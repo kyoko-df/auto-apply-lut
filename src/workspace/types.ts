@@ -30,7 +30,8 @@ export type MediaMode = "video" | "photo";
 export type PhotoSpace = "srgb" | "adobe-rgb" | "display-p3";
 export type SourceInterpretation =
   | { mode: "embedded" }
-  | { mode: "assign"; space: PhotoSpace };
+  | { mode: "assign"; space: PhotoSpace }
+  | { mode: "raw"; exposure_ev: number; white_balance: "camera" | "daylight" | "auto" };
 export type AlphaPolicy =
   | { mode: "preserve" }
   | { mode: "flatten"; color: [number, number, number] };
@@ -154,7 +155,7 @@ export interface AppSettings {
   two_pass_encoding: boolean;
   preserve_metadata: boolean;
   output_bit_depth: "8" | "10";
-  input_color_space: "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg";
+  input_color_space: "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg" | "sony-slog3-cine" | "sony-slog3";
   preview_quality: "fast" | "accurate";
   photo_options: PhotoSettings;
 }

@@ -121,7 +121,7 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
         : videoCodec === "libx265" && merged.output_bit_depth === "10"
         ? "10"
         : "8",
-    input_color_space: ["auto", "rec709", "rec2020-pq", "rec2020-hlg"].includes(
+    input_color_space: ["auto", "rec709", "rec2020-pq", "rec2020-hlg", "sony-slog3-cine", "sony-slog3"].includes(
       merged.input_color_space
     )
       ? merged.input_color_space

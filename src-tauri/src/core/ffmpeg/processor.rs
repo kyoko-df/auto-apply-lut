@@ -399,9 +399,11 @@ impl VideoProcessor {
             .get("__input_color_space__")
             .map(String::as_str)
             .unwrap_or("auto");
-        let color = crate::core::ffmpeg::color::input_filter(input_space)?;
+        let color =
+            crate::core::ffmpeg::color::prepare_input_filter(input_space, workspace.path()).await?;
         let mut filter = format!(
-            "{},{}",
+            "{},{},{}",
+            crate::core::ffmpeg::color::decode_filter(input_space),
             color,
             Self::build_lut_filter(&prepared_luts, intensity)?
         );
@@ -1930,15 +1932,18 @@ mod color_depth_integration_tests {
     use crate::commands::encoding_options::{build_encoding_settings, ProcessingOptions};
 
     #[tokio::test]
-    async fn hevc_ten_bit_hdr_transform_preserves_audio_and_encodes_sdr_pixels() {
+    async fn hevc_ten_bit_input_transforms_preserve_audio_and_encode_sdr_pixels() {
         let Ok((ffmpeg, ffprobe)) = crate::core::ffmpeg::discover_ffmpeg_pair() else {
             eprintln!("FFmpeg unavailable; skipping HEVC 10-bit integration test");
             return;
         };
         let directory = tempfile::tempdir().unwrap();
-        for (input_space, transfer) in
-            [("rec2020-pq", "smpte2084"), ("rec2020-hlg", "arib-std-b67")]
-        {
+        for (input_space, transfer) in [
+            ("rec2020-pq", "smpte2084"),
+            ("rec2020-hlg", "arib-std-b67"),
+            ("sony-slog3-cine", "bt709"),
+            ("sony-slog3", "bt709"),
+        ] {
             let source = directory.path().join(format!("{input_space}.mkv"));
             let generated = AsyncCommand::new(&ffmpeg)
                 .args([
@@ -2048,7 +2053,13 @@ mod color_depth_integration_tests {
                 .args(["-v", "error", "-i"])
                 .arg(&source)
                 .arg("-vf")
-                .arg(crate::core::ffmpeg::color::input_filter(input_space).unwrap())
+                .arg(format!(
+                    "{},{}",
+                    crate::core::ffmpeg::color::decode_filter(input_space),
+                    crate::core::ffmpeg::color::prepare_input_filter(input_space, directory.path())
+                        .await
+                        .unwrap()
+                ))
                 .args([
                     "-frames:v",
                     "1",

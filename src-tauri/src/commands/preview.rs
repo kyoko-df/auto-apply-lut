@@ -247,7 +247,7 @@ fn validate_request(request: &VideoPreviewRequest) -> Result<(), String> {
     if request.client_id.is_empty() || request.client_id.len() > 128 {
         return Err(ui_err("preview.bad_client", "预览客户端标识无效"));
     }
-    crate::core::ffmpeg::color::input_filter(&request.input_color_space)
+    crate::core::ffmpeg::color::validate_input_space(&request.input_color_space)
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -412,6 +412,7 @@ async fn generate_cached(
 ) -> Result<VideoPreviewResponse, String> {
     let mut frame_hash = Sha256::new();
     frame_hash.update(b"video-preview-layered-v2");
+    frame_hash.update([crate::core::ffmpeg::color::is_sony_log(&request.input_color_space) as u8]);
     let executable = crate::core::ffmpeg::resolve_executable_path(ffmpeg_path);
     let ffmpeg_path = fingerprint(&executable, &mut frame_hash).await?;
     frame_hash.update(format!("{:.6}", request.time_seconds).as_bytes());
@@ -628,9 +629,10 @@ async fn decode_frame(
     let working_path = directory.path().join("working.nut");
     let original_path = directory.path().join("original.jpg");
     let scale = scale_filter(request.max_width);
+    let decode = crate::core::ffmpeg::color::decode_filter(&request.input_color_space);
     let graph = match request.quality {
-        PreviewQuality::Fast => format!("[0:v:0]{scale},split[work][original];[work]format=gbrp16le[frame]"),
-        PreviewQuality::Accurate => format!("[0:v:0]split[work][original_input];[work]format=gbrp16le[frame];[original_input]{scale}[original]"),
+        PreviewQuality::Fast => format!("[0:v:0]{decode},{scale},split[work][original];[work]format=gbrp16le[frame]"),
+        PreviewQuality::Accurate => format!("[0:v:0]{decode},split[work][original_input];[work]format=gbrp16le[frame];[original_input]{scale}[original]"),
     };
     let mut command = preview_command(ffmpeg_path);
     command
@@ -688,12 +690,16 @@ async fn render_frame(
     prepared: Option<&Artifact>,
     token: &CancellationToken,
 ) -> Result<VideoPreviewResponse, String> {
-    let color_filter = crate::core::ffmpeg::color::input_filter(&request.input_color_space)
-        .map_err(|error| error.to_string())?;
-    let processed_image = if prepared.is_none() && color_filter == "null" {
+    let processed_image = if prepared.is_none() && request.input_color_space == "auto" {
         frame.original_image.clone()
     } else {
         let directory = temporary_directory("lut-preview-render-")?;
+        let color_filter = crate::core::ffmpeg::color::prepare_input_filter(
+            &request.input_color_space,
+            directory.path(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         let output = directory.path().join("processed.jpg");
         let lut_filter = build_lut_filter(
             prepared
@@ -1262,13 +1268,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accurate_hdr_preview_matches_direct_export_filter_order() {
+    async fn accurate_color_preview_matches_direct_export_filter_order() {
         let Ok(ffmpeg) = crate::core::ffmpeg::discover_ffmpeg_path() else {
             eprintln!("FFmpeg unavailable; skipping explicit HDR integration test");
             return;
         };
         let directory = tempfile::tempdir().unwrap();
-        for (space, transfer) in [("rec2020-pq", "smpte2084"), ("rec2020-hlg", "arib-std-b67")] {
+        for (space, transfer) in [
+            ("rec2020-pq", "smpte2084"),
+            ("rec2020-hlg", "arib-std-b67"),
+            ("sony-slog3-cine", "bt709"),
+            ("sony-slog3", "bt709"),
+        ] {
             let source = directory.path().join(format!("{space}.mkv"));
             let generated = Command::new(&ffmpeg)
                 .args([
@@ -1307,14 +1318,33 @@ mod tests {
             input.video_path = source.to_string_lossy().into();
             input.quality = PreviewQuality::Accurate;
             input.input_color_space = space.into();
-            let preview = generate_with_state(input, &state, &ffmpeg).await.unwrap();
+            let preview = generate_with_state(input.clone(), &state, &ffmpeg)
+                .await
+                .unwrap();
+            if crate::core::ffmpeg::color::is_sony_log(space) {
+                let mut automatic = input.clone();
+                automatic.input_color_space = "auto".into();
+                let automatic = generate_with_state(automatic, &state, &ffmpeg)
+                    .await
+                    .unwrap();
+                assert_ne!(
+                    automatic.original_image, preview.original_image,
+                    "full-range interpretation must not reuse automatic-range working frames"
+                );
+                let hit = generate_with_state(input, &state, &ffmpeg).await.unwrap();
+                assert!(hit.cached);
+                assert_eq!(hit.processed_image, preview.processed_image);
+            }
             let output = directory.path().join("direct.jpg");
-            let color = crate::core::ffmpeg::color::input_filter(space).unwrap();
+            let color = crate::core::ffmpeg::color::prepare_input_filter(space, directory.path())
+                .await
+                .unwrap();
+            let decode = crate::core::ffmpeg::color::decode_filter(space);
             let generated = Command::new(&ffmpeg)
                 .args(["-y", "-v", "error", "-i"])
                 .arg(&source)
                 .arg("-vf")
-                .arg(format!("{color},{}", scale_filter(960)))
+                .arg(format!("{decode},{color},{}", scale_filter(960)))
                 .args([
                     "-frames:v",
                     "1",
@@ -1345,7 +1375,7 @@ mod tests {
             }
             assert_ne!(
                 preview.original_image, preview.processed_image,
-                "explicit HDR interpretation must actually change pixels"
+                "explicit input conversion must actually change pixels"
             );
         }
     }

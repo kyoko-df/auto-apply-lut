@@ -125,6 +125,50 @@ async function importClips() {
 }
 
 describe("workspace integration", () => {
+  it("submits real RAW controls with the photo snapshot and locks them during export", async () => {
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "get_photo_info") return { path: args?.path, filename: "camera.ARW", size: 100,
+        format: "arw", width: 7008, height: 4672, bit_depth: 16, has_alpha: false,
+        color_status: "srgb", source_version: "v1" };
+      if (command === "generate_photo_preview") return { request_id: (args?.request as { request_id: string }).request_id,
+        source_version: "v1", width: 160, height: 106, processed_image: "data:image/png;base64,AA==", original_image: "data:image/png;base64,AA==" };
+      if (command === "start_photo_batch_processing") return { batch_id: "raw-batch", status: "Running", total_items: 1 };
+      return original(command, args);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "照片" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "照片" }));
+    open.mockResolvedValueOnce(["/camera.ARW"]);
+    fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
+    const exposure = await screen.findByRole("slider", { name: "RAW 曝光" });
+    fireEvent.change(exposure, { target: { value: "-1.2" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "RAW 白平衡" }), { target: { value: "daylight" } });
+    fireEvent.click(screen.getByRole("button", { name: /^导出 1 张照片/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_photo_batch_processing", {
+      request: expect.objectContaining({ items: [expect.objectContaining({ photo: expect.objectContaining({
+        source_interpretation: { mode: "raw", exposure_ev: -1.2, white_balance: "daylight" },
+      }) })] }),
+    }));
+    expect(exposure).toBeDisabled();
+  });
+  it("requires Log confirmation and blocks export shortcuts while the dialog is open", async () => {
+    render(<App />);
+    await importClips();
+    const calls = invoke.mock.calls.filter(([name]) => name === "update_app_settings").length;
+    fireEvent.change(screen.getByRole("combobox", { name: "输入色彩处理" }), { target: { value: "sony-slog3-cine" } });
+    expect(screen.getByRole("dialog", { name: "确认 Log 输入并转换" })).toBeVisible();
+    expect(invoke.mock.calls.filter(([name]) => name === "update_app_settings")).toHaveLength(calls);
+    fireEvent.keyDown(document.body, { key: "Enter", metaKey: true });
+    expect(invoke.mock.calls.some(([name]) => name === "start_batch_processing")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("combobox", { name: "输入色彩处理" })).toHaveValue("auto");
+    fireEvent.change(screen.getByRole("combobox", { name: "输入色彩处理" }), { target: { value: "sony-slog3" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认 Log 输入并转换" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_app_settings", {
+      settings: expect.objectContaining({ input_color_space: "sony-slog3" }),
+    }));
+  });
   it("applies an independent look to the whole batch and submits the settings snapshot", async () => {
     render(<App />);
     await importClips();

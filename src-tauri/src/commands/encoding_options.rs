@@ -151,7 +151,7 @@ pub(crate) fn build_encoding_settings(
     }
     extra_params.insert("__bit_depth__".into(), depth.into());
     let input_space = options.input_color_space.as_deref().unwrap_or("auto");
-    crate::core::ffmpeg::color::input_filter(input_space).map_err(|e| e.to_string())?;
+    crate::core::ffmpeg::color::validate_input_space(input_space).map_err(|e| e.to_string())?;
     extra_params.insert("__input_color_space__".into(), input_space.into());
     if input_space != "auto" {
         for key in ["-color_primaries", "-color_trc", "-colorspace"] {

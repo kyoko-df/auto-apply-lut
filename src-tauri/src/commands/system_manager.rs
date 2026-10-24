@@ -97,10 +97,7 @@ fn validate_color_settings(settings: &AppSettings) -> Result<(), String> {
             "10-bit 输出仅支持 HEVC 和 ProRes HQ",
         ));
     }
-    if !matches!(
-        settings.input_color_space.as_str(),
-        "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg"
-    ) {
+    if crate::core::ffmpeg::color::validate_input_space(&settings.input_color_space).is_err() {
         return Err(ui_err("settings.bad_input_space", "不支持的输入色彩空间"));
     }
     if !matches!(settings.preview_quality.as_str(), "fast" | "accurate") {

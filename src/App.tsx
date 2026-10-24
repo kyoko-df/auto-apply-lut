@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import FramePreview, { timecode } from "./components/FramePreview";
 import PhotoPreview from "./components/PhotoPreview";
+import LutThumbnail from "./components/LutThumbnail";
 import PhotoExportInspector from "./components/PhotoExportInspector";
 import WindowedList from "./components/WindowedList";
 import WorkspaceStatus from "./components/WorkspaceStatus";
@@ -62,6 +63,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [photoThumbnails, setPhotoThumbnails] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const wRef = useRef(w);
@@ -359,6 +361,15 @@ export default function App() {
               <Plus size={17} />
             </button>
           </div>
+          {section === "luts" && active && (
+            <div className="lut-preview-note">
+              {photoMode ? <label><input type="checkbox" checked={photoThumbnails}
+                disabled={locked || !w.isDesktop}
+                onChange={e => setPhotoThumbnails(e.target.checked)} />
+                {t("app.lutPhotoThumbnails")}</label>
+                : <span>{t("app.lutVideoThumbnails")}</span>}
+            </div>
+          )}
           {section === "media" && (w.clips.length > 0 || w.canUndo) && (
             <div className="selection-toolbar">
               <span>
@@ -573,13 +584,11 @@ export default function App() {
                               : lut.path
                           }
                         >
-                          <span
-                            className={`lut-icon ${
-                              !lut.is_valid ? "invalid" : ""
-                            }`}
-                          >
-                            <Layers3 size={18} />
-                          </span>
+                          <LutThumbnail clip={active ?? undefined} lut={lut}
+                            enabled={w.ffmpeg.status === "ready" && !locked && (!photoMode || photoThumbnails)}
+                            isDesktop={w.isDesktop} inputColorSpace={w.settings.input_color_space}
+                            alphaPolicy={w.settings.photo_options.output.alpha_policy}
+                            engineKey={JSON.stringify(w.ffmpeg)} />
                           <span>
                             <strong>{lut.name}</strong>
                             <small>

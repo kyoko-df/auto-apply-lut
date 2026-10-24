@@ -12,6 +12,17 @@ import {
 import type { BatchProgress } from "./types";
 
 describe("workspace model", () => {
+  it("captures RAW development per photo and invalidates only the changed output", () => {
+    const photo = { ...appendClips([], ["/a.ARW"], 100, "photo")[0],
+      status: "completed" as const, outputPath: "/out/a.png", progress: 100 };
+    const source = { mode: "raw" as const, exposure_ev: 1.2, white_balance: "daylight" as const };
+    const edited = updateLook(photo, { sourceInterpretation: source });
+    expect(edited.status).toBe("ready");
+    expect(edited.outputHistory).toEqual(["/out/a.png"]);
+    expect(buildBatchRequest([edited], DEFAULT_SETTINGS).items[0]).toMatchObject({
+      photo: { source_interpretation: source },
+    });
+  });
   it("deduplicates Windows paths, preserves POSIX case and ignores unsupported input", () => {
     const clips = appendClips(
       [],

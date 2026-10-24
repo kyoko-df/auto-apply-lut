@@ -17,6 +17,10 @@ export default {
     photo: "Photos",
   },
   app: {
+    lutThumbnailAlt: "{{source}} · {{name}} · 100% LUT preview",
+    lutThumbnailLoading: "Rendering LUT thumbnail",
+    lutPhotoThumbnails: "Preview library LUTs as sRGB · current photo · 100%",
+    lutVideoThumbnails: "Current clip, first frame · 100% LUT · fast preview",
     ariaWorkspace: "LUT Lab workspace",
     ariaMainNav: "Main navigation",
     ariaMediaMode: "Media mode",
@@ -215,6 +219,9 @@ export default {
     bit10: "10-bit · smoother gradients",
     inputColor: "Input color handling",
     inputAuto: "Keep input · no conversion",
+    confirmLog: "Confirm Log input and convert",
+    cancelLog: "Cancel",
+    sonyLogConfirm: "Confirm all clips in this batch use Sony S-Log3 / {{gamut}}, full-range codes and the BT.709 YCbCr matrix. Convert to Rec.709 SDR with highlight compression before the creative LUT. Do not apply another Log conversion LUT. Legal-range transcodes and other camera curves are unsupported.",
     inputRec709: "Interpret as Rec.709",
     inputColorHint:
       "Applies to every clip in this export; conversion happens before the LUT. Process different input color spaces in separate batches.",
@@ -292,7 +299,14 @@ export default {
     profileInvalid: "Invalid ICC or channel mismatch",
     profileEmbedded: "Embedded ICC",
     profilePending: "Waiting for photo info",
-    rawInputHint: "ARW uses as-shot white balance and a fixed LibRaw development recipe at full resolution in 16-bit SDR sRGB.",
+    rawInputHint: "Exposure and white balance are applied during full RAW development before conversion to 16-bit SDR sRGB. Increasing exposure can clip highlights.",
+    rawExposure: "RAW exposure",
+    rawWhiteBalance: "RAW white balance",
+    rawWbCamera: "As shot",
+    rawWbDaylight: "Daylight",
+    rawWbAuto: "Automatic",
+    rawReset: "Reset RAW development",
+    applyRawToSelected: "Apply development settings to selected ARW files",
     profileOutput: "{{profile}} · Output is always converted to sRGB.",
     applyInputToSelected: "Apply this input interpretation to selected photos",
     rereadInfo: "Re-read photo info",
@@ -559,6 +573,8 @@ export default {
         "Too many same-named outputs; change the export directory or file name",
     },
     photo: {
+      bad_raw_settings: "RAW settings require ARW input and exposure between −2 and +3 EV",
+      raw_profile: "ARW is developed from sensor RAW; an RGB input profile cannot be assigned",
       input_profile_unknown:
         "The photo has no color profile; explicitly assign its input color space.",
       input_profile_invalid:

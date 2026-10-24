@@ -137,7 +137,7 @@ fn one_dimensional_cube(data: &LutData) -> AppResult<String> {
 
 // FFmpeg parses values twice: the graph grammar, then the filter-option grammar.
 // Do not shell-quote: Command passes the graph as one argument without a shell.
-fn escape_filter_value(value: &str) -> String {
+pub(crate) fn escape_filter_value(value: &str) -> String {
     let mut option = String::new();
     for ch in value.chars() {
         if matches!(ch, '\\' | '\'' | ':') {

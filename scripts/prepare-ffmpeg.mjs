@@ -70,7 +70,7 @@ export async function verifyRuntime(directory, names) {
   ]);
   requireCapabilities(decoders, ['hevc'], 'decoder');
   requireCapabilities(encoders, ['libx264', 'libx265', 'prores_ks', 'aac', 'mjpeg', 'ffv1'], 'encoder');
-  requireCapabilities(filters, ['lut3d', 'lut1d', 'blend', 'split', 'format', 'scale', 'setsar', 'pad', 'zscale', 'tonemap', 'xstack', 'crop'], 'filter');
+  requireCapabilities(filters, ['lut3d', 'lut1d', 'blend', 'split', 'format', 'scale', 'setsar', 'pad', 'zscale', 'tonemap', 'colorchannelmixer', 'setparams', 'xstack', 'crop'], 'filter');
   requireCapabilities(muxers, ['mp4', 'mov', 'matroska', 'image2', 'nut'], 'muxer');
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'lutlab-bundle-check-'));
   try {
