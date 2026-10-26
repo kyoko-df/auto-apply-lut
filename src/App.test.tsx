@@ -125,6 +125,87 @@ async function importClips() {
 }
 
 describe("workspace integration", () => {
+  it("saves, renames, batch applies, undoes and deletes presets without changing applied exports", async () => {
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_photo_lut_fingerprint") return Promise.resolve("a".repeat(64));
+      if (command === "validate_lut_file") return Promise.resolve({ is_valid: true, errors: [] });
+      return original(command, args);
+    });
+    render(<App />);
+    await importClips();
+    fireEvent.change(screen.getByRole("combobox", { name: "当前 LUT" }), { target: { value: lut.path } });
+    fireEvent.change(screen.getByRole("slider", { name: /LUT 强度/ }), { target: { value: "45" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存当前风格" }));
+    expect(screen.getByRole("textbox", { name: "预设名称" })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(invoke).not.toHaveBeenCalledWith("start_batch_processing", expect.anything());
+    fireEvent.change(screen.getByRole("textbox", { name: "预设名称" }), { target: { value: "日常暖色" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存预设" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "管理预设" }));
+    fireEvent.click(screen.getByRole("button", { name: "重命名预设 日常暖色" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "预设名称" }), { target: { value: "暖色 45" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存预设" }));
+    await screen.findByRole("button", { name: "删除预设 暖色 45" });
+    fireEvent.click(screen.getByRole("button", { name: "关闭预设窗口" }));
+    fireEvent.click(screen.getByRole("button", { name: "预览 b.mp4" }));
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "预设应用范围" }), { target: { value: "selected" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用预设" }));
+    await waitFor(() => expect(screen.getByRole("slider", { name: /LUT 强度/ })).toHaveValue("45"));
+    fireEvent.click(screen.getByRole("button", { name: "撤销修改" }));
+    expect(screen.getByRole("slider", { name: /LUT 强度/ })).toHaveValue("100");
+    fireEvent.click(screen.getByRole("button", { name: "应用预设" }));
+    await waitFor(() => expect(screen.getByRole("slider", { name: /LUT 强度/ })).toHaveValue("45"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "管理预设" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "管理预设" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除预设 暖色 45" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("暂无当前类型的预设", { selector: ".preset-list p" });
+    fireEvent.click(screen.getByRole("button", { name: "关闭预设窗口" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量导出" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_batch_processing", {
+      request: expect.objectContaining({ items: [
+        expect.objectContaining({ lut_path: lut.path, intensity: 0.45 }),
+        expect.objectContaining({ lut_path: lut.path, intensity: 0.45 }),
+      ] }),
+    }));
+    expect(invoke).not.toHaveBeenCalledWith("remove_lut_from_library", expect.anything());
+  });
+
+  it("keeps photo preset confirmation unchecked when an older confirmation finishes late", async () => {
+    let complete!: (hash: string) => void;
+    const pending = new Promise<string>(resolve => { complete = resolve; });
+    let reads = 0;
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_app_settings") return Promise.resolve({ ...DEFAULT_SETTINGS, look_presets: [{
+        id: "photo-look", name: "照片风格", media_mode: "photo", lut_path: lut.path,
+        lut_fingerprint: "a".repeat(64), intensity: 45, raw: null,
+      }] });
+      if (command === "get_photo_info") return Promise.resolve({ path: args?.path, filename: "a.jpg", format: "jpeg",
+        width: 64, height: 48, bit_depth: 8, has_alpha: false, color_status: "srgb", source_version: "v1" });
+      if (command === "get_photo_lut_fingerprint") return ++reads === 1 ? pending : Promise.resolve("a".repeat(64));
+      if (command === "validate_lut_file") return Promise.resolve({ is_valid: true, errors: [] });
+      return original(command, args);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "照片" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "照片" }));
+    open.mockResolvedValueOnce(["/a.jpg"]);
+    fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "当前 LUT" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("combobox", { name: "当前 LUT" }), { target: { value: lut.path } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "按 sRGB 输入和输出使用此 LUT" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "调色预设" }), { target: { value: "photo-look" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用预设" }));
+    await waitFor(() => expect(screen.getByRole("slider", { name: "LUT 强度" })).toHaveValue("45"));
+    await act(async () => { complete("a".repeat(64)); await pending; });
+    expect(screen.getByRole("checkbox", { name: "按 sRGB 输入和输出使用此 LUT" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /^导出 1 张照片/ })).toBeDisabled();
+  });
+
   it("submits real RAW controls with the photo snapshot and locks them during export", async () => {
     const original = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {

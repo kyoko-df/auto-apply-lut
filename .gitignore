@@ -31,6 +31,7 @@ src-tauri/.cache/
 
 docs/*
 !docs/photo-native-inputs.md
+!docs/look-presets.md
 .pnpm-store/*
 tmp/*
 

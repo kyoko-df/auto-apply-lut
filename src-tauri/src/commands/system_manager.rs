@@ -72,6 +72,8 @@ pub struct AppSettings {
     pub preview_quality: String,
     #[serde(default)]
     pub photo_options: crate::core::photo::PhotoSettings,
+    #[serde(default)]
+    pub look_presets: Vec<crate::types::look_preset::LookPreset>,
 }
 
 fn default_output_bit_depth() -> String {
@@ -85,6 +87,7 @@ fn default_preview_quality() -> String {
 }
 
 fn validate_color_settings(settings: &AppSettings) -> Result<(), String> {
+    crate::types::look_preset::validate_presets(&settings.look_presets)?;
     settings.photo_options.output.validate(false)?;
     if !matches!(settings.output_bit_depth.as_str(), "8" | "10") {
         return Err(ui_err("settings.bad_bit_depth", "输出位深必须为 8 或 10"));
@@ -191,6 +194,7 @@ pub async fn get_app_settings(
         input_color_space: config.input_color_space.clone(),
         preview_quality: config.preview_quality.clone(),
         photo_options: config.photo_options.clone(),
+        look_presets: config.look_presets.clone(),
     })
 }
 
@@ -241,6 +245,7 @@ pub async fn update_app_settings(
         config.input_color_space = settings.input_color_space.clone();
         config.preview_quality = settings.preview_quality.clone();
         config.photo_options = settings.photo_options.clone();
+        config.look_presets = settings.look_presets.clone();
     })
     .map_err(|e| format!("Failed to update settings: {}", e))?;
 

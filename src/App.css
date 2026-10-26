@@ -1122,6 +1122,86 @@
   text-align: left;
   white-space: normal;
 }
+.look-presets {
+  margin-bottom: 20px;
+  padding-bottom: 17px;
+  border-bottom: 1px solid var(--line);
+}
+.look-presets .field {
+  margin-bottom: 10px;
+}
+.preset-toolbar, .preset-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 15px;
+  align-items: center;
+}
+.preset-toolbar .text-button {
+  white-space: normal;
+  text-align: left;
+}
+.preset-application {
+  margin-top: 13px;
+}
+.preset-application .field-hint {
+  overflow-wrap: anywhere;
+  margin-bottom: 9px;
+}
+.preset-error {
+  color: #efaa94;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  margin-top: 12px;
+}
+.preset-dialog .dialog-heading {
+  margin-bottom: 20px;
+}
+.preset-dialog input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  background: #15171c;
+  color: #e1e2e8;
+  border: 1px solid #ffffff24;
+  border-radius: 5px;
+  padding: 10px;
+  font: inherit;
+}
+.preset-dialog .field-hint {
+  line-height: 1.7;
+}
+.preset-raw-option {
+  margin: 14px 0;
+}
+.preset-list {
+  max-height: 40svh;
+  overflow: auto;
+  margin-top: 15px;
+}
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.preset-row > div:first-child {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.preset-row strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.preset-row span {
+  font-size: 11px;
+  color: var(--muted);
+}
 .section-heading {
   display: flex;
   align-items: center;

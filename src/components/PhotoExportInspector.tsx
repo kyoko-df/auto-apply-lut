@@ -12,6 +12,7 @@ import {
 import type { useWorkspace } from "../workspace/useWorkspace";
 import type { PhotoOutput, PhotoSpace, SourceInterpretation } from "../workspace/types";
 import { fileName, errorText, photoProfileText } from "../workspace/model";
+import LookPresets from "./LookPresets";
 
 export default function PhotoExportInspector({
   workspace: w,
@@ -41,7 +42,7 @@ export default function PhotoExportInspector({
   const active = w.activeClip?.kind === "photo" ? w.activeClip : null;
   const raw: Extract<SourceInterpretation, { mode: "raw" }> = active?.sourceInterpretation?.mode === "raw"
     ? active.sourceInterpretation : { mode: "raw", exposure_ev: 0, white_balance: "camera" };
-  const locked = w.isExporting || w.loading;
+  const locked = w.isExporting || w.loading || w.isPresetBusy;
   const options = w.settings.photo_options;
   const output = options.output;
   const selected = new Set(w.selectedIds);
@@ -88,7 +89,7 @@ export default function PhotoExportInspector({
       if (
         mounted.current &&
         live.current.mediaMode === "photo" &&
-        live.current.allClips.find((c) => c.id === id)?.lutPath === path
+        live.current.allClips.find((c) => c.id === id) === active
       )
         live.current.setClipLook(id, {
           lutSpace: "srgb",
@@ -114,6 +115,7 @@ export default function PhotoExportInspector({
             <h3>{t("inspector.lookSection")}</h3>
             <span className="section-number">01</span>
           </div>
+          <LookPresets workspace={w} />
           <div className="field-label">
             <label htmlFor="photo-lut-select">
               {t("inspector.currentLut")}

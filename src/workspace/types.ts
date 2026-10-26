@@ -133,6 +133,23 @@ export interface LutLibraryItem {
   updated_at: string;
 }
 
+export interface LookPreset {
+  id: string;
+  name: string;
+  media_mode: MediaMode;
+  lut_path: string | null;
+  lut_fingerprint: string | null;
+  intensity: number;
+  raw: Extract<SourceInterpretation, { mode: "raw" }> | null;
+}
+
+export type PresetScope = "current" | "selected";
+
+export interface LutValidationResult {
+  is_valid: boolean;
+  errors: string[];
+}
+
 export interface AppSettings {
   default_output_dir: string;
   ffmpeg_path: string;
@@ -158,6 +175,7 @@ export interface AppSettings {
   input_color_space: "auto" | "rec709" | "rec2020-pq" | "rec2020-hlg" | "sony-slog3-cine" | "sony-slog3";
   preview_quality: "fast" | "accurate";
   photo_options: PhotoSettings;
+  look_presets: LookPreset[];
 }
 
 export interface FfmpegInfo {

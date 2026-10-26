@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SetStateAction } from "react";
 import i18n from "../i18n";
+import { applyPresetLook, presetTargets, validateLookPresets } from "./presets";
 import {
   restoreWorkspace,
   CLIP_ERROR_INTERRUPTED,
@@ -43,6 +44,9 @@ import type {
   MediaMode,
   WorkspaceSnapshot,
   SelectionOptions,
+  LookPreset,
+  LutValidationResult,
+  PresetScope,
 } from "./types";
 
 const desktopAvailable = () =>
@@ -108,6 +112,7 @@ export function useWorkspace() {
   });
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isPresetBusy, setIsPresetBusy] = useState(false);
   const [workspaceSaveError, setWorkspaceSaveError] = useState<string | null>(
     null
   );
@@ -156,6 +161,8 @@ export function useWorkspace() {
   const engineGenerationRef = useRef(0);
   const metadataGenerationRef = useRef(0);
   const metadataRequestsRef = useRef(new Map<string, Promise<void>>());
+  const presetBusyRef = useRef(false);
+  const presetOperationsRef = useRef<Promise<unknown>>(Promise.resolve());
 
   const setExportGuard = useCallback((active: boolean) => {
     const write = guardWritesRef.current
@@ -217,6 +224,7 @@ export function useWorkspace() {
   const flushWorkspace = useCallback(async () => {
     if (!desktopAvailable() || !workspaceLoadedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    await presetOperationsRef.current;
     await settingsWritesRef.current;
     try {
       await guardWritesRef.current;
@@ -508,7 +516,7 @@ export function useWorkspace() {
   ]);
 
   const reloadPersistentState = useCallback(async () => {
-    if (!desktopAvailable() || exportingRef.current) return;
+    if (!desktopAvailable() || exportingRef.current || presetBusyRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     try {
@@ -733,7 +741,7 @@ export function useWorkspace() {
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      if (exportingRef.current || loadingRef.current) return Promise.resolve();
+      if (exportingRef.current || loadingRef.current || presetBusyRef.current) return Promise.resolve();
       return persistSettings(
         normalizeSettings({ ...settingsRef.current, ...patch })
       );
@@ -742,7 +750,7 @@ export function useWorkspace() {
   );
 
   const retrySettings = useCallback(() => {
-    if (exportingRef.current || !failedSettingsRef.current)
+    if (exportingRef.current || presetBusyRef.current || !failedSettingsRef.current)
       return Promise.resolve();
     return persistSettings(failedSettingsRef.current);
   }, [persistSettings]);
@@ -760,6 +768,7 @@ export function useWorkspace() {
       !requireDesktop() ||
       exportingRef.current ||
       loadingRef.current ||
+      presetBusyRef.current ||
       importingRef.current
     )
       return false;
@@ -1121,7 +1130,7 @@ export function useWorkspace() {
 
   const undo = useCallback(() => {
     const previous = undoRef.current;
-    if (!previous || exportingRef.current || loadingRef.current) return;
+    if (!previous || exportingRef.current || loadingRef.current || presetBusyRef.current) return;
     undoRef.current = null;
     setCanUndo(false);
     changeClips((current) => {
@@ -1158,6 +1167,7 @@ export function useWorkspace() {
 
   const selectClip = useCallback(
     (id: string, options: SelectionOptions = {}) => {
+      if (presetBusyRef.current) return;
       if (!clipsRef.current.some((clip) => clip.id === id)) return;
       const known = new Set(clipsRef.current.map((clip) => clip.id));
       const order =
@@ -1201,6 +1211,7 @@ export function useWorkspace() {
 
   const selectAll = useCallback(
     (ids?: string[]) => {
+      if (presetBusyRef.current) return;
       const known = new Set(clipsRef.current.map((clip) => clip.id));
       const next = ids
         ? [...new Set(ids.filter((id) => known.has(id)))]
@@ -1218,13 +1229,13 @@ export function useWorkspace() {
     [setActiveId, setSelectedIds]
   );
   const clearSelection = useCallback(
-    () => setSelectedIds([]),
+    () => { if (!presetBusyRef.current) setSelectedIds([]); },
     [setSelectedIds]
   );
 
   const removeClips = useCallback(
     (ids: string[]) => {
-      if (exportingRef.current || loadingRef.current || !ids.length) return;
+      if (exportingRef.current || loadingRef.current || presetBusyRef.current || !ids.length) return;
       const removed = new Set(ids);
       rememberUndo();
       const next = changeClips((current) =>
@@ -1260,7 +1271,7 @@ export function useWorkspace() {
 
   const setClipLook = useCallback(
     (id: string, patch: LookPatch) => {
-      if (exportingRef.current) return;
+      if (exportingRef.current || presetBusyRef.current) return;
       const previous = clipsRef.current;
       const next = previous.map((clip) =>
         clip.id === id ? updateLook(clip, patch) : clip
@@ -1274,7 +1285,7 @@ export function useWorkspace() {
 
   const applyLook = useCallback(
     (ids: string[], sourceId?: string) => {
-      if (exportingRef.current) return;
+      if (exportingRef.current || presetBusyRef.current) return;
       const source = clipsRef.current.find(
         (clip) => clip.id === (sourceId ?? activeIdRef.current)
       );
@@ -1322,7 +1333,7 @@ export function useWorkspace() {
   );
 
   const applyInputToSelected = useCallback(() => {
-    if (exportingRef.current) return;
+    if (exportingRef.current || presetBusyRef.current) return;
     const source = clipsRef.current.find((c) => c.id === activeIdRef.current);
     if (source?.kind !== "photo") return;
     const ids = new Set(selectedIdsRef.current);
@@ -1338,6 +1349,104 @@ export function useWorkspace() {
       )
     );
   }, [changeClips, rememberUndo]);
+
+  const runPresetOperation = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
+    if (!desktopAvailable()) throw new Error(desktopMessage());
+    if (exportingRef.current || loadingRef.current || presetBusyRef.current || importingRef.current)
+      throw new Error(i18n.t("presets.busy"));
+    presetBusyRef.current = true;
+    setIsPresetBusy(true);
+    const operation = Promise.resolve().then(work);
+    // Native close/OS quit flushes these operations before the settings and workspace snapshots.
+    presetOperationsRef.current = operation.catch(() => {});
+    try {
+      return await operation;
+    } finally {
+      presetBusyRef.current = false;
+      if (mountedRef.current) setIsPresetBusy(false);
+    }
+  }, []);
+
+  const readPresetLut = useCallback(async (path: string): Promise<string> => {
+    try {
+      const fingerprint = await invoke<string>("get_photo_lut_fingerprint", { path });
+      const validation = await invoke<LutValidationResult>("validate_lut_file", { lutPath: path });
+      if (!validation.is_valid) throw new Error(validation.errors.join(" · "));
+      const after = await invoke<string>("get_photo_lut_fingerprint", { path });
+      if (fingerprint !== after) throw new Error(i18n.t("presets.changedLut"));
+      return after;
+    } catch (error) {
+      throw new Error(i18n.t("presets.unavailableLut", { message: errorMessage(error) }));
+    }
+  }, []);
+
+  const persistPresets = useCallback(async (next: LookPreset[]) => {
+    validateLookPresets(next);
+    await persistSettings({ ...settingsRef.current, look_presets: next });
+    if (settingsErrorRef.current || JSON.stringify(persistedSettingsRef.current.look_presets) !== JSON.stringify(next))
+      throw new Error(settingsErrorRef.current ?? i18n.t("presets.saveFailed"));
+  }, [persistSettings]);
+
+  const saveLookPreset = useCallback((name: string, includeRaw = false) => runPresetOperation(async () => {
+    const source = clipsRef.current.find(c => c.id === activeIdRef.current);
+    if (!source?.info || source.metadataError) throw new Error(i18n.t("presets.readInfoFirst"));
+    if (includeRaw && (source.kind !== "photo" || extension(source.path) !== "arw"))
+      throw new Error(i18n.t("presets.rawOnly"));
+    const preset: LookPreset = {
+      id: crypto.randomUUID(), name: name.trim(),
+      media_mode: source.kind === "photo" ? "photo" : "video",
+      lut_path: source.lutPath, lut_fingerprint: source.lutPath ? "0".repeat(64) : null,
+      intensity: source.intensity,
+      raw: includeRaw ? source.sourceInterpretation?.mode === "raw"
+        ? { ...source.sourceInterpretation }
+        : { mode: "raw", exposure_ev: 0, white_balance: "camera" } : null,
+    };
+    validateLookPresets([...settingsRef.current.look_presets, preset]);
+    if (preset.lut_path) preset.lut_fingerprint = await readPresetLut(preset.lut_path);
+    await persistPresets([...settingsRef.current.look_presets, preset]);
+    return preset.id;
+  }), [persistPresets, readPresetLut, runPresetOperation]);
+
+  const renameLookPreset = useCallback((id: string, name: string) => runPresetOperation(async () => {
+    const presets = settingsRef.current.look_presets;
+    if (!presets.some(p => p.id === id)) throw new Error(i18n.t("presets.notFound"));
+    await persistPresets(presets.map(p => p.id === id ? { ...p, name: name.trim() } : p));
+  }), [persistPresets, runPresetOperation]);
+
+  const deleteLookPreset = useCallback((id: string) => runPresetOperation(async () => {
+    const presets = settingsRef.current.look_presets;
+    if (!presets.some(p => p.id === id)) throw new Error(i18n.t("presets.notFound"));
+    await persistPresets(presets.filter(p => p.id !== id));
+  }), [persistPresets, runPresetOperation]);
+
+  const applyLookPreset = useCallback((id: string, scope: PresetScope) => runPresetOperation(async () => {
+    const preset = persistedSettingsRef.current.look_presets.find(p => p.id === id);
+    if (!preset) throw new Error(i18n.t("presets.notFound"));
+    const ids = new Set(scope === "current" ? [activeIdRef.current] : selectedIdsRef.current);
+    const targets = clipsRef.current.filter(c => ids.has(c.id));
+    const mode = mediaModeRef.current;
+    presetTargets(targets, preset, mode);
+    if (preset.lut_path && await readPresetLut(preset.lut_path) !== preset.lut_fingerprint)
+      throw new Error(i18n.t("presets.changedLut"));
+    if (!mountedRef.current) return 0;
+    const current = clipsRef.current.filter(c => ids.has(c.id));
+    if (current.length !== targets.length || mediaModeRef.current !== mode)
+      throw new Error(i18n.t("presets.targetsChanged"));
+    presetTargets(current, preset, mode);
+    const before = clipsRef.current;
+    const next = before.map(c => ids.has(c.id) ? applyPresetLook(c, preset) : c);
+    if (!next.some((c, index) => c !== before[index])) {
+      setNotice({ kind: "info", message: i18n.t("presets.unchanged") });
+      return 0;
+    }
+    rememberUndo();
+    changeClips(() => next);
+    setNotice({ kind: "success", message: i18n.t(
+      mode === "photo" && preset.lut_path ? "presets.appliedPhoto" : "presets.applied",
+      { name: preset.name, count: current.length },
+    ) });
+    return current.length;
+  }), [changeClips, readPresetLut, rememberUndo, runPresetOperation]);
 
   const cancelExport = useCallback(async () => {
     if (!exportingRef.current || cancelRequestedRef.current) return true;
@@ -1377,7 +1486,7 @@ export function useWorkspace() {
 
   const startExport = useCallback(
     async (ids?: string[]) => {
-      if (!requireDesktop() || exportingRef.current || loadingRef.current)
+      if (!requireDesktop() || exportingRef.current || loadingRef.current || presetBusyRef.current)
         return;
       if (importingRef.current) importCancelledRef.current = true;
       const chosen = ids ? new Set(ids) : null;
@@ -1586,6 +1695,7 @@ export function useWorkspace() {
         exportingRef.current ||
         importingRef.current ||
         loadingRef.current ||
+        presetBusyRef.current ||
         mediaModeRef.current === mode
       )
         return;
@@ -1652,6 +1762,11 @@ export function useWorkspace() {
     updateSettings,
     settingsError,
     isSavingSettings,
+    isPresetBusy,
+    saveLookPreset,
+    renameLookPreset,
+    deleteLookPreset,
+    applyLookPreset,
     retrySettings,
     discardSettingsError,
     workspaceSaveError,

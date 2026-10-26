@@ -70,7 +70,7 @@ export default function App() {
   wRef.current = w;
   const exportScopeRef = useRef<"pending" | "selected">("pending");
   const visibleIdsRef = useRef<string[]>([]);
-  const locked = w.isExporting || w.loading;
+  const locked = w.isExporting || w.loading || w.isPresetBusy;
   const active = w.activeClip;
   const photoMode = w.mediaMode === "photo";
   const videoInfo = active?.kind === "photo" ? undefined : active?.info;

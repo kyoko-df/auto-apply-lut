@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   input_color_space: "auto",
   preview_quality: "fast",
   photo_options: DEFAULT_PHOTO_SETTINGS,
+  look_presets: [],
 };
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -129,6 +130,7 @@ export function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     preview_quality:
       merged.preview_quality === "accurate" ? "accurate" : "fast",
     photo_options: normalizePhotoSettings(merged.photo_options),
+    look_presets: merged.look_presets ?? [],
   };
 }
 

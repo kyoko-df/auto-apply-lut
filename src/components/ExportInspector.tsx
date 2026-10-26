@@ -15,6 +15,7 @@ import {
   Square,
 } from "lucide-react";
 import { fileName } from "../workspace/model";
+import LookPresets from "./LookPresets";
 import type { AppSettings } from "../workspace/types";
 import type { useWorkspace } from "../workspace/useWorkspace";
 
@@ -44,7 +45,7 @@ export default function ExportInspector({
   const [exportScope, setExportScope] = useState<"pending" | "selected">(
     "pending"
   );
-  const locked = w.isExporting || w.loading;
+  const locked = w.isExporting || w.loading || w.isPresetBusy;
   const active = w.activeClip;
   const activeLut = w.luts.find((lut) => lut.path === active?.lutPath);
   const exportable = w.clips.filter(
@@ -79,6 +80,7 @@ export default function ExportInspector({
             <h3>{t("inspector.lookSection")}</h3>
             <span className="section-number">01</span>
           </div>
+          <LookPresets workspace={w} />
           <div className="field-label">
             <label htmlFor="lut-select">{t("inspector.currentLut")}</label>
             <button

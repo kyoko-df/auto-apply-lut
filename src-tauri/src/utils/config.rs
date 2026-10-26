@@ -59,6 +59,11 @@ pub struct AppConfig {
     /// 是否保留元数据
     pub preserve_metadata: bool,
     pub photo_options: crate::core::photo::PhotoSettings,
+    #[serde(
+        default,
+        deserialize_with = "crate::types::look_preset::deserialize_presets"
+    )]
+    pub look_presets: Vec<crate::types::look_preset::LookPreset>,
 }
 
 impl Default for AppConfig {
@@ -90,6 +95,7 @@ impl Default for AppConfig {
             two_pass_encoding: false,
             preserve_metadata: true,
             photo_options: Default::default(),
+            look_presets: Vec::new(),
         }
     }
 }
@@ -298,6 +304,58 @@ mod tests {
         );
         assert_eq!(restored.get_config().max_concurrent_tasks, 2);
         assert!(restored.get_config().enable_hardware_acceleration);
+        assert!(restored.get_config().look_presets.is_empty());
+    }
+
+    #[test]
+    fn look_presets_persist_and_failed_writes_keep_the_original_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let mut manager = ConfigManager::from_path(path.clone());
+        let preset = serde_json::from_value(serde_json::json!({
+            "id": "look-1", "name": "日常暖色", "media_mode": "photo", "lut_path": null,
+            "lut_fingerprint": null, "intensity": 45, "raw": { "mode": "raw", "exposure_ev": -1, "white_balance": "auto" }
+        })).unwrap();
+        manager
+            .update_config(|config| config.look_presets = vec![preset])
+            .unwrap();
+        let restored = ConfigManager::from_path(path.clone());
+        assert_eq!(restored.get_config().look_presets[0].name, "日常暖色");
+        // A regular file cannot be used as the destination's parent directory.
+        let blocked = temp.path().join("blocked");
+        fs::write(&blocked, b"keep").unwrap();
+        manager.config_path = blocked.join("config.json");
+        assert!(manager
+            .update_config(|config| config.look_presets.clear())
+            .is_err());
+        assert_eq!(manager.get_config().look_presets.len(), 1);
+        assert_eq!(fs::read(&blocked).unwrap(), b"keep");
+        assert_eq!(
+            ConfigManager::from_path(path)
+                .get_config()
+                .look_presets
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_preset_configuration_is_backed_up_without_overwriting_original_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let bytes = br#"{"look_presets":[{"id":"bad","name":"Bad","media_mode":"video","lut_path":null,"lut_fingerprint":null,"intensity":999,"raw":null}]}"#;
+        fs::write(&path, bytes).unwrap();
+        let manager = ConfigManager::from_path(path.clone());
+        assert!(manager.get_config().look_presets.is_empty());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert!(fs::read_dir(temp.path()).unwrap().any(|entry| {
+            let p = entry.unwrap().path();
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("config.invalid-")
+                && fs::read(p).unwrap() == bytes
+        }));
     }
 
     #[test]

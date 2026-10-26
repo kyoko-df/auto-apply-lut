@@ -39,6 +39,12 @@ Manual Sony S-Log3 / S-Gamut3.Cine and S-Log3 / S-Gamut3 conversion to Rec.709 S
 
 **Recovery and limits**: the workspace atomically saves clips, settings, selection, output paths, and the most recent batch. A normal exit waits for the save; quitting during export requires cancelling and waiting for processes to finish. Tasks interrupted by an abnormal exit are restored as retryable and re-exported from the beginning — there is no encode resume. Corrupt settings/library files keep their original bytes as a backup with a recovery entry point, and persistent save failures are surfaced. Previews are seekable still frames, not real-time graded playback. Browser mode is for viewing the UI only; actual file processing requires the desktop app.
 
+## Look presets
+
+Save the current LUT and strength as a named preset, then apply it to the current item or selected items across batches and app restarts. Video and photo presets are separate; the library is limited to 100 entries. Rename/delete controls and one-step undo of a complete application are provided. ARW presets can optionally include RAW exposure and white balance; these presets reject mixed RGB/ARW selections without changing any target.
+
+Saving/applying checks the LUT and its content fingerprint. Missing, invalid or changed LUTs block application. Presets reference the original LUT file rather than copying it. Photo applications require fresh sRGB LUT confirmation. Input conversions, RGB profile assignments and export settings remain independent. Deleting a preset leaves media edits and LUT files intact; settings failures roll back and corrupt configuration bytes are preserved. See [preset behavior and verification](docs/look-presets.md).
+
 ## Photo mode
 
 Switch the top selector to photos to import JPEG, PNG and single-page integer RGB/grayscale TIFF. Confirm a selected LUT uses sRGB input and output, adjust its strength, and apply the look to selected or all photos. Fit and 100% region previews share the same ICC conversion and LUT graph as full-size exports; fast previews are approximate.

@@ -268,6 +268,7 @@ fn command_interfaces_system() {
             input_color_space: "auto".into(),
             preview_quality: "fast".into(),
             photo_options: Default::default(),
+            look_presets: Vec::new(),
             two_pass_encoding: true,
             preserve_metadata: false,
         };

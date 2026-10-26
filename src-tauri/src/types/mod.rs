@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod batch;
 pub mod error;
 pub mod gpu;
+pub mod look_preset;
 pub mod lut;
 pub mod lut_conversion;
 pub mod system;
