@@ -10,7 +10,7 @@ const clip: Clip = { id: "one", path: "/one.mp4", name: "one.mp4", lutPath: null
   info: { path: "/one.mp4", filename: "one.mp4", size: 10, duration: 2, width: 160,
     height: 90, fps: 25, codec: "h264", bitrate: null } };
 const lut: LutLibraryItem = { path: "/look.cube", name: "Look", size: 10, lut_type: "3D",
-  format: "CUBE", category: "3D", is_valid: true, updated_at: "1" };
+  format: "CUBE", category: "3D", is_favorite: false, category_id: null, is_valid: true, updated_at: "1" };
 const props = { clip, lut, enabled: true, isDesktop: true, inputColorSpace: "auto",
   alphaPolicy: { mode: "preserve" as const }, engineKey: "engine1" };
 beforeEach(() => { vi.useFakeTimers(); invoke.mockReset(); });

@@ -1,6 +1,6 @@
 use super::{
-    batch_manager, encoding_options::ProcessingOptions, file_manager, gpu_manager, lut_manager,
-    processor, system_manager,
+    batch_manager, encoding_options::ProcessingOptions, file_manager, gpu_manager, lut_library,
+    lut_manager, processor, system_manager,
 };
 use crate::core::ffmpeg::processor::VideoProcessor;
 use crate::core::gpu::GpuManager;
@@ -146,6 +146,115 @@ fn command_interfaces_lut() {
     ))
     .expect_err("get_lut_info should fail for non-existent file");
     assert!(!err.is_empty());
+}
+
+#[test]
+fn lut_organization_survives_reimports_refresh_missing_files_and_restart() {
+    use lut_library::{
+        AssignCategoryRequest, CategoryNameRequest, FavoriteRequest, RenameCategoryRequest,
+    };
+    let (directory, db) = temp_database();
+    let manager = LutManager::new();
+    let content = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    let paths: Vec<_> = ["a's 风格.cube", "b.cube"]
+        .iter()
+        .map(|name| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        })
+        .collect();
+    let initial = run_async(lut_manager::remember_lut_files(
+        paths.clone(),
+        state_ref(&manager),
+        state_ref(&db),
+    ))
+    .unwrap();
+    assert!(initial
+        .iter()
+        .all(|item| item.id.is_some() && !item.is_favorite && item.category_id.is_none()));
+    let category = run_async(lut_library::create_lut_category(
+        CategoryNameRequest {
+            name: " 日常's 分类 ".into(),
+        },
+        state_ref(&db),
+    ))
+    .unwrap();
+    run_async(lut_library::set_lut_favorite(
+        FavoriteRequest {
+            lut_path: paths[0].clone(),
+            is_favorite: true,
+        },
+        state_ref(&db),
+    ))
+    .unwrap();
+    run_async(lut_library::assign_lut_category(
+        AssignCategoryRequest {
+            lut_paths: paths.clone(),
+            category_id: Some(category.id.clone()),
+        },
+        state_ref(&db),
+    ))
+    .unwrap();
+    run_async(lut_library::rename_lut_category(
+        RenameCategoryRequest {
+            id: category.id.clone(),
+            name: "日常暖色".into(),
+        },
+        state_ref(&db),
+    ))
+    .unwrap();
+    let reimported = run_async(lut_manager::remember_lut_files(
+        paths.clone(),
+        state_ref(&manager),
+        state_ref(&db),
+    ))
+    .unwrap();
+    assert!(reimported[0].is_favorite);
+    assert!(reimported
+        .iter()
+        .all(|item| item.category_id.as_ref() == Some(&category.id)));
+    assert_eq!(initial[0].updated_at, reimported[0].updated_at);
+    std::fs::remove_file(&paths[1]).unwrap();
+    let reopened = DatabaseManager::new(directory.path().join("test.sqlite3")).unwrap();
+    reopened.initialize().unwrap();
+    let categories = run_async(lut_library::list_lut_categories(state_ref(&reopened))).unwrap();
+    assert_eq!(categories[0].name, "日常暖色");
+    let items = run_async(lut_manager::list_lut_library(
+        state_ref(&manager),
+        state_ref(&reopened),
+    ))
+    .unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(
+        items
+            .iter()
+            .find(|item| item.path == paths[0])
+            .unwrap()
+            .is_favorite
+    );
+    let missing = items.iter().find(|item| item.path == paths[1]).unwrap();
+    assert!(!missing.is_valid);
+    assert_eq!(missing.category_id.as_ref(), Some(&category.id));
+    run_async(lut_library::delete_lut_category(
+        category.id,
+        state_ref(&reopened),
+    ))
+    .unwrap();
+    let remaining = run_async(lut_manager::list_lut_library(
+        state_ref(&manager),
+        state_ref(&reopened),
+    ))
+    .unwrap();
+    assert!(remaining.iter().all(|item| item.category_id.is_none()));
+    assert!(
+        remaining
+            .iter()
+            .find(|item| item.path == paths[0])
+            .unwrap()
+            .is_favorite
+    );
+    assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), content);
 }
 
 #[test]

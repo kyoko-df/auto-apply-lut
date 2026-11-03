@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SetStateAction } from "react";
 import i18n from "../i18n";
 import { applyPresetLook, presetTargets, validateLookPresets } from "./presets";
+import { categoryName } from "./lutLibrary";
 import {
   restoreWorkspace,
   CLIP_ERROR_INTERRUPTED,
@@ -37,6 +38,7 @@ import type {
   FfmpegInfo,
   LookPatch,
   LutLibraryItem,
+  LutCategory,
   Notice,
   ScanResult,
   VideoInfo,
@@ -80,6 +82,11 @@ async function mapLimit<T>(
   );
 }
 
+const readLutLibrary = () => Promise.all([
+  invoke<LutLibraryItem[]>("list_lut_library"),
+  invoke<LutCategory[]>("list_lut_categories"),
+]);
+
 export function useWorkspace() {
   const isDesktop = desktopAvailable();
   const [clips, setClips] = useState<Clip[]>([]);
@@ -95,6 +102,9 @@ export function useWorkspace() {
   const [selectedIds, setSelectedIdsState] = useState<string[]>([]);
   const [canUndo, setCanUndo] = useState(false);
   const [luts, setLuts] = useState<LutLibraryItem[]>([]);
+  const [lutCategories, setLutCategories] = useState<LutCategory[]>([]);
+  const [lutLibraryError, setLutLibraryError] = useState<string | null>(null);
+  const [isLibraryBusy, setIsLibraryBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [ffmpeg, setFfmpeg] = useState<EngineState>({
@@ -149,6 +159,10 @@ export function useWorkspace() {
     undefined
   );
   const lutsRef = useRef(luts);
+  const lutCategoriesRef = useRef(lutCategories);
+  const libraryReadyRef = useRef(false);
+  const libraryBusyRef = useRef(false);
+  const libraryOperationsRef = useRef<Promise<unknown>>(Promise.resolve());
   const settingsRef = useRef(settings);
   const batchIdRef = useRef<string | null>(null);
   const exportingRef = useRef(false);
@@ -225,6 +239,7 @@ export function useWorkspace() {
     if (!desktopAvailable() || !workspaceLoadedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     await presetOperationsRef.current;
+    await libraryOperationsRef.current;
     await settingsWritesRef.current;
     try {
       await guardWritesRef.current;
@@ -340,6 +355,11 @@ export function useWorkspace() {
     if (mountedRef.current) setLuts(items);
   }, []);
 
+  const replaceCategories = useCallback((items: LutCategory[]) => {
+    lutCategoriesRef.current = items;
+    if (mountedRef.current) setLutCategories(items);
+  }, []);
+
   const requireDesktop = useCallback(() => {
     if (desktopAvailable()) return true;
     setNotice({ kind: "info", message: desktopMessage() });
@@ -451,7 +471,7 @@ export function useWorkspace() {
     const initialize = async () => {
       const results = await Promise.allSettled([
         invoke<AppSettings>("get_app_settings"),
-        invoke<LutLibraryItem[]>("list_lut_library"),
+        readLutLibrary(),
         restoreSavedWorkspace(),
       ]);
       if (!active) return;
@@ -468,14 +488,21 @@ export function useWorkspace() {
           }),
         });
       }
-      if (results[1].status === "fulfilled") replaceLuts(results[1].value);
-      else
+      if (results[1].status === "fulfilled") {
+        replaceLuts(results[1].value[0]);
+        replaceCategories(results[1].value[1]);
+        libraryReadyRef.current = true;
+        setLutLibraryError(null);
+      } else {
+        libraryReadyRef.current = false;
+        setLutLibraryError(errorMessage(results[1].reason));
         setNotice({
           kind: "error",
           message: i18n.t("notices.lutLibraryReadFailed", {
             message: errorMessage(results[1].reason),
           }),
         });
+      }
       if (results[2].status === "rejected") {
         workspaceLoadedRef.current = true;
         setWorkspaceSaveError(
@@ -493,7 +520,7 @@ export function useWorkspace() {
       active = false;
       mountedRef.current = false;
     };
-  }, [isDesktop, refreshEngine, replaceLuts, restoreSavedWorkspace]);
+  }, [isDesktop, refreshEngine, replaceLuts, replaceCategories, restoreSavedWorkspace]);
 
   useEffect(() => {
     if (loading || !isDesktop || !workspaceWritableRef.current) return;
@@ -516,14 +543,14 @@ export function useWorkspace() {
   ]);
 
   const reloadPersistentState = useCallback(async () => {
-    if (!desktopAvailable() || exportingRef.current || presetBusyRef.current) return;
+    if (!desktopAvailable() || exportingRef.current || presetBusyRef.current || libraryBusyRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     try {
       await settingsWritesRef.current;
       const [storedSettings, storedLuts] = await Promise.all([
         invoke<AppSettings>("get_app_settings"),
-        invoke<LutLibraryItem[]>("list_lut_library"),
+        readLutLibrary(),
       ]);
       const next = normalizeSettings(storedSettings);
       const previous = persistedSettingsRef.current;
@@ -548,13 +575,16 @@ export function useWorkspace() {
       metadataGenerationRef.current += 1;
       setSettings(next);
       setSettingsError(null);
-      replaceLuts(storedLuts);
+      replaceLuts(storedLuts[0]);
+      replaceCategories(storedLuts[1]);
+      libraryReadyRef.current = true;
+      setLutLibraryError(null);
       await refreshEngine();
     } finally {
       loadingRef.current = false;
       if (mountedRef.current) setLoading(false);
     }
-  }, [changeClips, refreshEngine, replaceLuts]);
+  }, [changeClips, refreshEngine, replaceLuts, replaceCategories]);
 
   // One request at a time. A temporary IPC failure must never unlock an active export.
   useEffect(() => {
@@ -769,6 +799,7 @@ export function useWorkspace() {
       exportingRef.current ||
       loadingRef.current ||
       presetBusyRef.current ||
+      libraryBusyRef.current ||
       importingRef.current
     )
       return false;
@@ -1114,6 +1145,77 @@ export function useWorkspace() {
     [beginImport, changeClips, endImport, replaceLuts]
   );
 
+  const runLibraryOperation = useCallback(async <T,>(work: () => Promise<T>, allowUnread = false): Promise<T> => {
+    if (!desktopAvailable()) throw new Error(desktopMessage());
+    if (loadingRef.current || exportingRef.current || importingRef.current || presetBusyRef.current || libraryBusyRef.current)
+      throw new Error(i18n.t("lutLibrary.busy"));
+    if (!allowUnread && !libraryReadyRef.current) throw new Error(i18n.t("lutLibrary.unavailable"));
+    libraryBusyRef.current = true;
+    setIsLibraryBusy(true);
+    const operation = Promise.resolve().then(work);
+    libraryOperationsRef.current = operation.catch(() => {});
+    try { return await operation; }
+    finally {
+      libraryBusyRef.current = false;
+      if (mountedRef.current) setIsLibraryBusy(false);
+    }
+  }, []);
+
+  const retryLutLibrary = useCallback(() => runLibraryOperation(async () => {
+    try {
+      const [items, categories] = await readLutLibrary();
+      replaceLuts(items);
+      replaceCategories(categories);
+      libraryReadyRef.current = true;
+      if (mountedRef.current) setLutLibraryError(null);
+    } catch (error) {
+      libraryReadyRef.current = false;
+      if (mountedRef.current) setLutLibraryError(errorMessage(error));
+      throw error;
+    }
+  }, true), [replaceLuts, replaceCategories, runLibraryOperation]);
+
+  const setLutFavorite = useCallback((path: string, favorite: boolean) => runLibraryOperation(async () => {
+    if (!lutsRef.current.some(item => item.path === path)) throw new Error(i18n.t("lutLibrary.missingLut"));
+    await invoke("set_lut_favorite", { request: { lut_path: path, is_favorite: favorite } });
+    replaceLuts(lutsRef.current.map(item => item.path === path ? { ...item, is_favorite: favorite } : item));
+  }), [replaceLuts, runLibraryOperation]);
+
+  const createLutCategory = useCallback((value: string) => runLibraryOperation(async () => {
+    const name = categoryName(value, lutCategoriesRef.current);
+    if (lutCategoriesRef.current.length >= 100) throw new Error(i18n.t("lutLibrary.categoryLimit"));
+    const category = await invoke<LutCategory>("create_lut_category", { request: { name } });
+    replaceCategories([...lutCategoriesRef.current, category]);
+    return category;
+  }), [replaceCategories, runLibraryOperation]);
+
+  const renameLutCategory = useCallback((id: string, value: string) => runLibraryOperation(async () => {
+    if (!lutCategoriesRef.current.some(c => c.id === id)) throw new Error(i18n.t("lutLibrary.missingCategory"));
+    const name = categoryName(value, lutCategoriesRef.current, id);
+    const category = await invoke<LutCategory>("rename_lut_category", { request: { id, name } });
+    replaceCategories(lutCategoriesRef.current.map(c => c.id === id ? category : c));
+  }), [replaceCategories, runLibraryOperation]);
+
+  const deleteLutCategory = useCallback((id: string) => runLibraryOperation(async () => {
+    if (!lutCategoriesRef.current.some(c => c.id === id)) throw new Error(i18n.t("lutLibrary.missingCategory"));
+    await invoke("delete_lut_category", { categoryId: id });
+    replaceCategories(lutCategoriesRef.current.filter(c => c.id !== id));
+    replaceLuts(lutsRef.current.map(item => item.category_id === id ? { ...item, category_id: null } : item));
+  }), [replaceCategories, replaceLuts, runLibraryOperation]);
+
+  const assignLutCategory = useCallback((paths: string[], categoryId: string | null) => runLibraryOperation(async () => {
+    const selected = new Set(paths);
+    if (!selected.size || selected.size > 10_000) throw new Error(i18n.t("lutLibrary.badSelection"));
+    if (categoryId && !lutCategoriesRef.current.some(c => c.id === categoryId))
+      throw new Error(i18n.t("lutLibrary.missingCategory"));
+    const known = new Set(lutsRef.current.map(item => item.path));
+    if ([...selected].some(path => !known.has(path)))
+      throw new Error(i18n.t("lutLibrary.missingLut"));
+    await invoke("assign_lut_category", { request: { lut_paths: [...selected], category_id: categoryId } });
+    replaceLuts(lutsRef.current.map(item => selected.has(item.path) ? { ...item, category_id: categoryId } : item));
+    setNotice({ kind: "success", message: i18n.t("lutLibrary.assigned", { count: selected.size }) });
+  }), [replaceLuts, runLibraryOperation]);
+
   const rememberUndo = useCallback(() => {
     undoRef.current = {
       clips: clipsRef.current,
@@ -1352,7 +1454,7 @@ export function useWorkspace() {
 
   const runPresetOperation = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
     if (!desktopAvailable()) throw new Error(desktopMessage());
-    if (exportingRef.current || loadingRef.current || presetBusyRef.current || importingRef.current)
+    if (exportingRef.current || loadingRef.current || presetBusyRef.current || libraryBusyRef.current || importingRef.current)
       throw new Error(i18n.t("presets.busy"));
     presetBusyRef.current = true;
     setIsPresetBusy(true);
@@ -1486,7 +1588,7 @@ export function useWorkspace() {
 
   const startExport = useCallback(
     async (ids?: string[]) => {
-      if (!requireDesktop() || exportingRef.current || loadingRef.current || presetBusyRef.current)
+      if (!requireDesktop() || exportingRef.current || loadingRef.current || presetBusyRef.current || libraryBusyRef.current)
         return;
       if (importingRef.current) importCancelledRef.current = true;
       const chosen = ids ? new Set(ids) : null;
@@ -1758,6 +1860,15 @@ export function useWorkspace() {
     canUndo,
     activeClip: clips.find((clip) => clip.id === activeId) ?? null,
     luts,
+    lutCategories,
+    lutLibraryError,
+    isLibraryBusy,
+    retryLutLibrary,
+    setLutFavorite,
+    createLutCategory,
+    renameLutCategory,
+    deleteLutCategory,
+    assignLutCategory,
     settings,
     updateSettings,
     settingsError,

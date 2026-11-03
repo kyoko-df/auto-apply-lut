@@ -42,7 +42,7 @@ export default function PhotoExportInspector({
   const active = w.activeClip?.kind === "photo" ? w.activeClip : null;
   const raw: Extract<SourceInterpretation, { mode: "raw" }> = active?.sourceInterpretation?.mode === "raw"
     ? active.sourceInterpretation : { mode: "raw", exposure_ev: 0, white_balance: "camera" };
-  const locked = w.isExporting || w.loading || w.isPresetBusy;
+  const locked = w.isExporting || w.loading || w.isPresetBusy || w.isLibraryBusy;
   const options = w.settings.photo_options;
   const output = options.output;
   const selected = new Set(w.selectedIds);

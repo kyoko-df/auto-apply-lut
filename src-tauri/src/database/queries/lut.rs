@@ -12,8 +12,8 @@ pub fn create_lut(conn: &Connection, lut: &Lut) -> AppResult<i64> {
         r#"
         INSERT INTO luts (
             file_path, file_name, file_size, lut_type, format, description,
-            created_at, updated_at, last_accessed
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            created_at, updated_at, last_accessed, is_favorite, category_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         "#,
         params![
             &lut.file_path,
@@ -25,6 +25,8 @@ pub fn create_lut(conn: &Connection, lut: &Lut) -> AppResult<i64> {
             lut.created_at.to_rfc3339(),
             lut.updated_at.to_rfc3339(),
             lut.last_accessed.map(|dt| dt.to_rfc3339()),
+            lut.is_favorite,
+            &lut.category_id,
         ],
     )?;
 
@@ -34,7 +36,7 @@ pub fn create_lut(conn: &Connection, lut: &Lut) -> AppResult<i64> {
 /// 根据ID获取LUT
 pub fn get_lut_by_id(conn: &Connection, id: i64) -> AppResult<Option<Lut>> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed FROM luts WHERE id = ?1"
+        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed, is_favorite, category_id FROM luts WHERE id = ?1"
     )?;
 
     let lut_iter = stmt.query_map([id], |row| {
@@ -46,6 +48,8 @@ pub fn get_lut_by_id(conn: &Connection, id: i64) -> AppResult<Option<Lut>> {
             lut_type: row.get(4)?,
             format: row.get::<_, Option<String>>(5)?,
             description: row.get::<_, Option<String>>(6)?,
+            is_favorite: row.get(10)?,
+            category_id: row.get(11)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
                 .unwrap()
                 .with_timezone(&Utc),
@@ -70,7 +74,7 @@ pub fn get_lut_by_id(conn: &Connection, id: i64) -> AppResult<Option<Lut>> {
 /// 根据文件路径获取LUT
 pub fn get_lut_by_path(conn: &Connection, path: &str) -> AppResult<Option<Lut>> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed FROM luts WHERE file_path = ?1"
+        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed, is_favorite, category_id FROM luts WHERE file_path = ?1"
     )?;
 
     let lut_iter = stmt.query_map([path], |row| {
@@ -82,6 +86,8 @@ pub fn get_lut_by_path(conn: &Connection, path: &str) -> AppResult<Option<Lut>> 
             lut_type: row.get(4)?,
             format: row.get::<_, Option<String>>(5)?,
             description: row.get::<_, Option<String>>(6)?,
+            is_favorite: row.get(10)?,
+            category_id: row.get(11)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
                 .unwrap()
                 .with_timezone(&Utc),
@@ -106,7 +112,7 @@ pub fn get_lut_by_path(conn: &Connection, path: &str) -> AppResult<Option<Lut>> 
 /// 获取所有LUT
 pub fn get_all_luts(conn: &Connection) -> AppResult<Vec<Lut>> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed FROM luts ORDER BY created_at DESC"
+        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed, is_favorite, category_id FROM luts ORDER BY created_at DESC"
     )?;
 
     let lut_iter = stmt.query_map([], |row| {
@@ -118,6 +124,8 @@ pub fn get_all_luts(conn: &Connection) -> AppResult<Vec<Lut>> {
             lut_type: row.get(4)?,
             format: row.get::<_, Option<String>>(5)?,
             description: row.get::<_, Option<String>>(6)?,
+            is_favorite: row.get(10)?,
+            category_id: row.get(11)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
                 .unwrap()
                 .with_timezone(&Utc),
@@ -143,7 +151,7 @@ pub fn get_all_luts(conn: &Connection) -> AppResult<Vec<Lut>> {
 /// 根据类型获取LUT
 pub fn get_luts_by_type(conn: &Connection, lut_type: &str) -> AppResult<Vec<Lut>> {
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed FROM luts WHERE lut_type = ?1 ORDER BY created_at DESC"
+        "SELECT id, file_path, file_name, file_size, lut_type, format, description, created_at, updated_at, last_accessed, is_favorite, category_id FROM luts WHERE lut_type = ?1 ORDER BY created_at DESC"
     )?;
 
     let lut_iter = stmt.query_map([lut_type], |row| {
@@ -155,6 +163,8 @@ pub fn get_luts_by_type(conn: &Connection, lut_type: &str) -> AppResult<Vec<Lut>
             lut_type: row.get(4)?,
             format: row.get::<_, Option<String>>(5)?,
             description: row.get::<_, Option<String>>(6)?,
+            is_favorite: row.get(10)?,
+            category_id: row.get(11)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
                 .unwrap()
                 .with_timezone(&Utc),
@@ -178,6 +188,7 @@ pub fn get_luts_by_type(conn: &Connection, lut_type: &str) -> AppResult<Vec<Lut>
 }
 
 /// 更新LUT记录
+/// Content refresh deliberately preserves favorite/category metadata, which has its own mutations.
 pub fn update_lut(conn: &Connection, lut: &Lut) -> AppResult<()> {
     conn.execute(
         r#"

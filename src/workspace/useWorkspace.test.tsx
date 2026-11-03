@@ -44,7 +44,8 @@ beforeEach(() => {
     switch (command) {
       case "get_app_settings":
         return { ...DEFAULT_SETTINGS };
-      case "list_lut_library":
+      case "list_lut_categories": return [];
+        case "list_lut_library":
         return [];
       case "get_ffmpeg_info":
         return {

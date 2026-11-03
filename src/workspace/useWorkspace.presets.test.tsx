@@ -27,7 +27,8 @@ beforeEach(() => {
       case "get_app_settings": return structuredClone(stored);
       case "update_app_settings": stored = structuredClone((args as { settings: AppSettings }).settings); return "saved";
       case "get_ffmpeg_info": return { binary_path: "/bin/ffmpeg" };
-      case "list_lut_library": return [];
+      case "list_lut_categories": return [];
+        case "list_lut_library": return [];
       case "get_file_info": return { is_directory: false };
       case "get_video_info": return { path: (args as { path: string }).path, width: 64, height: 48, duration: 3 };
       case "get_photo_info": {

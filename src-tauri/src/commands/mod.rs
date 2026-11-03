@@ -5,6 +5,7 @@ pub mod batch_manager;
 pub(crate) mod encoding_options;
 pub mod file_manager;
 pub mod gpu_manager;
+pub mod lut_library;
 pub mod lut_manager;
 pub mod photo;
 pub mod preview;

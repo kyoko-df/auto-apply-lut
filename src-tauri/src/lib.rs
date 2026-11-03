@@ -134,6 +134,12 @@ pub fn run() {
             commands::lut_manager::list_lut_library,
             commands::lut_manager::import_lut_directory,
             commands::lut_manager::remove_lut_from_library,
+            commands::lut_library::list_lut_categories,
+            commands::lut_library::create_lut_category,
+            commands::lut_library::rename_lut_category,
+            commands::lut_library::delete_lut_category,
+            commands::lut_library::set_lut_favorite,
+            commands::lut_library::assign_lut_category,
             // Batch
             commands::batch_manager::scan_directory_for_videos,
             commands::batch_manager::start_batch_processing,

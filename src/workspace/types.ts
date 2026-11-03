@@ -128,9 +128,16 @@ export interface LutLibraryItem {
   lut_type: string;
   format: string;
   category: string;
+  is_favorite: boolean;
+  category_id: string | null;
   is_valid: boolean;
   error_message?: string | null;
   updated_at: string;
+}
+
+export interface LutCategory {
+  id: string;
+  name: string;
 }
 
 export interface LookPreset {

@@ -39,6 +39,12 @@ Manual Sony S-Log3 / S-Gamut3.Cine and S-Log3 / S-Gamut3 conversion to Rec.709 S
 
 **Recovery and limits**: the workspace atomically saves clips, settings, selection, output paths, and the most recent batch. A normal exit waits for the save; quitting during export requires cancelling and waiting for processes to finish. Tasks interrupted by an abnormal exit are restored as retryable and re-exported from the beginning — there is no encode resume. Corrupt settings/library files keep their original bytes as a backup with a recovery entry point, and persistent save failures are surfaced. Previews are seekable still frames, not real-time graded playback. Browser mode is for viewing the UI only; actual file processing requires the desktop app.
 
+## LUT favorites and categories
+
+Star LUTs in the library and combine Favorites only, custom category and name search filters. Create, rename and delete categories through the library controls. Each LUT has one category and an independent favorite flag. In Organize LUTs, check individual rows or Select results to include every filtered result, including rows outside the rendered window, then apply a destination category. Changing filters clears the batch selection.
+
+Organization lives in the existing SQLite library, migrates older libraries and survives reimport, metadata refresh and restart. There are at most 100 categories with unique case-insensitive names of 1–80 Unicode characters; a batch accepts up to 10,000 LUTs. Assignment is atomic and read/write failures are surfaced. Deleting a category returns its members to Uncategorized while retaining favorites, original LUT paths, media edits and preset references. Organization does not invalidate completed exports, engine discovery or thumbnail content caches.
+
 ## Look presets
 
 Save the current LUT and strength as a named preset, then apply it to the current item or selected items across batches and app restarts. Video and photo presets are separate; the library is limited to 100 entries. Rename/delete controls and one-step undo of a complete application are provided. ARW presets can optionally include RAW exposure and white balance; these presets reject mixed RGB/ARW selections without changing any target.

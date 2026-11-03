@@ -21,7 +21,7 @@ export default function LookPresets({ workspace: w }: { workspace: ReturnType<ty
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const presets = w.settings.look_presets.filter(p => p.media_mode === w.mediaMode);
   const selected = presets.find(p => p.id === selectedId);
-  const locked = w.loading || w.isExporting || w.isPresetBusy || w.isImporting || !w.isDesktop;
+  const locked = w.loading || w.isExporting || w.isPresetBusy || w.isImporting || w.isLibraryBusy || !w.isDesktop;
   const rawAvailable = w.activeClip?.kind === "photo" && extension(w.activeClip.path) === "arw";
   const count = scope === "current" ? Number(!!w.activeClip) : w.selectedIds.length;
   const title = t(`presets.${mode === "save" ? "saveTitle" : mode === "rename" ? "renameTitle" : mode === "delete" ? "deleteTitle" : "manageTitle"}`);

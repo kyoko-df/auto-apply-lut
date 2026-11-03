@@ -107,6 +107,8 @@ pub fn upsert_lut_info(db: &DatabaseManager, info: &LutInfo) -> AppResult<()> {
         lut_type: format!("{:?}", info.lut_type),
         format: Some(info.format.extension().to_string()),
         description: info.error_message.clone(),
+        is_favorite: existing.as_ref().is_some_and(|lut| lut.is_favorite),
+        category_id: existing.as_ref().and_then(|lut| lut.category_id.clone()),
         created_at: info.created_at,
         updated_at: now,
         last_accessed: Some(now),

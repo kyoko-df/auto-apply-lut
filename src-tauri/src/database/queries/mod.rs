@@ -3,6 +3,7 @@
 
 pub mod batch;
 pub mod lut;
+pub mod lut_library;
 pub mod settings;
 pub mod task;
 pub mod video;

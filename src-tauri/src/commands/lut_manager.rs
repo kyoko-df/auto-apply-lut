@@ -30,6 +30,8 @@ pub struct LutLibraryItem {
     pub lut_type: String,
     pub format: String,
     pub category: String,
+    pub is_favorite: bool,
+    pub category_id: Option<String>,
     pub is_valid: bool,
     pub error_message: Option<String>,
     pub updated_at: String,
@@ -57,17 +59,19 @@ fn category_for(lut_type: &str, format: &str) -> String {
     }
 }
 
-fn item_from_lut_info(id: Option<i64>, info: &LutInfo) -> LutLibraryItem {
+fn item_from_lut_info(record: Option<&DbLut>, info: &LutInfo) -> LutLibraryItem {
     let lut_type = format!("{:?}", info.lut_type);
     let format = info.format.extension().to_uppercase();
     LutLibraryItem {
-        id,
+        id: record.map(|r| r.id),
         path: info.path.to_string_lossy().to_string(),
         name: info.name.clone(),
         size: info.size,
         lut_type: lut_type.clone(),
         format: format.clone(),
         category: category_for(&lut_type, &format),
+        is_favorite: record.is_some_and(|r| r.is_favorite),
+        category_id: record.and_then(|r| r.category_id.clone()),
         is_valid: info.is_valid,
         error_message: info.error_message.clone(),
         updated_at: info.modified_at.to_rfc3339(),
@@ -85,6 +89,8 @@ fn item_from_db_record(record: &DbLut, error_message: Option<String>) -> LutLibr
         lut_type: lut_type.clone(),
         format: format.clone(),
         category: category_for(&lut_type, &format),
+        is_favorite: record.is_favorite,
+        category_id: record.category_id.clone(),
         is_valid: error_message.is_none(),
         error_message,
         updated_at: record.updated_at.to_rfc3339(),
@@ -121,11 +127,17 @@ fn recursive_scan_luts(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Stri
     Ok(())
 }
 
+fn library_record(db: &DatabaseManager, path: &str) -> Result<Option<DbLut>, String> {
+    let connection = db.connection();
+    let conn = connection.lock().map_err(|e| e.to_string())?;
+    lut_queries::get_lut_by_path(&conn, path).map_err(|e| e.to_string())
+}
+
 async fn remember_paths(
     paths: &[String],
     lut_manager: &LutManager,
     db: &DatabaseManager,
-) -> Vec<LutLibraryItem> {
+) -> Result<Vec<LutLibraryItem>, String> {
     let mut items = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -136,12 +148,12 @@ async fn remember_paths(
 
         match lut_manager.get_lut_info(path).await {
             Ok(info) => {
-                if let Err(error) = upsert_lut_info(db, &info) {
-                    logger::log_warn(&format!("Failed to persist LUT {}: {}", path, error));
-                }
-                items.push(item_from_lut_info(None, &info));
+                upsert_lut_info(db, &info).map_err(|e| e.to_string())?;
+                let record = library_record(db, path)?;
+                items.push(item_from_lut_info(record.as_ref(), &info));
             }
             Err(error) => {
+                let record = library_record(db, path)?;
                 let fallback_path = PathBuf::from(path);
                 let format = fallback_path
                     .extension()
@@ -154,13 +166,15 @@ async fn remember_paths(
                     .unwrap_or("unknown")
                     .to_string();
                 items.push(LutLibraryItem {
-                    id: None,
+                    id: record.as_ref().map(|r| r.id),
                     path: path.clone(),
                     name,
                     size: 0,
                     lut_type: "Unknown".to_string(),
                     format: format.clone(),
                     category: category_for("Unknown", &format),
+                    is_favorite: record.as_ref().is_some_and(|r| r.is_favorite),
+                    category_id: record.and_then(|r| r.category_id),
                     is_valid: false,
                     error_message: Some(error.to_string()),
                     updated_at: Utc::now().to_rfc3339(),
@@ -169,7 +183,7 @@ async fn remember_paths(
         }
     }
 
-    items
+    Ok(items)
 }
 
 /// 验证LUT文件（委托核心模块）
@@ -227,7 +241,7 @@ pub async fn remember_lut_files(
     lut_manager: State<'_, LutManager>,
     db: State<'_, DatabaseManager>,
 ) -> Result<Vec<LutLibraryItem>, String> {
-    Ok(remember_paths(&paths, &lut_manager, &db).await)
+    remember_paths(&paths, &lut_manager, &db).await
 }
 
 /// 返回资料库中的 LUT 列表。
@@ -262,7 +276,7 @@ pub async fn list_lut_library(
                         record.file_path, error
                     ));
                 }
-                items.push(item_from_lut_info(Some(record.id), &info));
+                items.push(item_from_lut_info(Some(&record), &info));
             }
             Err(error) => {
                 items.push(item_from_db_record(&record, Some(error.to_string())));
@@ -298,7 +312,7 @@ pub async fn import_lut_directory(
         .map(|path| path.to_string_lossy().to_string())
         .collect::<Vec<_>>();
 
-    Ok(remember_paths(&paths, &lut_manager, &db).await)
+    remember_paths(&paths, &lut_manager, &db).await
 }
 
 /// 从资料库移除指定 LUT。

@@ -32,9 +32,17 @@ pub struct Lut {
     pub lut_type: String,
     pub format: Option<String>,
     pub description: Option<String>,
+    pub is_favorite: bool,
+    pub category_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_accessed: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LutCategory {
+    pub id: String,
+    pub name: String,
 }
 
 /// 任务模型

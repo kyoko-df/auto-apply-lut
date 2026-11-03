@@ -34,6 +34,19 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         mark_migration_applied(conn, "create_settings_table")?;
     }
 
+    if !is_migration_applied(conn, "organize_lut_library")? {
+        conn.execute_batch(
+            "CREATE TABLE lut_categories (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                name_key TEXT NOT NULL UNIQUE
+            );
+            ALTER TABLE luts ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1));
+            ALTER TABLE luts ADD COLUMN category_id TEXT REFERENCES lut_categories(id) ON DELETE SET NULL;",
+        )?;
+        mark_migration_applied(conn, "organize_lut_library")?;
+    }
+
     Ok(())
 }
 
@@ -178,4 +191,36 @@ fn create_settings_table(conn: &Connection) -> AppResult<()> {
         [],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn organization_migration_preserves_existing_luts_and_is_repeatable() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        create_migration_table(&conn).unwrap();
+        create_luts_table(&conn).unwrap();
+        mark_migration_applied(&conn, "create_luts_table").unwrap();
+        conn.execute("INSERT INTO luts (file_path, file_name, file_size, lut_type, created_at, updated_at) VALUES ('/旧 LUT.cube', '旧 LUT.cube', 100, 'ThreeDimensional', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')", []).unwrap();
+        for _ in 0..2 {
+            let tx = conn.transaction().unwrap();
+            run_migrations(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        let records = crate::database::queries::lut::get_all_luts(&conn).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].file_path, "/旧 LUT.cube");
+        assert_eq!(records[0].file_size, 100);
+        assert!(!records[0].is_favorite);
+        assert!(records[0].category_id.is_none());
+        assert!(
+            crate::database::queries::lut_library::list_categories(&conn)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(conn.execute("UPDATE luts SET is_favorite = 2", []).is_err());
+    }
 }

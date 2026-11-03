@@ -492,6 +492,69 @@
   display: flex;
   position: relative;
 }
+.lut-library-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.lut-library-tools {
+  padding: 0 5px 10px;
+  flex-shrink: 0;
+  max-height: 48%;
+  overflow: auto;
+}
+.lut-library-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lut-library-toolbar .text-button { font-size: 11px; }
+.library-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #ffffff04;
+  color: var(--muted);
+  font-size: 11px;
+}
+.library-filter.active, .lut-favorite.active { color: var(--accent); }
+.library-filter.active { border-color: #eea07a66; background: #eea07a0a; }
+.library-category-filter.field { margin-bottom: 10px; }
+.library-category-filter > span { font-size: 10px; }
+.library-batch {
+  padding: 10px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #ffffff03;
+}
+.library-batch .field { margin: 10px 0; }
+.library-batch .button { font-size: 11px; min-height: 32px; padding: 6px 9px; }
+.lut-library-panel .lut-preview-note { flex-shrink: 0; padding: 0 5px 8px; }
+.lut-library-panel > .library-original { flex: 0 0 58px; }
+.lut-library-panel .lut-list-item { height: 68px; align-items: center; }
+.lut-library-panel .lut-row { padding: 8px 5px; gap: 6px; min-width: 0; }
+.lut-library-panel .lut-list-item .lut-row { flex: 1; }
+.lut-library-panel .lut-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lut-library-panel .lut-favorite { flex-shrink: 0; width: 25px; height: 24px; }
+.lut-library-panel .lut-remove { position: absolute; right: 0; top: 0; width: 18px; height: 18px; }
+.lut-organize-check { accent-color: var(--accent); margin: 0 4px; flex-shrink: 0; }
+.lut-list-item.library-checked { background: #eea07a0a; }
+.library-read-error { color: #efaa94; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 1040px) {
+  .lut-library-panel .lut-thumbnail { width: 32px; height: 28px; }
+  .lut-library-panel .lut-row { padding: 8px 3px; gap: 4px; }
+  .lut-library-panel .lut-row > svg { display: none; }
+  .lut-library-panel .lut-favorite { width: 22px; }
+  .lut-organize-check { margin: 0 2px; width: 12px; height: 12px; }
+}
 .lut-preview-note {
   padding: 0 14px 10px;
   font-size: 10px;

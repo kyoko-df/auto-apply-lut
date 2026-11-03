@@ -8,6 +8,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { DEFAULT_SETTINGS } from "./workspace/model";
+import type { LutLibraryItem } from "./workspace/types";
 
 const { invoke, open, eventHandlers } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -35,6 +36,8 @@ const lut = {
   name: "Film",
   format: "CUBE",
   category: "3D LUT",
+  is_favorite: false,
+  category_id: null,
   is_valid: true,
   size: 10,
   lut_type: "ThreeDimensional",
@@ -58,6 +61,7 @@ beforeEach(() => {
       switch (command) {
         case "get_app_settings":
           return DEFAULT_SETTINGS;
+        case "list_lut_categories": return [];
         case "list_lut_library":
           return [lut];
         case "get_ffmpeg_info":
@@ -125,6 +129,117 @@ async function importClips() {
 }
 
 describe("workspace integration", () => {
+  it("favorites, searches and batch categorizes LUTs, then renames and deletes a category without changing the applied look", async () => {
+    let items: LutLibraryItem[] = [structuredClone(lut), { ...lut, path: "/luts/cool.cube", name: "Cool" },
+      { ...lut, path: "/luts/missing.cube", name: "Missing", is_valid: false }];
+    let categories: { id: string; name: string }[] = [];
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      const request = args?.request as { name: string; id: string; lut_path: string; is_favorite: boolean; lut_paths: string[]; category_id: string | null };
+      if (command === "list_lut_library") return structuredClone(items);
+      if (command === "list_lut_categories") return structuredClone(categories);
+      if (command === "set_lut_favorite") { items = items.map(item => item.path === request.lut_path ? { ...item, is_favorite: request.is_favorite } : item); return; }
+      if (command === "create_lut_category") { const category = { id: "custom", name: request.name }; categories.push(category); return category; }
+      if (command === "rename_lut_category") { categories = categories.map(c => ({ ...c, name: request.name })); return categories[0]; }
+      if (command === "assign_lut_category") { items = items.map(item => request.lut_paths.includes(item.path) ? { ...item, category_id: request.category_id } : item); return; }
+      if (command === "delete_lut_category") { categories = []; items = items.map(item => ({ ...item, category_id: null })); return; }
+      return original(command, args);
+    });
+    const first = render(<App />);
+    await importClips();
+    fireEvent.change(screen.getByRole("combobox", { name: "当前 LUT" }), { target: { value: lut.path } });
+    fireEvent.click(screen.getByRole("button", { name: "LUT3" }));
+    fireEvent.click(screen.getByRole("button", { name: "收藏 LUT Film" }));
+    await screen.findByRole("button", { name: "取消收藏 LUT Film" });
+    fireEvent.click(screen.getByRole("button", { name: "仅看收藏" }));
+    expect(screen.queryByRole("button", { name: "应用 LUT Cool" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 LUT" }), { target: { value: "no match" } });
+    expect(screen.queryByRole("button", { name: "应用 LUT Film" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByRole("textbox", { name: "搜索 LUT" })).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "新建分类" }));
+    expect(screen.getByRole("textbox", { name: "分类名称" })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(invoke).not.toHaveBeenCalledWith("start_batch_processing", expect.anything());
+    fireEvent.change(screen.getByRole("textbox", { name: "分类名称" }), { target: { value: "日常暖色" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存分类" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "批量归类" }));
+    fireEvent.click(screen.getByRole("button", { name: "全选结果" }));
+    expect(screen.getByText("已选 3 个 LUT")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "应用分类" }));
+    await waitFor(() => expect(items.every(item => item.category_id === "custom")).toBe(true));
+    expect(invoke).toHaveBeenCalledWith("assign_lut_category", { request: { lut_paths: items.map(item => item.path), category_id: "custom" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "筛选分类" }), { target: { value: "custom" } });
+    fireEvent.click(screen.getByRole("button", { name: "仅看收藏" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 LUT" }), { target: { value: "FILM" } });
+    expect(screen.getByRole("button", { name: "应用 LUT Film" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "应用 LUT Cool" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "管理分类" }));
+    fireEvent.click(screen.getByRole("button", { name: "重命名分类 日常暖色" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "分类名称" }), { target: { value: "暖色收藏" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存分类" }));
+    await screen.findByRole("button", { name: "删除分类 暖色收藏" });
+    fireEvent.click(screen.getByRole("button", { name: "删除分类 暖色收藏" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await screen.findByText("暂无自定义分类");
+    fireEvent.click(screen.getByRole("button", { name: "关闭分类窗口" }));
+    expect(screen.getByRole("combobox", { name: "当前 LUT" })).toHaveValue(lut.path);
+    expect(screen.getByRole("combobox", { name: "筛选分类" })).toHaveValue("all");
+    expect(screen.getByRole("button", { name: "取消收藏 LUT Film" })).toHaveAttribute("aria-pressed", "true");
+    first.unmount();
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "LUT3" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "LUT3" }));
+    expect(screen.getByRole("button", { name: "取消收藏 LUT Film" })).toHaveAttribute("aria-pressed", "true");
+    expect(invoke).not.toHaveBeenCalledWith("remove_lut_from_library", expect.anything());
+  }, 10_000);
+
+  it("reports favorite and category write errors without claiming they were saved", async () => {
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      ["set_lut_favorite", "create_lut_category"].includes(command) ? Promise.reject(new Error("Database is read-only")) : original(command, args));
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "LUT1" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "LUT1" }));
+    fireEvent.click(screen.getByRole("button", { name: "收藏 LUT Film" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "收藏 LUT Film" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(screen.getByRole("button", { name: "新建分类" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "分类名称" }), { target: { value: "未保存分类" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存分类" }));
+    await screen.findByText("Database is read-only");
+    expect(screen.getByRole("dialog", { name: "新建 LUT 分类" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "分类名称" })).toHaveValue("未保存分类");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("option", { name: "未保存分类" })).not.toBeInTheDocument();
+  });
+
+  it("categorizes all search results beyond the rendered window and clears checked rows when the filter changes", async () => {
+    const many = Array.from({ length: 120 }, (_, index) => ({ ...lut, path: `/look-${index}.cube`, name: `Look ${index}` }));
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "list_lut_library") return Promise.resolve(many);
+      if (command === "list_lut_categories") return Promise.resolve([{ id: "all-looks", name: "全部风格" }]);
+      return original(command, args);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "LUT120" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "LUT120" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量归类" }));
+    expect(screen.getAllByRole("checkbox").length).toBeLessThan(120);
+    fireEvent.click(screen.getByRole("button", { name: "全选结果" }));
+    expect(screen.getByText("已选 120 个 LUT")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "归入分类" }), { target: { value: "all-looks" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用分类" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("assign_lut_category", { request: { lut_paths: many.map(item => item.path), category_id: "all-looks" } }));
+    await waitFor(() => expect(screen.getByText("已选 0 个 LUT")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "全选结果" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 LUT" }), { target: { value: "Look 1" } });
+    expect(screen.getByText("已选 0 个 LUT")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "应用分类" })).toBeDisabled();
+  });
+
   it("saves, renames, batch applies, undoes and deletes presets without changing applied exports", async () => {
     const original = invoke.getMockImplementation()!;
     invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
