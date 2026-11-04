@@ -224,11 +224,11 @@ describe("workspace integration", () => {
       return original(command, args);
     });
     render(<App />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "LUT120" })).toBeEnabled());
+    await importClips();
     fireEvent.click(screen.getByRole("button", { name: "LUT120" }));
     fireEvent.click(screen.getByRole("button", { name: "批量归类" }));
     expect(screen.getAllByRole("checkbox").length).toBeLessThan(120);
-    fireEvent.click(screen.getByRole("button", { name: "全选结果" }));
+    fireEvent.keyDown(document.body, { key: "a", metaKey: true });
     expect(screen.getByText("已选 120 个 LUT")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "归入分类" }), { target: { value: "all-looks" } });
     fireEvent.click(screen.getByRole("button", { name: "应用分类" }));
@@ -238,6 +238,8 @@ describe("workspace integration", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "搜索 LUT" }), { target: { value: "Look 1" } });
     expect(screen.getByText("已选 0 个 LUT")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "应用分类" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /素材\s*2$/ }));
+    expect(screen.getByText("1 项已选")).toBeInTheDocument();
   });
 
   it("saves, renames, batch applies, undoes and deletes presets without changing applied exports", async () => {

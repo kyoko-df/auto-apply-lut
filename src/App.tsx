@@ -104,10 +104,10 @@ export default function App() {
         document.querySelector("dialog[open]")
       )
         return;
-      const editing = (e.target as HTMLElement)?.matches(
+      const editing = e.target instanceof Element && e.target.matches(
         "input, textarea, select, [contenteditable=true]"
       );
-      if (!editing && e.key.toLowerCase() === "a") {
+      if (section === "media" && !editing && e.key.toLowerCase() === "a") {
         e.preventDefault();
         wRef.current.selectAll(visibleIdsRef.current);
       }
@@ -131,7 +131,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, helpOpen]);
+  }, [settingsOpen, helpOpen, section]);
 
   useEffect(() => {
     if (!w.isDesktop) return;

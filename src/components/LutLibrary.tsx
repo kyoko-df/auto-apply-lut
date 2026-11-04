@@ -83,13 +83,20 @@ export default function LutLibrary({ workspace: w, search, clearSearch, photoThu
     else w.setNotice({ kind: "info", message: t("app.noticeImportFirst") });
   };
 
-  return <div className="lut-library-panel" onKeyDown={event => {
-    if (!mode && organizing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" &&
-      !(event.target as HTMLElement).matches("input:not([type=checkbox]), textarea, select")) {
-      event.preventDefault(); event.stopPropagation();
-      if (!unavailable) setSelection(filtered.map(item => item.path));
-    }
-  }}>
+  useEffect(() => {
+    if (!organizing || unavailable) return;
+    const selectResults = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "a") return;
+      if (document.querySelector("dialog[open]")) return;
+      if (event.target instanceof Element && event.target.closest("input:not([type=checkbox]), textarea, select, [contenteditable=true]")) return;
+      event.preventDefault();
+      setSelection(filtered.map(item => item.path));
+    };
+    window.addEventListener("keydown", selectResults);
+    return () => window.removeEventListener("keydown", selectResults);
+  }, [organizing, unavailable, filtered]);
+
+  return <div className="lut-library-panel">
     <div className="lut-library-tools">
       <div className="lut-library-toolbar">
         <button type="button" className={`library-filter ${favorites ? "active" : ""}`} aria-pressed={favorites}
