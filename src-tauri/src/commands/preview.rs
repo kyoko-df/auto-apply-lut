@@ -16,7 +16,7 @@ use tauri::State;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 const CACHE_ENTRIES: usize = 32;
@@ -459,10 +459,10 @@ async fn generate_cached(
     {
         return Ok(cached);
     }
-    let _permit = tokio::select! {
+    let permit = tokio::select! {
         biased;
         _ = token.cancelled() => return Err(CANCELLED.into()),
-        permit = state.permits.acquire() => permit.map_err(|error| error.to_string())?,
+        permit = state.permits.clone().acquire_owned() => Arc::new(permit.map_err(|error| error.to_string())?),
     };
     // Another client may have completed the same preview while we waited.
     if let Some(cached) = state
@@ -536,7 +536,15 @@ async fn generate_cached(
     } else {
         None
     };
-    let response = render_frame(request, &ffmpeg_path, &frame, prepared.as_deref(), token).await?;
+    let response = render_frame(
+        request,
+        &ffmpeg_path,
+        &frame,
+        prepared.as_deref(),
+        token,
+        permit,
+    )
+    .await?;
     if token.is_cancelled() {
         return Err(CANCELLED.into());
     }
@@ -695,6 +703,7 @@ async fn render_frame(
     frame: &Artifact,
     prepared: Option<&Artifact>,
     token: &CancellationToken,
+    permit: Arc<OwnedSemaphorePermit>,
 ) -> Result<VideoPreviewResponse, String> {
     let mut scopes = None;
     let processed_image =
@@ -755,24 +764,7 @@ async fn render_frame(
             if request.scopes {
                 bounded_file_size(&samples, 24 * 1024 * 1024, "Scope image too large").await?;
                 let bytes = fs::read(samples).await.map_err(|e| e.to_string())?;
-                let cancel = token.clone();
-                scopes = Some(
-                    tokio::task::spawn_blocking(move || {
-                        let image =
-                            image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
-                                .map_err(|e| e.to_string())?
-                                .into_rgb16();
-                        super::frame_scopes::analyze(
-                            image.width(),
-                            image.height(),
-                            image.as_raw(),
-                            None,
-                            &cancel,
-                        )
-                    })
-                    .await
-                    .map_err(|e| e.to_string())??,
-                );
+                scopes = Some(analyze_scope_image(bytes, token.clone(), permit.clone()).await?);
             }
             if prepared.is_none() && request.input_color_space == "auto" {
                 frame.original_image.clone()
@@ -788,6 +780,25 @@ async fn render_frame(
         cached: false,
         photo_size: None,
     })
+}
+
+async fn analyze_scope_image(
+    bytes: Vec<u8>,
+    token: CancellationToken,
+    permit: Arc<OwnedSemaphorePermit>,
+) -> Result<super::frame_scopes::FrameScopes, String> {
+    tokio::task::spawn_blocking(move || {
+        // Blocking work survives a dropped caller. Keep its render slot until
+        // decoding/analysis ends, as photo previews do for their blocking phases.
+        let _permit = permit;
+        crate::core::photo::check_cancel(&token)?;
+        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?
+            .into_rgb16();
+        super::frame_scopes::analyze(image.width(), image.height(), image.as_raw(), None, &token)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 async fn run_preview(mut command: Command, token: &CancellationToken) -> Result<(), String> {
@@ -846,6 +857,47 @@ async fn run_preview(mut command: Command, token: &CancellationToken) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_scope_analysis_retains_its_render_slot_until_blocking_work_ends() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Occupy the blocking worker so analysis is queued deterministically.
+            let (release, wait) = std::sync::mpsc::channel();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+            ready.await.unwrap();
+            let slots = Arc::new(Semaphore::new(1));
+            let permit = Arc::new(slots.clone().acquire_owned().await.unwrap());
+            let token = CancellationToken::new();
+            let mut analysis = Box::pin(analyze_scope_image(Vec::new(), token.clone(), permit));
+            std::future::poll_fn(|cx| {
+                assert!(analysis.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            token.cancel();
+            drop(analysis);
+            let still_occupied = slots.available_permits() == 0;
+            // Always release the worker before asserting, including on regression.
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let recovered = tokio::time::timeout(Duration::from_secs(2), slots.acquire())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(still_occupied);
+            drop(recovered);
+            assert_eq!(slots.available_permits(), 1);
+        });
+    }
 
     fn request() -> VideoPreviewRequest {
         VideoPreviewRequest {
