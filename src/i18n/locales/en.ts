@@ -1,4 +1,5 @@
 export default {
+  scopes: {"title": "Graded RGB histogram", "chart": "Red, green and blue histogram", "count": "Highlight clipping {{count}} / {{total}} pixels", "overlay": "Show highlight overlay", "hint": "Current graded preview area. Flags any channel at the 16-bit ceiling and excludes fully transparent pixels."},
   lutLibrary: {
       "onlyFavorites": "Favorites only",
       "newCategory": "New category",

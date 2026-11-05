@@ -1,4 +1,5 @@
 export default {
+  scopes: {"title": "調色後の RGB ヒストグラム", "chart": "RGB 各チャンネルの分布", "count": "白飛び {{count}} / {{total}} ピクセル", "overlay": "白飛びを表示", "hint": "現在の調色プレビュー範囲を集計します。いずれかのチャンネルが16ビットの上限に達した画素を示し、完全透明な画素は除きます。"},
   lutLibrary: {
       "onlyFavorites": "お気に入りのみ",
       "newCategory": "カテゴリを作成",

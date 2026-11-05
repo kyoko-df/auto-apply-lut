@@ -44,6 +44,8 @@ pub enum PhotoViewport {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhotoPreviewRequest {
+    #[serde(default)]
+    pub scopes: bool,
     pub photo_path: String,
     pub lut_path: Option<String>,
     pub intensity: f32,
@@ -58,6 +60,7 @@ pub struct PhotoPreviewRequest {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct PhotoPreviewResponse {
+    pub scopes: Option<super::frame_scopes::FrameScopes>,
     pub original_image: String,
     pub processed_image: String,
     pub request_id: String,
@@ -487,6 +490,7 @@ mod tests {
     }
     fn request(path: &Path) -> PhotoPreviewRequest {
         PhotoPreviewRequest {
+            scopes: false,
             photo_path: path.to_string_lossy().into(),
             lut_path: None,
             intensity: 0.5,
@@ -666,6 +670,7 @@ mod tests {
         assert_eq!((full.width, full.height), (48, 64));
         assert!(!full.cached);
         let mut region = request(&path);
+        region.scopes = true;
         region.source_interpretation = SourceInterpretation::Assign {
             space: PhotoSpace::Srgb,
         };
@@ -685,6 +690,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((region.width, region.height), (16, 24));
+        assert_eq!(region.scopes.unwrap().sampled, 16 * 24);
         assert_ne!(region.original_image, full.original_image);
     }
 
@@ -729,6 +735,27 @@ mod tests {
         assert_eq!(hit.request_id, "new-client-request");
         assert_eq!(hit.processed_image, first.processed_image);
         drop(busy);
+        let mut scoped = request(&path);
+        scoped.scopes = true;
+        scoped.viewport = PhotoViewport::Region {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let stats = generate_with_resolver(
+            scoped,
+            &state,
+            &photos,
+            &processor,
+            std::future::ready(Ok(engine.clone())),
+        )
+        .await
+        .unwrap()
+        .scopes
+        .unwrap();
+        assert_eq!((stats.sampled, stats.clipped), (8, 0));
+
         fixture(&path, 42000);
         let changed = generate_with_resolver(
             request(&path),
@@ -991,6 +1018,7 @@ async fn generate_with_resolver(
     let normalized_key = format!("{:x}", base.finalize());
     let mut hash = Sha256::new();
     hash.update(normalized_key.as_bytes());
+    hash.update([request.scopes as u8]);
     hash.update(lut_hash.as_bytes());
     hash.update(request.intensity.to_le_bytes());
     hash.update(serde_json::to_vec(&request.viewport).map_err(|e| e.to_string())?);
@@ -998,6 +1026,7 @@ async fn generate_with_resolver(
     hash.update(serde_json::to_vec(&request.alpha_policy).map_err(|e| e.to_string())?);
     let key = format!("photo:{:x}", hash.finalize());
     let response = |images: VideoPreviewResponse, width, height| PhotoPreviewResponse {
+        scopes: images.scopes,
         original_image: images.original_image,
         processed_image: images.processed_image,
         request_id: request.request_id.clone(),
@@ -1118,13 +1147,24 @@ async fn generate_with_resolver(
         }
         loop {
             let images = VideoPreviewResponse {
+                scopes: if request.scopes {
+                    Some(super::frame_scopes::analyze(
+                        frame.width,
+                        frame.height,
+                        &frame.rgb,
+                        frame.alpha.as_deref(),
+                        &cancellation,
+                    )?)
+                } else {
+                    None
+                },
                 original_image: display(&original, &cancellation)?,
                 processed_image: display(&frame, &cancellation)?,
                 time_seconds: 0.0,
                 cached: false,
                 photo_size: Some((frame.width, frame.height)),
             };
-            if images.original_image.len() + images.processed_image.len() <= 16 * 1024 * 1024 {
+            if images.bytes() <= 16 * 1024 * 1024 {
                 photo::check_cancel(&cancellation)?;
                 return Ok::<_, String>((images, frame.width, frame.height));
             }

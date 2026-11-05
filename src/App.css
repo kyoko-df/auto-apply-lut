@@ -2705,3 +2705,14 @@ progress::-moz-progress-bar {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.frame-scopes { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 11px; }
+.frame-scopes svg { width: 100%; height: 64px; background: #101114; }
+.frame-scopes input { accent-color: var(--accent); }
+.frame-scopes small { flex-basis: 100%; }
+.frame-images .highlight-mask { position: absolute; inset: 0; pointer-events: none; }
+
+.scope-counts { display: inline-flex; gap: 8px; font-variant-numeric: tabular-nums; }
+.scope-counts span:nth-child(1) { color: #ff7474; }
+.scope-counts span:nth-child(2) { color: #72dd96; }
+.scope-counts span:nth-child(3) { color: #77abff; }

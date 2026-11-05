@@ -60,6 +60,7 @@ export interface PhotoInfo {
   source_version: string;
 }
 export interface PhotoPreviewRequest {
+  scopes?: boolean;
   photo_path: string;
   lut_path: string | null;
   intensity: number;
@@ -74,7 +75,16 @@ export interface PhotoPreviewRequest {
   client_id: string;
   request_id: string;
 }
+export interface PreviewScopes {
+  channels: [number[], number[], number[]];
+  clipped_channels: [number, number, number];
+  sampled: number;
+  clipped: number;
+  mask: string | null;
+}
+
 export interface PhotoPreviewResponse {
+  scopes?: PreviewScopes | null;
   original_image: string;
   processed_image: string;
   request_id: string;
@@ -84,6 +94,7 @@ export interface PhotoPreviewResponse {
   cached: boolean;
 }
 export interface PreviewFrame {
+  scopes?: PreviewScopes | null;
   original_image: string;
   processed_image: string;
   time_seconds: number;

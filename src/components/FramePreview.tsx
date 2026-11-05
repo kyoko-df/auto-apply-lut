@@ -1,3 +1,4 @@
+import FrameScopes from "./FrameScopes";
 import { errorText, errorMessage } from "../workspace/model";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -39,8 +40,12 @@ export default function FramePreview({
   const [clientId] = useState(() => `workspace-${crypto.randomUUID()}`);
   const [time, setTime] = useState(0);
   const [mode, setMode] = useState<"split" | "original" | "graded">("split");
+  const [analysis, setAnalysis] = useState(false);
+  const [mask, setMask] = useState(false);
   const [split, setSplit] = useState(50);
-  const [frame, setFrame] = useState<PreviewFrame | null>(null);
+  const [received, setFrame] = useState<{ key: string; data: PreviewFrame } | null>(null);
+  const key = JSON.stringify([clip?.path, time, clip?.lutPath, clip?.intensity, quality, inputColorSpace, analysis, isDesktop]);
+  const frame = received?.key === key ? received.data : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -78,13 +83,14 @@ export default function FramePreview({
             lut_path: clip.lutPath,
             intensity: clip.intensity / 100,
             max_width: 1280,
+            scopes: analysis,
             client_id: clientId,
             quality,
             input_color_space: inputColorSpace,
           },
         });
         if (!stale) {
-          setFrame(result);
+          setFrame({ key, data: result });
           setError("");
         }
       } catch (e) {
@@ -106,6 +112,7 @@ export default function FramePreview({
     retry,
     quality,
     inputColorSpace,
+    analysis,
   ]);
 
   useEffect(
@@ -126,7 +133,7 @@ export default function FramePreview({
   };
 
   return (
-    <section className="preview-panel" aria-label={t("previewVideo.aria")}>
+    <><section className="preview-panel" aria-label={t("previewVideo.aria")}>
       <div className="panel-toolbar">
         <div className="panel-title">
           <ScanLine size={15} />
@@ -182,6 +189,7 @@ export default function FramePreview({
           <>
             {frame && !error && (
               <ImageComparison
+                mask={analysis && mask ? frame.scopes?.mask : null}
                 original={frame.original_image}
                 processed={frame.processed_image}
                 mode={mode}
@@ -290,5 +298,7 @@ export default function FramePreview({
         </span>
       </div>
     </section>
+    {clip && isDesktop && <FrameScopes enabled={analysis} onEnable={setAnalysis} mask={mask} onMask={setMask} data={!error ? frame?.scopes : null} />}
+    </>
   );
 }

@@ -1,3 +1,4 @@
+import FrameScopes from "./FrameScopes";
 import { errorText, errorMessage } from "../workspace/model";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -34,6 +35,8 @@ export default function PhotoPreview({
   const { t } = useTranslation();
   const [clientId] = useState(() => `photo-${crypto.randomUUID()}`);
   const [mode, setMode] = useState<ComparisonMode>("split");
+  const [analysis, setAnalysis] = useState(false);
+  const [mask, setMask] = useState(false);
   const [split, setSplit] = useState(50);
   const [zoom, setZoom] = useState<"fit" | "region">("fit");
   const [region, setRegion] = useState({ x: 0, y: 0 });
@@ -93,6 +96,7 @@ export default function PhotoPreview({
         }
       : { kind: "fit", max_edge: 1280 };
   const params = {
+    scopes: analysis,
     photo_path: clip?.path ?? "",
     lut_path: clip?.lutPath ?? null,
     intensity: (clip?.intensity ?? 100) / 100,
@@ -176,7 +180,7 @@ export default function PhotoPreview({
       y: Math.max(0, Math.min(height - regionHeight, p.y + dy)),
     }));
   return (
-    <section className="preview-panel" aria-label={t("previewPhoto.aria")}>
+    <><section className="preview-panel" aria-label={t("previewPhoto.aria")}>
       <div className="panel-toolbar">
         <div className="panel-title">
           <ScanLine size={15} />
@@ -302,6 +306,7 @@ export default function PhotoPreview({
           </div>
         ) : shown ? (
           <ImageComparison
+            mask={analysis && mask ? shown.scopes?.mask : null}
             original={shown.original_image}
             processed={shown.processed_image}
             mode={mode}
@@ -373,5 +378,7 @@ export default function PhotoPreview({
         )}
       </div>
     </section>
+    {clip && isDesktop && <FrameScopes enabled={analysis} onEnable={setAnalysis} mask={mask} onMask={setMask} data={!error ? shown?.scopes : null} />}
+    </>
   );
 }

@@ -39,6 +39,8 @@ pub enum PreviewQuality {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct VideoPreviewRequest {
+    #[serde(default)]
+    pub scopes: bool,
     pub video_path: String,
     #[serde(default)]
     pub time_seconds: f64,
@@ -74,6 +76,7 @@ fn default_input_space() -> String {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoPreviewResponse {
+    pub scopes: Option<super::frame_scopes::FrameScopes>,
     pub original_image: String,
     pub processed_image: String,
     pub time_seconds: f64,
@@ -83,8 +86,10 @@ pub struct VideoPreviewResponse {
 }
 
 impl VideoPreviewResponse {
-    fn bytes(&self) -> usize {
-        self.original_image.len() + self.processed_image.len()
+    pub(crate) fn bytes(&self) -> usize {
+        self.scopes.as_ref().map_or(0, |s| s.bytes())
+            + self.original_image.len()
+            + self.processed_image.len()
     }
 }
 
@@ -425,6 +430,7 @@ async fn generate_cached(
     let frame_key = format!("{:x}", frame_hash.finalize());
     let mut hasher = Sha256::new();
     hasher.update(frame_key.as_bytes());
+    hasher.update([request.scopes as u8]);
     hasher.update(request.input_color_space.as_bytes());
     let lut = if let Some(path) = request
         .lut_path
@@ -690,41 +696,92 @@ async fn render_frame(
     prepared: Option<&Artifact>,
     token: &CancellationToken,
 ) -> Result<VideoPreviewResponse, String> {
-    let processed_image = if prepared.is_none() && request.input_color_space == "auto" {
-        frame.original_image.clone()
-    } else {
-        let directory = temporary_directory("lut-preview-render-")?;
-        let color_filter = crate::core::ffmpeg::color::prepare_input_filter(
-            &request.input_color_space,
-            directory.path(),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        let output = directory.path().join("processed.jpg");
-        let lut_filter = build_lut_filter(
-            prepared
-                .map(|artifact| artifact.paths.as_slice())
-                .unwrap_or(&[]),
-            request.intensity,
-        )
-        .map_err(|error| error.to_string())?;
-        let scale = if request.quality == PreviewQuality::Accurate {
-            scale_filter(request.max_width)
+    let mut scopes = None;
+    let processed_image =
+        if !request.scopes && prepared.is_none() && request.input_color_space == "auto" {
+            frame.original_image.clone()
         } else {
-            "null".into()
+            let directory = temporary_directory("lut-preview-render-")?;
+            let color_filter = crate::core::ffmpeg::color::prepare_input_filter(
+                &request.input_color_space,
+                directory.path(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let output = directory.path().join("processed.jpg");
+            let lut_filter = build_lut_filter(
+                prepared
+                    .map(|artifact| artifact.paths.as_slice())
+                    .unwrap_or(&[]),
+                request.intensity,
+            )
+            .map_err(|error| error.to_string())?;
+            let scale = if request.quality == PreviewQuality::Accurate {
+                scale_filter(request.max_width)
+            } else {
+                "null".into()
+            };
+            let mut graph = format!("[0:v:0]{color_filter},{lut_filter},{scale}");
+            graph.push_str(if request.scopes {
+                ",format=gbrp16le,split[processed][samples]"
+            } else {
+                "[processed]"
+            });
+            let mut command = preview_command(ffmpeg_path);
+            command
+                .arg("-i")
+                .arg(&frame.paths[0])
+                .args(["-filter_complex_threads", "1", "-filter_complex"])
+                .arg(graph);
+            jpeg_output(&mut command, "[processed]", &output);
+            let samples = directory.path().join("samples.png");
+            if request.scopes {
+                command
+                    .args([
+                        "-map",
+                        "[samples]",
+                        "-frames:v",
+                        "1",
+                        "-c:v",
+                        "png",
+                        "-pix_fmt",
+                        "rgb48be",
+                        "-threads:v",
+                        "1",
+                    ])
+                    .arg(&samples);
+            }
+            run_preview(command, token).await?;
+            if request.scopes {
+                bounded_file_size(&samples, 24 * 1024 * 1024, "Scope image too large").await?;
+                let bytes = fs::read(samples).await.map_err(|e| e.to_string())?;
+                let cancel = token.clone();
+                scopes = Some(
+                    tokio::task::spawn_blocking(move || {
+                        let image =
+                            image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+                                .map_err(|e| e.to_string())?
+                                .into_rgb16();
+                        super::frame_scopes::analyze(
+                            image.width(),
+                            image.height(),
+                            image.as_raw(),
+                            None,
+                            &cancel,
+                        )
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??,
+                );
+            }
+            if prepared.is_none() && request.input_color_space == "auto" {
+                frame.original_image.clone()
+            } else {
+                read_jpeg(&output).await?
+            }
         };
-        let graph = format!("[0:v:0]{color_filter},{lut_filter},{scale}[processed]");
-        let mut command = preview_command(ffmpeg_path);
-        command
-            .arg("-i")
-            .arg(&frame.paths[0])
-            .args(["-filter_complex_threads", "1", "-filter_complex"])
-            .arg(graph);
-        jpeg_output(&mut command, "[processed]", &output);
-        run_preview(command, token).await?;
-        read_jpeg(&output).await?
-    };
     Ok(VideoPreviewResponse {
+        scopes,
         original_image: frame.original_image.clone(),
         processed_image,
         time_seconds: request.time_seconds,
@@ -792,6 +849,7 @@ mod tests {
 
     fn request() -> VideoPreviewRequest {
         VideoPreviewRequest {
+            scopes: false,
             video_path: "video.mp4".into(),
             time_seconds: 0.0,
             lut_path: None,
@@ -820,6 +878,7 @@ mod tests {
     fn cache_eviction_and_replacement_stay_bounded() {
         let mut cache = PreviewCache::default();
         let response = VideoPreviewResponse {
+            scopes: None,
             original_image: "a".repeat(500_000),
             processed_image: "b".repeat(500_000),
             time_seconds: 0.0,
@@ -918,6 +977,28 @@ mod tests {
         let full = generate_with_state(input.clone(), &state, &ffmpeg)
             .await
             .unwrap();
+        let mut scoped = input.clone();
+        scoped.scopes = true;
+        let analyzed = generate_with_state(scoped.clone(), &state, &ffmpeg)
+            .await
+            .unwrap();
+        assert!(!analyzed.cached);
+        let stats = analyzed.scopes.unwrap();
+        assert_eq!((stats.sampled, stats.clipped), (1024, 0));
+        assert!(stats.channels[0][220..230].iter().sum::<u32>() > 1000);
+        assert!(
+            generate_with_state(scoped.clone(), &state, &ffmpeg)
+                .await
+                .unwrap()
+                .cached
+        );
+        scoped.intensity = 0.5;
+        let blended = generate_with_state(scoped, &state, &ffmpeg)
+            .await
+            .unwrap()
+            .scopes
+            .unwrap();
+        assert_eq!(blended.channels[0][125..131].iter().sum::<u32>(), 1024);
         let original_rgb = mean_rgb(&ffmpeg, &full.original_image, directory.path()).await;
         let full_rgb = mean_rgb(&ffmpeg, &full.processed_image, directory.path()).await;
         for channel in 0..3 {

@@ -48,6 +48,23 @@ async function settle() {
   });
 }
 describe("real frame preview", () => {
+  it("shows only current scopes and toggles the overlay without rendering another frame", async () => {
+    const mask = "data:image/png;base64,mask";
+    invoke.mockResolvedValue({ ...result, scopes: { channels: Array.from({length: 3}, () => Array(256).fill(1)), clipped_channels: [0, 1, 0], clipped: 1, sampled: 256, mask } });
+    const { container } = render(<FramePreview clip={clip} isDesktop onImport={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "调色后 RGB 直方图" }));
+    await settle();
+    expect(invoke).toHaveBeenLastCalledWith("generate_video_preview", {request: expect.objectContaining({scopes: true})});
+    const calls = invoke.mock.calls.length;
+    fireEvent.click(screen.getByRole("checkbox", { name: "显示高光遮罩" }));
+    expect(container.querySelector(".highlight-mask")).toHaveAttribute("src", mask);
+    fireEvent.click(screen.getByRole("button", { name: "原片" }));
+    expect(container.querySelector(".highlight-mask")).toBeNull();
+    expect(invoke.mock.calls).toHaveLength(calls);
+    fireEvent.change(screen.getByRole("slider", {name: "预览时间点"}), {target: {value: "1"}});
+    expect(screen.queryByRole("img", {name: "红绿蓝通道直方图"})).toBeNull();
+  });
   it("shows decoded errors in English and updates existing errors in Japanese", async () => {
     await i18n.changeLanguage("en");
     invoke.mockRejectedValue(

@@ -1,4 +1,5 @@
 export default {
+  scopes: {"title": "调色后 RGB 直方图", "chart": "红绿蓝通道直方图", "count": "高光裁切 {{count}} / {{total}} 像素", "overlay": "显示高光遮罩", "hint": "统计当前调色预览范围。任一通道达到 16 位上限即标记，忽略全透明像素。"},
   lutLibrary: {
       "onlyFavorites": "仅看收藏",
       "newCategory": "新建分类",

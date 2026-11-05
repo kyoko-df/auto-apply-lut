@@ -19,3 +19,5 @@ pub use system_manager::get_available_codecs;
 
 #[cfg(test)]
 mod command_interfaces_tests;
+
+pub mod frame_scopes;

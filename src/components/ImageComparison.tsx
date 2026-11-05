@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 export type ComparisonMode = "original" | "split" | "graded";
 
 export default function ImageComparison({
+  mask,
   original,
   processed,
   mode,
@@ -15,6 +16,7 @@ export default function ImageComparison({
   originalAlt,
   gradedAlt,
 }: {
+  mask?: string | null;
   original: string;
   processed: string;
   mode: ComparisonMode;
@@ -98,6 +100,7 @@ export default function ImageComparison({
           })
         }
       />
+      {mask && mode !== "original" && <img className="highlight-mask" src={mask} style={mode === "split" ? { clipPath: `inset(0 0 0 ${split}%)` } : undefined} alt="" aria-hidden="true" draggable={false} />}
       {mode === "split" && (
         <>
           <img
